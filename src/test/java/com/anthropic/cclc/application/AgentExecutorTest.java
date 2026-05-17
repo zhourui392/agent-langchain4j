@@ -281,6 +281,55 @@ class AgentExecutorTest {
     }
 
     @Test
+    void listenerObservesLlmAndToolEventsInOrder() {
+        ToolUseId useId = new ToolUseId("u1");
+        StubLlmClient stub = new StubLlmClient()
+                .enqueue(AiMessage.of("calling tool",
+                        List.of(new ToolUseRequest(useId, "Bash", "{\"command\":\"ls\"}"))))
+                .enqueue(AiMessage.text("done"));
+
+        ToolRegistry tools = new ToolRegistry().register(FakeTool.returning("Bash", "out.txt"));
+        RecordingAgentEventListener listener = new RecordingAgentEventListener();
+
+        Conversation conv = new Conversation(SessionId.of("test"));
+        conv.append(UserMessage.of("ls please"));
+
+        new AgentExecutor(stub, tools).run(conv, new CancellationToken(), listener).join();
+
+        assertThat(listener.events()).containsSubsequence(
+                "llmRequestStart",
+                "assistantTextDelta:calling tool",
+                "toolUseStart:Bash",
+                "toolUseEnd:Bash:ok",
+                "llmRequestStart",
+                "assistantTextDelta:done",
+                "turnComplete:done"
+        );
+    }
+
+    @Test
+    void listenerReceivesPermissionDenyAsFailedToolEnd() {
+        ToolUseId useId = new ToolUseId("u1");
+        StubLlmClient stub = new StubLlmClient()
+                .enqueue(AiMessage.of("", List.of(new ToolUseRequest(useId, "Write", "{}"))))
+                .enqueue(AiMessage.text("ok"));
+
+        ToolRegistry tools = new ToolRegistry().register(FakeTool.returning("Write", "should not run"));
+        PermissionService deny = new PermissionService(
+                new DefaultPermissionPolicy(),
+                (inv, tool) -> UserPermissionResponse.DENY,
+                PermissionMode.PLAN);
+
+        RecordingAgentEventListener listener = new RecordingAgentEventListener();
+        Conversation conv = new Conversation(SessionId.of("test"));
+        conv.append(UserMessage.of("write something"));
+
+        new AgentExecutor(stub, tools, deny).run(conv, new CancellationToken(), listener).join();
+
+        assertThat(listener.events()).contains("toolUseEnd:Write:error");
+    }
+
+    @Test
     void requestAdvertisesRegisteredToolSpecsInRegistrationOrder() {
         StubLlmClient stub = new StubLlmClient().enqueue(AiMessage.text("ack"));
         ToolRegistry tools = new ToolRegistry()

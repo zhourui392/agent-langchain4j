@@ -29,8 +29,7 @@ class HeadlessPipelineSmokeTest {
 
         ReplLoop repl = new ReplLoop(io, line -> {
             conversation.append(UserMessage.of(line));
-            AiMessage reply = executor.run(conversation, new CancellationToken(), renderer).join();
-            renderer.onComplete(reply);
+            executor.run(conversation, new CancellationToken(), renderer).join();
         });
         repl.run();
 
@@ -50,8 +49,7 @@ class HeadlessPipelineSmokeTest {
 
         ReplLoop repl = new ReplLoop(io, line -> {
             conversation.append(UserMessage.of(line));
-            AiMessage reply = executor.run(conversation, new CancellationToken(), renderer).join();
-            renderer.onComplete(reply);
+            executor.run(conversation, new CancellationToken(), renderer).join();
         });
         repl.run();
 

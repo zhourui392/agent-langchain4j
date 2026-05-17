@@ -32,36 +32,41 @@ final class ParallelToolDispatcher {
     }
 
     List<ToolResultMessage> dispatch(AiMessage aiMessage) {
-        List<ToolUseRequest> requests = aiMessage.toolUseRequests();
-        if (requests.size() == 1) {
-            return List.of(executeSingle(requests.get(0)));
-        }
-        return executeAll(requests);
+        return dispatch(aiMessage, AgentEventListener.NO_OP);
     }
 
-    private ToolResultMessage executeSingle(ToolUseRequest request) {
-        Tool tool = tools.find(request.toolName());
-        ToolInvocation invocation = InvocationFactory.from(request);
-        Decision decision = permissions.check(invocation, tool);
-        if (decision == Decision.DENY) {
-            invocation.deny();
-            return ToolResultMessage.of(request.id(), "permission denied: " + tool.name());
+    List<ToolResultMessage> dispatch(AiMessage aiMessage, AgentEventListener listener) {
+        List<ToolUseRequest> requests = aiMessage.toolUseRequests();
+        if (requests.size() == 1) {
+            return List.of(executeSingle(requests.get(0), listener));
         }
-        invocation.allow();
-        ToolResult result = runTool(tool, invocation);
+        return executeAll(requests, listener);
+    }
+
+    private ToolResultMessage executeSingle(ToolUseRequest request, AgentEventListener listener) {
+        ToolResult result = runWithEvents(request, listener);
         return ToolResultMessage.of(request.id(), result.content());
     }
 
-    private List<ToolResultMessage> executeAll(List<ToolUseRequest> requests) {
+    private List<ToolResultMessage> executeAll(List<ToolUseRequest> requests, AgentEventListener listener) {
         ConcurrentHashMap<ToolUseId, ToolResult> resultsById = new ConcurrentHashMap<>();
         try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
             List<Future<?>> futures = new ArrayList<>(requests.size());
             for (ToolUseRequest req : requests) {
-                futures.add(pool.submit(() -> resultsById.put(req.id(), runWithPermission(req))));
+                futures.add(pool.submit(() -> resultsById.put(req.id(), runWithEvents(req, listener))));
             }
             awaitAll(futures);
         }
         return assembleInOrder(requests, resultsById);
+    }
+
+    private ToolResult runWithEvents(ToolUseRequest request, AgentEventListener listener) {
+        listener.onToolUseStart(request);
+        long startNs = System.nanoTime();
+        ToolResult result = runWithPermission(request);
+        long durationMs = (System.nanoTime() - startNs) / 1_000_000L;
+        listener.onToolUseEnd(request, result, durationMs);
+        return result;
     }
 
     private ToolResult runWithPermission(ToolUseRequest request) {

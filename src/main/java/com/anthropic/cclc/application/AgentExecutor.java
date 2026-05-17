@@ -42,33 +42,51 @@ public final class AgentExecutor {
     }
 
     public CompletableFuture<AiMessage> run(Conversation conversation, CancellationToken cancel) {
-        return run(conversation, cancel, NO_OP_HANDLER);
+        return run(conversation, cancel, AgentEventListener.NO_OP);
     }
 
     public CompletableFuture<AiMessage> run(Conversation conversation,
                                             CancellationToken cancel,
                                             StreamHandler streamHandler) {
-        Objects.requireNonNull(conversation, "conversation");
-        Objects.requireNonNull(cancel, "cancel");
         Objects.requireNonNull(streamHandler, "streamHandler");
-        return CompletableFuture.supplyAsync(() -> loop(conversation, cancel, streamHandler));
+        return run(conversation, cancel, fromStreamHandler(streamHandler));
     }
 
-    private AiMessage loop(Conversation conversation, CancellationToken cancel, StreamHandler stream) {
+    public CompletableFuture<AiMessage> run(Conversation conversation,
+                                            CancellationToken cancel,
+                                            AgentEventListener listener) {
+        Objects.requireNonNull(conversation, "conversation");
+        Objects.requireNonNull(cancel, "cancel");
+        Objects.requireNonNull(listener, "listener");
+        return CompletableFuture.supplyAsync(() -> loop(conversation, cancel, listener));
+    }
+
+    private AiMessage loop(Conversation conversation, CancellationToken cancel, AgentEventListener listener) {
+        try {
+            return runLoop(conversation, cancel, listener);
+        } catch (RuntimeException ex) {
+            listener.onError(ex);
+            throw ex;
+        }
+    }
+
+    private AiMessage runLoop(Conversation conversation, CancellationToken cancel, AgentEventListener listener) {
         while (true) {
             cancellationGuard(cancel);
-            AiMessage aiMessage = executeTurn(conversation, cancel, stream);
+            AiMessage aiMessage = executeTurn(conversation, cancel, listener);
             conversation.append(aiMessage);
             if (!aiMessage.hasToolUseRequests()) {
+                listener.onTurnComplete(aiMessage);
                 return aiMessage;
             }
-            for (ToolResultMessage result : dispatcher.dispatch(aiMessage)) {
+            for (ToolResultMessage result : dispatcher.dispatch(aiMessage, listener)) {
                 conversation.append(result);
             }
         }
     }
 
-    private AiMessage executeTurn(Conversation conversation, CancellationToken cancel, StreamHandler stream) {
+    private AiMessage executeTurn(Conversation conversation, CancellationToken cancel, AgentEventListener listener) {
+        listener.onLlmRequestStart();
         ChatRequest.Builder builder = ChatRequest.builder().messages(conversation.messages());
         tools.specs().forEach(builder::tool);
         ChatRequest request = builder.build();
@@ -77,7 +95,7 @@ public final class AgentExecutor {
         llm.streamChat(request, new StreamHandler() {
             @Override public void onPartialText(String delta) {
                 cancellationGuard(cancel);
-                stream.onPartialText(delta);
+                listener.onAssistantTextDelta(delta);
             }
             @Override public void onComplete(AiMessage message) { completed.set(message); }
             @Override public void onError(Throwable error) { failure.set(error); }
@@ -92,9 +110,13 @@ public final class AgentExecutor {
         return result;
     }
 
-    private static final StreamHandler NO_OP_HANDLER = new StreamHandler() {
-        @Override public void onPartialText(String delta) {}
-    };
+    private static AgentEventListener fromStreamHandler(StreamHandler handler) {
+        return new AgentEventListener() {
+            @Override public void onAssistantTextDelta(String delta) { handler.onPartialText(delta); }
+            @Override public void onTurnComplete(AiMessage finalMessage) { handler.onComplete(finalMessage); }
+            @Override public void onError(Throwable error) { handler.onError(error); }
+        };
+    }
 
     private static void cancellationGuard(CancellationToken cancel) {
         cancel.throwIfCancelled();

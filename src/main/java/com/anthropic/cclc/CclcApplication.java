@@ -174,8 +174,7 @@ public final class CclcApplication {
                                  CancellationToken cancel,
                                  OutputRenderer renderer) {
         try {
-            AiMessage finalMessage = executor.run(conversation, cancel, renderer).join();
-            renderer.onComplete(finalMessage);
+            executor.run(conversation, cancel, renderer).join();
         } catch (Exception ex) {
             renderer.onError(ex);
         }
