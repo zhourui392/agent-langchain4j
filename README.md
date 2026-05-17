@@ -1,26 +1,93 @@
 # Claude Code on LangChain4j
 
-![CI](https://github.com/USER/REPO/actions/workflows/ci.yml/badge.svg)
+[![CI](https://github.com/zhourui392/agent-langchain4j/actions/workflows/ci.yml/badge.svg)](https://github.com/zhourui392/agent-langchain4j/actions/workflows/ci.yml)
 
-Java + LangChain4j 实现的 claude-code 核心主流程（消息循环、工具调用、上下文管理、权限、流式输出），CLI 形态交付 MVP。
+Java 21 + LangChain4j 1.8 复刻 [claude-code](https://github.com/anthropics/claude-code) 的 CLI 主循环：消息轮转、工具调用、权限、流式输出、上下文注入、会话持久化。
 
-设计文档：[DESIGN.md](DESIGN.md)
-任务清单：[TASKLIST.md](TASKLIST.md)
+参考实现是 TypeScript 版的 claude-code；本项目用 DDD 四层 + 端口/适配器把 Anthropic 串成 Java 形态，ArchUnit 守住依赖方向。
+
+- 设计：[DESIGN.md](DESIGN.md)
+- 任务（39 项 / S0–S8 + MVP-Gate）：[TASKLIST.md](TASKLIST.md)
+- 协作约定：[CLAUDE.md](CLAUDE.md)
+
+## 已具备的能力
+
+| 模块 | 说明 |
+|---|---|
+| Agent 主循环 | `AgentExecutor`：流式 LLM → tool_use → 并发执行（虚拟线程）→ tool_result 按原顺序回灌 → 直到模型无 tool_use 终止 |
+| 工具 | `Bash` / `Read` / `Write` / `Edit` / `Glob` / `Grep`（ripgrep 自动探测，回退到 Java 正则）|
+| 权限 | 4 模式策略（DEFAULT / PLAN / BYPASS / AUTO）+ 交互式 prompt + 会话级 ALLOW_ALWAYS 缓存 |
+| 上下文 | CLAUDE.md（含父级合并）/ cwd / git status / 日期 |
+| Prompt cache | 系统指令、CLAUDE.md、工具描述构成稳定前缀；动态段后插入 ephemeral 断点 |
+| 流式输出 | 逐 token 渲染，SIGINT 二段式（取消 turn → 退出进程）|
+| 持久化 | JSONL 写入 `~/.claude-code-j/sessions/<id>.jsonl`；`/resume <id>` 加载历史不重跑工具 |
+| 工具 schema 上线 | `ToolSpec → LC4J JsonObjectSchema → Anthropic input_schema` 全链路打通 |
+
+## 不在范围内
+
+Spring / Guice / Lombok、多 LLM provider 抽象、Ink 风格 TUI、多模态输入、IDE / skill 子系统。MCP 已规划（P1）但未实现。
 
 ## 环境
 
-- JDK 21
+- JDK 21（项目用 `--release=21`，Maven Toolchains 可选）
 - Maven 3.9+
-- 环境变量 `ANTHROPIC_API_KEY`（运行真实 API 时）
+- 可选 `rg`（ripgrep）—— 缺失时自动回退
 
-## 构建
+## 配置
 
-```bash
-mvn clean verify
+两种方式，env 覆盖文件：
+
+1. 环境变量
+   - `ANTHROPIC_API_KEY`（必需）
+   - `CCLC_MODEL`（默认 `claude-sonnet-4-6`）
+   - `CCLC_MAX_TOKENS`
+2. `~/.claude-code-j/config.json`
+   ```json
+   { "apiKey": "...", "model": "claude-sonnet-4-6", "maxTokens": 8000 }
+   ```
+
+## 常用命令
+
+```powershell
+mvn clean verify                                          # 编译 + 单测 + Failsafe IT + JaCoCo
+mvn test                                                  # 仅单测
+mvn -Dtest=AgentExecutorTest test                         # 单类
+mvn -Dtest=ConversationTest#appendsMessagesInOrder test   # 单方法
+mvn -Psmoke "-Dsurefire.skip=true" verify                 # 跑 *SmokeIT.java（需 API key）
+mvn exec:java                                             # 启动 REPL
+mvn exec:java -Dexec.args="--version"
 ```
 
-## 运行
+JaCoCo 报告：`target/site/jacoco/index.html`。
 
-```bash
-mvn exec:java
+## REPL 用法
+
+启动后输入即可对话。斜杠命令：
+
+- `/help` 列出命令
+- `/clear` 清空当前会话
+- `/resume <sessionId>` 从 JSONL 恢复历史（不重跑工具）
+- `Ctrl-C` 一次取消当前 turn；turn 结束后再按一次退出进程
+
+## 测试覆盖
+
+- 206 unit + ArchUnit，全绿（1 skip：ripgrep 缺失时 fallback 不跑）
+- 3 个 SmokeIT 真实 API 验证：纯对话 / 显式工具 / 隐式工具选择
+
+## 目录速查
+
 ```
+src/main/java/com/anthropic/cclc/
+  interfaces/cli      JLine REPL、斜杠命令、SIGINT、输出渲染
+  application         AgentExecutor、PermissionService、SystemPromptComposer、SessionResumer
+  domain              Conversation、ChatMessage、Tool、PermissionPolicy、端口
+  infrastructure
+    llm               LangChain4j 接入、消息映射、工具规格映射、缓存策略
+    tools             Bash/Read/Write/Edit/Glob/Grep 实现
+    memory            JSONL 会话存储
+    context           CLAUDE.md / cwd / git / date provider
+    permission        默认策略
+    config            env + 文件加载
+```
+
+DDD 依赖方向：`interfaces → application → domain ← infrastructure`，`LayeredArchitectureTest` 守护。
