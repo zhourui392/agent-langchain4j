@@ -1,5 +1,6 @@
 package com.anthropic.cclc.infrastructure.config;
 
+import com.anthropic.cclc.domain.permission.PermissionMode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -97,6 +98,44 @@ class ConfigLoaderTest {
                 configFile);
 
         assertThat(loader.load().baseUrl()).isEqualTo("https://from-env.example.com");
+    }
+
+    @Test
+    void defaultsPermissionModeToBypass() {
+        ConfigLoader loader = new ConfigLoader(envOf(Map.of("ANTHROPIC_API_KEY", "sk-env")), null);
+
+        assertThat(loader.load().permissionMode()).isEqualTo(PermissionMode.BYPASS);
+    }
+
+    @Test
+    void readsPermissionModeFromEnv() {
+        ConfigLoader loader = new ConfigLoader(
+                envOf(Map.of("ANTHROPIC_API_KEY", "sk-env",
+                        "CCLC_PERMISSION_MODE", "plan")),
+                null);
+
+        assertThat(loader.load().permissionMode()).isEqualTo(PermissionMode.PLAN);
+    }
+
+    @Test
+    void readsPermissionModeFromFile(@TempDir Path dir) throws IOException {
+        Path configFile = writeJson(dir,
+                "{\"apiKey\":\"sk-file\",\"permissionMode\":\"DEFAULT\"}");
+        ConfigLoader loader = new ConfigLoader(envOf(Map.of()), configFile);
+
+        assertThat(loader.load().permissionMode()).isEqualTo(PermissionMode.DEFAULT);
+    }
+
+    @Test
+    void invalidPermissionModeFailsFast() {
+        ConfigLoader loader = new ConfigLoader(
+                envOf(Map.of("ANTHROPIC_API_KEY", "sk-env",
+                        "CCLC_PERMISSION_MODE", "WIDE_OPEN")),
+                null);
+
+        assertThatThrownBy(loader::load)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("permissionMode");
     }
 
     private static Function<String, String> envOf(Map<String, String> entries) {

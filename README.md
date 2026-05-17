@@ -16,7 +16,7 @@ Java 21 + LangChain4j 1.8 复刻 [claude-code](https://github.com/anthropics/cla
 |---|---|
 | Agent 主循环 | `AgentExecutor`：流式 LLM → tool_use → 并发执行（虚拟线程）→ tool_result 按原顺序回灌 → 直到模型无 tool_use 终止 |
 | 工具 | `Bash` / `Read` / `Write` / `Edit` / `Glob` / `Grep`（ripgrep 自动探测，回退到 Java 正则）|
-| 权限 | 4 模式策略（DEFAULT / PLAN / BYPASS / AUTO）+ 交互式 prompt + 会话级 ALLOW_ALWAYS 缓存 |
+| 权限 | 4 模式策略（DEFAULT / PLAN / BYPASS / AUTO）+ 交互式 prompt + 会话级 ALLOW_ALWAYS 缓存。**默认 BYPASS（全部自动放行）**，通过 `CCLC_PERMISSION_MODE` 切回 ASK |
 | 上下文 | CLAUDE.md（含父级合并）/ cwd / git status / 日期 |
 | Prompt cache | 系统指令、CLAUDE.md、工具描述构成稳定前缀；动态段后插入 ephemeral 断点 |
 | 流式输出 | 逐 token 渲染，SIGINT 二段式（取消 turn → 退出进程）|
@@ -41,10 +41,25 @@ Spring / Guice / Lombok、多 LLM provider 抽象、Ink 风格 TUI、多模态�
    - `ANTHROPIC_API_KEY`（必需）
    - `CCLC_MODEL`（默认 `claude-sonnet-4-6`）
    - `CCLC_MAX_TOKENS`
+   - `CCLC_PERMISSION_MODE`（DEFAULT / PLAN / BYPASS / AUTO，默认 `BYPASS`）
 2. `~/.claude-code-j/config.json`
    ```json
-   { "apiKey": "...", "model": "claude-sonnet-4-6", "maxTokens": 8000 }
+   {
+     "apiKey": "...",
+     "model": "claude-sonnet-4-6",
+     "maxTokens": 8000,
+     "permissionMode": "BYPASS"
+   }
    ```
+
+**权限模式速查**
+
+| 模式 | Read/Glob/Grep | Bash/Write/Edit | 适用 |
+|---|---|---|---|
+| `BYPASS`（默认）| ALLOW | ALLOW | 单机开发，自动化 |
+| `DEFAULT` | ALLOW | ASK（交互确认）| 需要可控写操作 |
+| `PLAN` | ALLOW | DENY（直接拒）| 只读规划阶段 |
+| `AUTO` | ALLOW | ASK（safelist 外）| 同 DEFAULT，留作扩展 |
 
 ## 常用命令
 

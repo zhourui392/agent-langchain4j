@@ -12,7 +12,6 @@ import com.anthropic.cclc.domain.conversation.Conversation;
 import com.anthropic.cclc.domain.conversation.SessionId;
 import com.anthropic.cclc.domain.message.AiMessage;
 import com.anthropic.cclc.domain.message.UserMessage;
-import com.anthropic.cclc.domain.permission.PermissionMode;
 import com.anthropic.cclc.domain.port.LlmClient;
 import com.anthropic.cclc.domain.tool.ExecutionContext;
 import com.anthropic.cclc.domain.tool.Tool;
@@ -97,10 +96,11 @@ public final class CclcApplication {
             PermissionService permissions = new PermissionService(
                     new DefaultPermissionPolicy(),
                     new TerminalIoPrompter(terminalIo),
-                    PermissionMode.DEFAULT);
+                    config.permissionMode());
             AgentExecutor executor = new AgentExecutor(llm, tools, permissions, ExecutionContext.of(cwd, cancel));
 
             OutputRenderer renderer = new OutputRenderer(terminalIo);
+            terminalIo.writeLine("(permission mode: " + config.permissionMode() + ")");
             AtomicReference<Conversation> active = new AtomicReference<>(new Conversation(SessionId.fresh()));
             SlashCommandParser parser = new SlashCommandParser()
                     .register(new HelpCommand())

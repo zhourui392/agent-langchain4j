@@ -1,5 +1,6 @@
 package com.anthropic.cclc.infrastructure.config;
 
+import com.anthropic.cclc.domain.permission.PermissionMode;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -16,9 +17,11 @@ public final class ConfigLoader {
     static final String ENV_MODEL = "CCLC_MODEL";
     static final String ENV_MAX_TOKENS = "CCLC_MAX_TOKENS";
     static final String ENV_BASE_URL = "ANTHROPIC_BASE_URL";
+    static final String ENV_PERMISSION_MODE = "CCLC_PERMISSION_MODE";
 
     static final String DEFAULT_MODEL = "claude-sonnet-4-6";
     static final int DEFAULT_MAX_TOKENS = 8192;
+    static final PermissionMode DEFAULT_PERMISSION_MODE = PermissionMode.BYPASS;
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
@@ -45,7 +48,21 @@ public final class ConfigLoader {
         String model = resolveString(ENV_MODEL, "model", fileValues, DEFAULT_MODEL);
         int maxTokens = resolveInt(ENV_MAX_TOKENS, "maxTokens", fileValues, DEFAULT_MAX_TOKENS);
         String baseUrl = resolveString(ENV_BASE_URL, "baseUrl", fileValues, null);
-        return new AppConfig(apiKey, model, maxTokens, baseUrl);
+        PermissionMode permissionMode = resolvePermissionMode(fileValues);
+        return new AppConfig(apiKey, model, maxTokens, baseUrl, permissionMode);
+    }
+
+    private PermissionMode resolvePermissionMode(Map<String, Object> fileValues) {
+        String raw = resolveString(ENV_PERMISSION_MODE, "permissionMode", fileValues, null);
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_PERMISSION_MODE;
+        }
+        try {
+            return PermissionMode.valueOf(raw.trim().toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalStateException(
+                    "invalid permissionMode '" + raw + "', expected one of: DEFAULT, PLAN, BYPASS, AUTO");
+        }
     }
 
     private Map<String, Object> readFile() {
