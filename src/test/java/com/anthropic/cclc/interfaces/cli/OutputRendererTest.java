@@ -110,7 +110,7 @@ class OutputRendererTest {
         renderer.onToolUseEnd(req, ToolResult.ok(oneLongLine), 10L);
 
         String written = io.output();
-        assertThat(written).contains("…");
+        assertThat(written).contains("...");
         assertThat(written.length()).isLessThan(oneLongLine.length());
     }
 

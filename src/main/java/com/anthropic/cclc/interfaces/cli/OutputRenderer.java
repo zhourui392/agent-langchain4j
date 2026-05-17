@@ -36,7 +36,7 @@ public final class OutputRenderer implements AgentEventListener {
     @Override
     public void onLlmRequestStart() {
         closeAssistantTextIfOpen();
-        terminalIo.writeLine(dim("⏺ thinking…"));
+        terminalIo.writeLine(dim("* thinking..."));
     }
 
     @Override
@@ -48,13 +48,13 @@ public final class OutputRenderer implements AgentEventListener {
     @Override
     public void onToolUseStart(ToolUseRequest request) {
         closeAssistantTextIfOpen();
-        String line = "⏵ " + request.toolName() + " " + request.argumentsJson();
+        String line = "> " + request.toolName() + " " + request.argumentsJson();
         terminalIo.writeLine(cyan(line));
     }
 
     @Override
     public void onToolUseEnd(ToolUseRequest request, ToolResult result, long durationMs) {
-        String marker = result.success() ? "✓" : "✗";
+        String marker = result.success() ? "[OK]" : "[FAIL]";
         String color = result.success() ? ANSI_GREEN : ANSI_RED;
         String header = "  " + marker + " " + durationMs + "ms";
         terminalIo.writeLine(paint(color, header));
@@ -88,7 +88,7 @@ public final class OutputRenderer implements AgentEventListener {
         }
         int remaining = lines.length - shown;
         if (remaining > 0) {
-            terminalIo.writeLine(dim("    … +" + remaining + " more line" + (remaining == 1 ? "" : "s")));
+            terminalIo.writeLine(dim("    ... +" + remaining + " more line" + (remaining == 1 ? "" : "s")));
         }
     }
 
@@ -103,7 +103,7 @@ public final class OutputRenderer implements AgentEventListener {
         if (text.length() <= max) {
             return text;
         }
-        return text.substring(0, max) + "…";
+        return text.substring(0, max) + "...";
     }
 
     private String dim(String text) {
