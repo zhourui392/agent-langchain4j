@@ -27,6 +27,10 @@ public final class ClaudeStreamJsonListener implements AgentEventListener {
     private final Consumer<String> onChunk;
     private final ClaudeStreamJsonWriter writer = new ClaudeStreamJsonWriter();
     private boolean initEmitted;
+    private boolean usageReported;
+    private int inputTokens;
+    private int outputTokens;
+    private int cacheReadInputTokens;
 
     public ClaudeStreamJsonListener(String sessionId, String cwd, Consumer<String> onChunk) {
         this.sessionId = Objects.requireNonNull(sessionId, "sessionId");
@@ -60,9 +64,25 @@ public final class ClaudeStreamJsonListener implements AgentEventListener {
     }
 
     @Override
+    public void onUsage(int inputTokens, int outputTokens, int cacheReadInputTokens) {
+        this.usageReported = true;
+        this.inputTokens += inputTokens;
+        this.outputTokens += outputTokens;
+        this.cacheReadInputTokens += cacheReadInputTokens;
+    }
+
+    @Override
     public void onTurnComplete(AiMessage finalMessage) {
         ensureInit();
-        onChunk.accept(writer.result(finalMessage.text(), sessionId));
+        onChunk.accept(resultLine(finalMessage.text()));
+    }
+
+    private String resultLine(String text) {
+        if (!usageReported) {
+            return writer.result(text, sessionId);
+        }
+        return writer.result(text, sessionId,
+                new ClaudeStreamJsonWriter.Usage(inputTokens, outputTokens, cacheReadInputTokens));
     }
 
     @Override

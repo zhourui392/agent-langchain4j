@@ -97,6 +97,9 @@ public final class AgentExecutor {
                 cancellationGuard(cancel);
                 listener.onAssistantTextDelta(delta);
             }
+            @Override public void onUsage(int inputTokens, int outputTokens, int cacheReadInputTokens) {
+                listener.onUsage(inputTokens, outputTokens, cacheReadInputTokens);
+            }
             @Override public void onComplete(AiMessage message) { completed.set(message); }
             @Override public void onError(Throwable error) { failure.set(error); }
         });

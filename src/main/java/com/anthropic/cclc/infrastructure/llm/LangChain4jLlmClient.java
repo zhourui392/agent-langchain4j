@@ -9,6 +9,7 @@ import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.output.TokenUsage;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -76,10 +77,25 @@ public final class LangChain4jLlmClient implements LlmClient {
         @Override
         public void onCompleteResponse(ChatResponse response) {
             try {
+                reportUsage(response);
                 handler.onComplete((AiMessage) MessageMapper.toDomain(response.aiMessage()));
             } finally {
                 terminalSignal.countDown();
             }
+        }
+
+        private void reportUsage(ChatResponse response) {
+            TokenUsage usage = response.tokenUsage();
+            if (usage == null) {
+                return;
+            }
+            // TODO: surface cache_read_input_tokens from the Anthropic-specific
+            // TokenUsage subtype once verified against the langchain4j API.
+            handler.onUsage(orZero(usage.inputTokenCount()), orZero(usage.outputTokenCount()), 0);
+        }
+
+        private static int orZero(Integer value) {
+            return value == null ? 0 : value;
         }
 
         @Override
