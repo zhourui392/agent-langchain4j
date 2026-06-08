@@ -6,15 +6,18 @@ import com.anthropic.cclc.domain.tool.ToolArguments;
 import com.anthropic.cclc.domain.tool.ToolResult;
 import com.anthropic.cclc.infrastructure.tools.support.EsReadClient;
 
+import java.io.IOException;
 import java.util.Objects;
 
 /**
- * Read-only Elasticsearch tool: search / count / get / mapping. Stub for Red.
+ * Read-only Elasticsearch tool: search / count / get / mapping.
  *
  * @author zhourui(V33215020)
  * @since 2026-06-08
  */
 public final class EsReadTool implements Tool {
+
+    private static final int DEFAULT_SIZE = 10;
 
     private final EsReadClient client;
 
@@ -50,6 +53,22 @@ public final class EsReadTool implements Tool {
 
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
-        return ToolResult.error("not implemented");
+        String op = args.getString("op", "").trim();
+        String index = args.getString("index", "").trim();
+        if (index.isEmpty()) {
+            return ToolResult.error("EsRead requires 'index'");
+        }
+        try {
+            return switch (op) {
+                case "search" -> ToolResult.ok(
+                        client.search(index, args.getString("query", "{}"), args.getInt("size", DEFAULT_SIZE)));
+                case "count" -> ToolResult.ok("count: " + client.count(index, args.getString("query", "{}")));
+                case "get" -> ToolResult.ok(client.get(index, args.getString("id", "")));
+                case "mapping" -> ToolResult.ok(client.mapping(index));
+                default -> ToolResult.error("EsRead unknown op: '" + op + "' (use search|count|get|mapping)");
+            };
+        } catch (IOException ex) {
+            return ToolResult.error("EsRead failed: " + ex.getMessage());
+        }
     }
 }
