@@ -6,16 +6,23 @@ import com.anthropic.cclc.domain.tool.ToolArguments;
 import com.anthropic.cclc.domain.tool.ToolResult;
 import com.anthropic.cclc.infrastructure.tools.support.MysqlReadClient;
 
+import java.sql.SQLException;
+import java.util.Arrays;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Read-only MySQL tool: runs a single read statement and returns the rows.
- * A SQL guard rejects anything that is not a plain read. Stub for Red.
+ * A SQL guard rejects anything that is not a plain read.
  *
  * @author zhourui(V33215020)
  * @since 2026-06-08
  */
 public final class MysqlReadTool implements Tool {
+
+    private static final int DEFAULT_MAX_ROWS = 100;
+    private static final Set<String> READ_VERBS = Set.of(
+            "SELECT", "WITH", "SHOW", "DESCRIBE", "DESC", "EXPLAIN");
 
     private final MysqlReadClient client;
 
@@ -48,6 +55,29 @@ public final class MysqlReadTool implements Tool {
 
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
-        return ToolResult.error("not implemented");
+        String sql = args.getString("sql", "").trim();
+        if (sql.isEmpty()) {
+            return ToolResult.error("MysqlRead requires 'sql'");
+        }
+        if (!isReadOnlySql(sql)) {
+            return ToolResult.error(
+                    "MysqlRead allows only read-only statements (SELECT/WITH/SHOW/DESCRIBE/EXPLAIN)");
+        }
+        try {
+            return ToolResult.ok(client.query(sql, args.getInt("maxRows", DEFAULT_MAX_ROWS)));
+        } catch (SQLException ex) {
+            return ToolResult.error("MysqlRead failed: " + ex.getMessage());
+        }
+    }
+
+    private static boolean isReadOnlySql(String sql) {
+        long statementCount = Arrays.stream(sql.split(";"))
+                .filter(part -> !part.isBlank())
+                .count();
+        if (statementCount != 1) {
+            return false;
+        }
+        String firstToken = sql.split("\\s+", 2)[0].toUpperCase();
+        return READ_VERBS.contains(firstToken);
     }
 }
