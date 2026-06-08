@@ -6,6 +6,7 @@ import com.anthropic.cclc.application.PermissionService;
 import com.anthropic.cclc.domain.conversation.CancellationToken;
 import com.anthropic.cclc.domain.conversation.Conversation;
 import com.anthropic.cclc.domain.conversation.SessionId;
+import com.anthropic.cclc.domain.conversation.TokenBudget;
 import com.anthropic.cclc.domain.permission.PermissionMode;
 import com.anthropic.cclc.domain.port.LlmClient;
 import com.anthropic.cclc.domain.tool.ExecutionContext;
@@ -39,6 +40,9 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
     private static final int EXIT_CANCELLED = -1;
     private static final int EXIT_ERROR = 1;
 
+    private static final int DEFAULT_CONTEXT_TOKENS = 180_000;
+    private static final int DEFAULT_RECENT_MESSAGES = 30;
+
     private static final InteractivePrompter REJECTING_PROMPTER = (invocation, tool) -> {
         throw new IllegalStateException("read-only diagnose engine has no interactive approval");
     };
@@ -46,6 +50,7 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
     private final LlmClient llm;
     private final ToolRegistry tools;
     private final ConversationRebuilder rebuilder = new ConversationRebuilder();
+    private final ContextCompactionService compaction;
     private final RunningSessions running = new RunningSessions();
     private final ScheduledExecutorService timeoutScheduler =
             Executors.newSingleThreadScheduledExecutor(DefaultDiagnoseEngine::daemon);
@@ -53,6 +58,8 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
     public DefaultDiagnoseEngine(LlmClient llm, ToolRegistry tools) {
         this.llm = Objects.requireNonNull(llm, "llm");
         this.tools = Objects.requireNonNull(tools, "tools");
+        this.compaction = new ContextCompactionService(
+                llm, TokenBudget.of(DEFAULT_CONTEXT_TOKENS), DEFAULT_RECENT_MESSAGES);
     }
 
     @Override
@@ -61,8 +68,8 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
         Objects.requireNonNull(onChunk, "onChunk");
         Objects.requireNonNull(onExit, "onExit");
         String sessionId = request.sessionId();
-        Conversation conversation = rebuilder.from(
-                SessionId.of(sessionId), request.history(), request.userMessage());
+        Conversation conversation = compaction.maybeCompact(rebuilder.from(
+                SessionId.of(sessionId), request.history(), request.userMessage()));
         CancellationToken cancel = running.register(sessionId);
         try {
             await(request, conversation, cancel, onChunk);
