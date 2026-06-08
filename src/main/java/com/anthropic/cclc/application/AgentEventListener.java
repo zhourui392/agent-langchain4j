@@ -24,6 +24,9 @@ public interface AgentEventListener {
     default void onTurnComplete(AiMessage finalMessage) {
     }
 
+    default void onUsage(int inputTokens, int outputTokens, int cacheReadInputTokens) {
+    }
+
     default void onError(Throwable error) {
     }
 }

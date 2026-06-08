@@ -14,5 +14,8 @@ public interface LlmClient {
 
         default void onError(Throwable error) {
         }
+
+        default void onUsage(int inputTokens, int outputTokens, int cacheReadInputTokens) {
+        }
     }
 }
