@@ -10,6 +10,8 @@
 
 ## 1. 项目目标与边界
 
+> **定位已转变（2026-06-08）**：交付物从 CLI 转为 agent-web 的**进程内只读诊断引擎**，详见 [§16.1](#161-定位转变进程内诊断引擎2026-06-08)。下文原 CLI 目标作为底座能力保留（多数已被引擎复用），但 CLI 不再是主交付。
+
 ### 1.1 必须实现（MVP P0）
 
 | 能力 | 来源文件 |
@@ -585,6 +587,19 @@ claude-code-langchain4j/
 | 会话恢复粒度 | **仅恢复消息历史**，不重放工具 | `FileChatMemoryStore` 原样持久化 `tool_use` / `tool_result` 对 |
 | JSON 单次模式 | **纳入 P1**（S13） | `--json` flag + 非交互入口，stdout 只输出最终 JSON 结果 |
 | Prompt cache | **S3 起启用** | `SystemPromptComposer` 在系统提示末尾标记 cache breakpoint；工具定义稳定后再标一次 |
+
+### 16.1 定位转变：进程内诊断引擎（2026-06-08）
+
+本项目从「claude-code CLI 复刻」转为 **agent-web 的进程内只读诊断引擎**。完整方案见 [`docs/diagnose-engine-plan.md`](docs/diagnose-engine-plan.md)，wire 契约见 [`docs/samples/README.md`](docs/samples/README.md)。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| 交付形态 | **进程内 jar**，非 CLI | 新增 `interfaces/engine`（`DiagnoseEngine` 门面 + `ClaudeStreamJsonListener/Writer`）；`interfaces/cli` 降级为调试入口；不引入 web 框架 |
+| 工具边界 | **纯只读诊断** | `ReadOnlyPermissionPolicy`（只读 ALLOW / 写 DENY，无 ASK）；新增只读工具 Http/Es/Mysql/Redis/Dubbo（各带读限守卫）；`FileWrite`/`FileEdit` 不注册 |
+| 会话状态 | **引擎无状态** | `ConversationRebuilder` 按传入 history 重建；旁路 `FileChatMemoryStore`；`stop`/超时经 `RunningSessions` + `CancellationToken` |
+| 事件契约 | **Claude `stream-json` 直通** | 增量须包 `{"type":"stream_event","event":{…}}`；`AgentExecutor` 不改，仅加 additive `onUsage` 钩子 |
+
+已实现（分支 `feat/diagnose-engine`）：E0–E3 引擎 MVP、E5 五个只读工具、E6 截断 + auto-compact、E7 SubAgentTool、E8 usage 透出。**未完**：E4（agent-web 接入 `AgentType.NATIVE` + 手测，跨仓库）、E5 LogQueryTool（待 OPPO 日志 API 细节）、E8 `cache_read_input_tokens`（待核 langchain4j API）。
 
 ---
 
