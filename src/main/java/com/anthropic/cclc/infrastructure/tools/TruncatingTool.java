@@ -11,7 +11,7 @@ import java.util.Objects;
 /**
  * Decorates any {@link Tool} so its output is truncated before it enters the
  * conversation. Metadata (name/schema/read-only) passes through unchanged; only
- * the result content is trimmed. Stub for Red.
+ * the result content is trimmed.
  *
  * @author zhourui(V33215020)
  * @since 2026-06-08
@@ -48,6 +48,7 @@ public final class TruncatingTool implements Tool {
 
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
-        return delegate.execute(args, ctx);
+        ToolResult result = delegate.execute(args, ctx);
+        return new ToolResult(result.success(), truncator.truncate(result.content()));
     }
 }
