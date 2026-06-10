@@ -6,6 +6,6 @@ set "PATH=%JAVA_HOME%\bin;%PATH%"
 
 cd /d "%~dp0"
 
-call mvn -B -ntp -q compile exec:java %*
+call mvn -B -ntp -q -pl cclc-cli -am test-compile exec:java %*
 
 endlocal

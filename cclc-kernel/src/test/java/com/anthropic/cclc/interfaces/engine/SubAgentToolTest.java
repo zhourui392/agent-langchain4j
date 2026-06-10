@@ -1,0 +1,83 @@
+package com.anthropic.cclc.interfaces.engine;
+
+import com.anthropic.cclc.domain.conversation.CancellationToken;
+import com.anthropic.cclc.domain.message.AiMessage;
+import com.anthropic.cclc.domain.message.UserMessage;
+import com.anthropic.cclc.domain.tool.ExecutionContext;
+import com.anthropic.cclc.domain.tool.ToolArguments;
+import com.anthropic.cclc.domain.tool.ToolRegistry;
+import com.anthropic.cclc.domain.tool.ToolResult;
+import com.anthropic.cclc.domain.tool.ToolUseId;
+import com.anthropic.cclc.domain.tool.ToolUseRequest;
+import com.anthropic.cclc.infrastructure.tools.SubAgentTool;
+import com.anthropic.cclc.testsupport.FakeTool;
+import com.anthropic.cclc.testsupport.StubLlmClient;
+import org.junit.jupiter.api.Test;
+
+import java.nio.file.Paths;
+import java.util.List;
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class SubAgentToolTest {
+
+    private final ToolArguments promptArgs = ToolArguments.of(Map.of("prompt", "investigate timeout"));
+
+    @Test
+    void returnsChildFinalTextAsToolResult() {
+        StubLlmClient llm = new StubLlmClient().enqueue(AiMessage.text("root cause: pool exhausted"));
+        SubAgentTool tool = new SubAgentTool(llm, new ToolRegistry());
+
+        ToolResult result = tool.execute(promptArgs, context());
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.content()).isEqualTo("root cause: pool exhausted");
+    }
+
+    @Test
+    void runsChildExecutorWithNarrowedTools() {
+        FakeTool grep = FakeTool.readOnlyReturning("Grep", "3 matches");
+        StubLlmClient llm = new StubLlmClient()
+                .enqueue(new AiMessage("", List.of(new ToolUseRequest(new ToolUseId("c-1"), "Grep", "{}"))))
+                .enqueue(AiMessage.text("done"));
+        SubAgentTool tool = new SubAgentTool(llm, new ToolRegistry().register(grep));
+
+        ToolResult result = tool.execute(promptArgs, context());
+
+        assertThat(grep.callCount()).isEqualTo(1);
+        assertThat(result.content()).isEqualTo("done");
+    }
+
+    @Test
+    void childDoesNotShareParentConversation() {
+        StubLlmClient llm = new StubLlmClient().enqueue(AiMessage.text("ok"));
+        SubAgentTool tool = new SubAgentTool(llm, new ToolRegistry());
+
+        tool.execute(promptArgs, context());
+
+        var firstRequest = llm.capturedRequests().get(0);
+        assertThat(firstRequest.messages()).hasSize(1);
+        assertThat(firstRequest.messages().get(0)).isInstanceOf(UserMessage.class);
+        assertThat(((UserMessage) firstRequest.messages().get(0)).text()).isEqualTo("investigate timeout");
+    }
+
+    @Test
+    void propagatesCancellationToChild() {
+        StubLlmClient llm = new StubLlmClient().enqueue(AiMessage.text("never"));
+        SubAgentTool tool = new SubAgentTool(llm, new ToolRegistry());
+        CancellationToken cancelled = new CancellationToken();
+        cancelled.cancel();
+        ExecutionContext ctx = ExecutionContext.of(Paths.get(System.getProperty("user.dir")), cancelled);
+
+        ToolResult result = tool.execute(promptArgs, ctx);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.content()).contains("cancel");
+        assertThat(llm.capturedRequests()).isEmpty();
+    }
+
+    private ExecutionContext context() {
+        return ExecutionContext.at(Paths.get(System.getProperty("user.dir")));
+    }
+}

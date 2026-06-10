@@ -54,7 +54,7 @@ S0 (1→2→3)
 - 依赖：langchain4j-anthropic、langchain4j-mcp、picocli、jline、jackson-databind、zt-exec、slf4j+logback、junit5、assertj、mockito
 - `CclcApplication.main` 空壳，打印版本号
 
-**DoD**: `mvn clean verify` 通过；`mvn exec:java` 输出版本号。
+**DoD**: `mvn clean verify` 通过；`mvn -q -pl cclc-cli -am test-compile exec:java "-Dexec.args=--version"` 输出版本号。
 
 ---
 
