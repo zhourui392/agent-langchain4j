@@ -11,7 +11,8 @@ import java.util.stream.Collectors;
  * @author zhourui(V33215020)
  * @since 2026-06-11
  */
-public record DiagnosisPlan(String problemStatement, List<Hypothesis> hypotheses, List<DiagnosisStep> steps) {
+public record DiagnosisPlan(String problemStatement, List<Hypothesis> hypotheses, List<DiagnosisStep> steps,
+                            List<String> missingInputs) {
 
     public DiagnosisPlan {
         if (problemStatement == null || problemStatement.isBlank()) {
@@ -19,11 +20,20 @@ public record DiagnosisPlan(String problemStatement, List<Hypothesis> hypotheses
         }
         hypotheses = List.copyOf(Objects.requireNonNull(hypotheses, "hypotheses"));
         steps = List.copyOf(Objects.requireNonNull(steps, "steps"));
+        missingInputs = List.copyOf(missingInputs == null ? List.of() : missingInputs);
         validateStepHypotheses(hypotheses, steps);
+    }
+
+    public DiagnosisPlan(String problemStatement, List<Hypothesis> hypotheses, List<DiagnosisStep> steps) {
+        this(problemStatement, hypotheses, steps, List.of());
     }
 
     public boolean isToolAllowed(String toolName) {
         return steps.stream().anyMatch(step -> step.canUseTool(toolName));
+    }
+
+    public boolean needsMoreInformation() {
+        return !missingInputs.isEmpty();
     }
 
     private static void validateStepHypotheses(List<Hypothesis> hypotheses, List<DiagnosisStep> steps) {

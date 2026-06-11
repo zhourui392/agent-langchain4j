@@ -62,6 +62,14 @@ class RedisReadToolTest {
     }
 
     @Test
+    void rejectsKeysScan() {
+        ToolResult result = tool.execute(args("KEYS *"), ctx);
+
+        assertThat(result.success()).isFalse();
+        assertThat(client.calls).isZero();
+    }
+
+    @Test
     void missingCommandRejected() {
         ToolResult result = tool.execute(args(""), ctx);
 

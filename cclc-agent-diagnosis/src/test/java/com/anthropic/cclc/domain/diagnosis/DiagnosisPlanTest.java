@@ -38,6 +38,18 @@ class DiagnosisPlanTest {
         assertThat(plan.isToolAllowed("RedisRead")).isFalse();
     }
 
+    @Test
+    void tracksMissingInputs() {
+        DiagnosisPlan plan = new DiagnosisPlan(
+                "order failed",
+                List.of(Hypothesis.open("H1", "missing trace", 0.4)),
+                List.of(step("S1", "H1", StepStatus.PENDING)),
+                List.of("timeWindow", "traceId"));
+
+        assertThat(plan.needsMoreInformation()).isTrue();
+        assertThat(plan.missingInputs()).containsExactly("timeWindow", "traceId");
+    }
+
     private static DiagnosisStep step(String id, String hypothesisId, StepStatus status) {
         return new DiagnosisStep(id, "查日志", hypothesisId, List.of("LogQuery"), status, "");
     }

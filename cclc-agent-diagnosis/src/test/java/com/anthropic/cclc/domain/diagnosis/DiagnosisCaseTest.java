@@ -59,6 +59,16 @@ class DiagnosisCaseTest {
                 .hasMessageContaining("PLANNING");
     }
 
+    @Test
+    void canMoveToNeedInfoFromRunning() {
+        DiagnosisCase diagnosisCase = DiagnosisCase.open("case-1", "order failed");
+        diagnosisCase.adoptPlan(plan(StepStatus.PENDING));
+
+        diagnosisCase.requireInputs(List.of("traceId"));
+
+        assertThat(diagnosisCase.status()).isEqualTo(DiagnosisStatus.NEED_INFO);
+    }
+
     private static DiagnosisPlan plan(StepStatus status) {
         return new DiagnosisPlan(
                 "订单失败",

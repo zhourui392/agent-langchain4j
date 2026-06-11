@@ -33,6 +33,7 @@ class StructuredDiagnosisReporterTest {
         assertThat(report.summary()).isEqualTo("库存不足");
         assertThat(report.rootCauseCandidates()).singleElement()
                 .satisfies(candidate -> assertThat(candidate.evidenceIds()).containsExactly("E1"));
+        assertThat(report.missingInformation()).containsExactly("risk owner");
         assertThat(llm.capturedRequests().get(0).tools())
                 .extracting(com.anthropic.cclc.domain.port.ToolSpec::name)
                 .contains("submit_report");
@@ -78,6 +79,7 @@ class StructuredDiagnosisReporterTest {
                   ],
                   "keyEvidenceIds": ["%s"],
                   "recommendedActions": ["人工确认库存配置"],
+                  "missingInformation": ["risk owner"],
                   "confidence": 0.7,
                   "needHumanCheck": true
                 }

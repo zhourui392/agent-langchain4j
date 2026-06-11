@@ -24,7 +24,7 @@ public final class RedisReadTool implements Tool {
     private static final Set<String> READ_COMMANDS = Set.of(
             "GET", "MGET", "STRLEN", "GETRANGE", "GETBIT", "BITCOUNT",
             "TYPE", "TTL", "PTTL", "EXPIRETIME", "PEXPIRETIME", "EXISTS",
-            "SCAN", "KEYS", "RANDOMKEY", "DBSIZE",
+            "SCAN", "RANDOMKEY", "DBSIZE",
             "HGET", "HMGET", "HGETALL", "HKEYS", "HVALS", "HLEN", "HEXISTS", "HSTRLEN",
             "LRANGE", "LLEN", "LINDEX", "LPOS",
             "SMEMBERS", "SCARD", "SISMEMBER", "SRANDMEMBER",

@@ -1,11 +1,14 @@
 package com.anthropic.cclc.interfaces.engine;
 
 import com.anthropic.cclc.application.diagnosis.DiagnosisPlanner;
+import com.anthropic.cclc.application.diagnosis.DiagnosisReporter;
+import com.anthropic.cclc.application.diagnosis.PlanGuardMode;
 import com.anthropic.cclc.domain.agent.AgentBudget;
 import com.anthropic.cclc.domain.port.LlmClient;
 import com.anthropic.cclc.domain.tool.ToolRegistry;
 import com.anthropic.cclc.infrastructure.diagnosis.DiagnoseToolFactory;
 import com.anthropic.cclc.infrastructure.diagnosis.DiagnosisToolBackends;
+import com.anthropic.cclc.infrastructure.diagnosis.DiagnosisToolPolicy;
 import com.anthropic.cclc.infrastructure.diagnosis.PromptPackLoader;
 import com.anthropic.cclc.infrastructure.tools.governance.ToolGovernance;
 import com.anthropic.cclc.infrastructure.tools.support.ToolResultTruncator;
@@ -24,7 +27,13 @@ public final class DiagnoseEngineBuilder {
     private LlmClient llm;
     private ToolRegistry tools = new ToolRegistry();
     private AgentBudget budget = AgentBudget.unlimited();
+    private DiagnosisToolBackends backends;
+    private ToolGovernance governance = ToolGovernance.defaults();
+    private ToolResultTruncator truncator = ToolResultTruncator.withDefaults();
     private DiagnosisPlanner planner;
+    private DiagnosisReporter reporter;
+    private PlanGuardMode guardMode = PlanGuardMode.OBSERVE;
+    private DiagnosisToolPolicy toolPolicy = DiagnosisToolPolicy.allowAll();
     private String promptPack = "";
 
     private DiagnoseEngineBuilder() {
@@ -56,8 +65,10 @@ public final class DiagnoseEngineBuilder {
     public DiagnoseEngineBuilder toolBackends(DiagnosisToolBackends backends,
                                               ToolGovernance governance,
                                               ToolResultTruncator truncator) {
-        this.tools = new DiagnoseToolFactory(governance, truncator)
-                .create(Objects.requireNonNull(backends, "backends"));
+        this.backends = Objects.requireNonNull(backends, "backends");
+        this.governance = Objects.requireNonNull(governance, "governance");
+        this.truncator = Objects.requireNonNull(truncator, "truncator");
+        assembleBackendTools();
         return this;
     }
 
@@ -71,6 +82,24 @@ public final class DiagnoseEngineBuilder {
         return this;
     }
 
+    public DiagnoseEngineBuilder reporter(DiagnosisReporter reporter) {
+        this.reporter = Objects.requireNonNull(reporter, "reporter");
+        return this;
+    }
+
+    public DiagnoseEngineBuilder planGuardMode(PlanGuardMode guardMode) {
+        this.guardMode = Objects.requireNonNull(guardMode, "guardMode");
+        return this;
+    }
+
+    public DiagnoseEngineBuilder toolPolicy(DiagnosisToolPolicy toolPolicy) {
+        this.toolPolicy = Objects.requireNonNull(toolPolicy, "toolPolicy");
+        if (backends != null) {
+            assembleBackendTools();
+        }
+        return this;
+    }
+
     public DiagnoseEngineBuilder promptPacks(Path directory) {
         this.promptPack = new PromptPackLoader().load(directory);
         return this;
@@ -80,6 +109,11 @@ public final class DiagnoseEngineBuilder {
         if (llm == null) {
             throw new IllegalStateException("llm must be configured");
         }
-        return new DefaultDiagnoseEngine(llm, tools, budget, planner, promptPack);
+        return new DefaultDiagnoseEngine(llm, tools,
+                new DefaultDiagnoseEngine.EngineOptions(budget, planner, reporter, guardMode, promptPack));
+    }
+
+    private void assembleBackendTools() {
+        this.tools = new DiagnoseToolFactory(governance, truncator, toolPolicy).create(backends);
     }
 }

@@ -59,6 +59,16 @@ public final class DiagnosisCase {
         return ledger.addModelInference(summary);
     }
 
+    public void requireInputs(List<String> missingInputs) {
+        if (status != DiagnosisStatus.RUNNING && status != DiagnosisStatus.PLANNING) {
+            throw new IllegalStateException("cannot require inputs from " + status);
+        }
+        if (missingInputs == null || missingInputs.isEmpty()) {
+            throw new IllegalArgumentException("missingInputs must not be empty");
+        }
+        status = DiagnosisStatus.NEED_INFO;
+    }
+
     public boolean canConfirmRootCause(String hypothesisId) {
         requireText(hypothesisId, "hypothesisId");
         return ledger.all().stream().anyMatch(evidence -> evidence.source() != EvidenceSource.MODEL_INFERENCE);

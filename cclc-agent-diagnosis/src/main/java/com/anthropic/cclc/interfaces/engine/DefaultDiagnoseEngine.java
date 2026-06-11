@@ -1,6 +1,8 @@
 package com.anthropic.cclc.interfaces.engine;
 
 import com.anthropic.cclc.application.diagnosis.DiagnosisPlanner;
+import com.anthropic.cclc.application.diagnosis.DiagnosisReporter;
+import com.anthropic.cclc.application.diagnosis.PlanGuardMode;
 import com.anthropic.cclc.domain.agent.AgentBudget;
 import com.anthropic.cclc.domain.conversation.CancellationToken;
 import com.anthropic.cclc.domain.conversation.Conversation;
@@ -62,12 +64,21 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
 
     public DefaultDiagnoseEngine(LlmClient llm, ToolRegistry tools, AgentBudget budget,
                                  DiagnosisPlanner planner, String promptPack) {
+        this(llm, tools, options(budget, planner, null, PlanGuardMode.OBSERVE, promptPack));
+    }
+
+    public DefaultDiagnoseEngine(LlmClient llm, ToolRegistry tools, EngineOptions options) {
         Objects.requireNonNull(tools, "tools");
-        Objects.requireNonNull(budget, "budget");
+        EngineOptions config = Objects.requireNonNull(options, "options");
         this.compaction = new ContextCompactionService(
                 llm, TokenBudget.of(DEFAULT_CONTEXT_TOKENS), DEFAULT_RECENT_MESSAGES);
-        this.orchestrator = new DiagnosisOrchestrator(
-                llm, tools, budget, new DiagnosisStateCodec(), planner, promptPack);
+        this.orchestrator = new DiagnosisOrchestrator(llm, tools, new DiagnosisOrchestrator.Options(
+                config.budget(),
+                new DiagnosisStateCodec(),
+                config.planner(),
+                config.reporter(),
+                config.guardMode(),
+                config.promptPack()));
     }
 
     @Override
@@ -122,5 +133,21 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
         Thread thread = new Thread(runnable, "diagnose-timeout");
         thread.setDaemon(true);
         return thread;
+    }
+
+    private static EngineOptions options(AgentBudget budget, DiagnosisPlanner planner,
+                                         DiagnosisReporter reporter, PlanGuardMode guardMode,
+                                         String promptPack) {
+        return new EngineOptions(budget, planner, reporter, guardMode, promptPack);
+    }
+
+    public record EngineOptions(AgentBudget budget, DiagnosisPlanner planner, DiagnosisReporter reporter,
+                                PlanGuardMode guardMode, String promptPack) {
+
+        public EngineOptions {
+            Objects.requireNonNull(budget, "budget");
+            Objects.requireNonNull(guardMode, "guardMode");
+            promptPack = promptPack == null ? "" : promptPack;
+        }
     }
 }

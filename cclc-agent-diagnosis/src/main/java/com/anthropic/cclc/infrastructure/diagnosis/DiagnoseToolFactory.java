@@ -25,14 +25,21 @@ public final class DiagnoseToolFactory {
 
     private final ToolGovernance governance;
     private final ToolResultTruncator truncator;
+    private final DiagnosisToolPolicy policy;
 
     public DiagnoseToolFactory() {
         this(ToolGovernance.defaults(), ToolResultTruncator.withDefaults());
     }
 
     public DiagnoseToolFactory(ToolGovernance governance, ToolResultTruncator truncator) {
+        this(governance, truncator, DiagnosisToolPolicy.allowAll());
+    }
+
+    public DiagnoseToolFactory(ToolGovernance governance, ToolResultTruncator truncator,
+                               DiagnosisToolPolicy policy) {
         this.governance = Objects.requireNonNull(governance, "governance");
         this.truncator = Objects.requireNonNull(truncator, "truncator");
+        this.policy = Objects.requireNonNull(policy, "policy");
     }
 
     public ToolRegistry create(DiagnosisToolBackends backends) {
@@ -73,13 +80,13 @@ public final class DiagnoseToolFactory {
 
     private void registerHttp(ToolRegistry registry, DiagnosisToolBackends backends) {
         if (backends.http() != null) {
-            registry.register(govern(new HttpGetTool(backends.http())));
+            registry.register(govern(new HttpGetTool(backends.http(), policy.allowedHttpHosts())));
         }
     }
 
     private void registerDubbo(ToolRegistry registry, DiagnosisToolBackends backends) {
         if (backends.dubbo() != null) {
-            registry.register(govern(new DubboInvokeTool(backends.dubbo())));
+            registry.register(govern(new DubboInvokeTool(backends.dubbo(), policy.allowedDubboMethods())));
         }
     }
 

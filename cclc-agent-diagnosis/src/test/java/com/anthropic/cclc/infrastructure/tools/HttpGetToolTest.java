@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -55,6 +56,29 @@ class HttpGetToolTest {
 
         assertThat(result.success()).isFalse();
         assertThat(result.content()).contains("connection refused");
+    }
+
+    @Test
+    void rejectsHostOutsideAllowlist() {
+        RecordingHttpReader reader = RecordingHttpReader.returning(200, "x");
+        HttpGetTool tool = new HttpGetTool(reader, Set.of("svc.local"));
+
+        ToolResult result = tool.execute(args("https://evil.local/health"), ctx);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.content()).containsIgnoringCase("allowlisted");
+        assertThat(reader.calls).isZero();
+    }
+
+    @Test
+    void allowsConfiguredHost() {
+        RecordingHttpReader reader = RecordingHttpReader.returning(200, "OK");
+        HttpGetTool tool = new HttpGetTool(reader, Set.of("svc.local"));
+
+        ToolResult result = tool.execute(args("https://svc.local/health"), ctx);
+
+        assertThat(result.success()).isTrue();
+        assertThat(reader.calls).isEqualTo(1);
     }
 
     private ToolArguments args(String url) {

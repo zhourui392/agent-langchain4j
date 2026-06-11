@@ -37,6 +37,7 @@ public final class StructuredDiagnosisReporter implements DiagnosisReporter {
             "rootCauseCandidates":{"type":"array"},\
             "keyEvidenceIds":{"type":"array"},\
             "recommendedActions":{"type":"array"},\
+            "missingInformation":{"type":"array"},\
             "confidence":{"type":"number"},\
             "needHumanCheck":{"type":"boolean"}\
             },"required":["summary","rootCauseCandidates","keyEvidenceIds",\
@@ -82,6 +83,7 @@ public final class StructuredDiagnosisReporter implements DiagnosisReporter {
                 toCandidates(dto.rootCauseCandidates()),
                 safeList(dto.keyEvidenceIds()),
                 safeList(dto.recommendedActions()),
+                safeList(dto.missingInformation()),
                 dto.confidence(),
                 dto.needHumanCheck());
     }
@@ -110,7 +112,7 @@ public final class StructuredDiagnosisReporter implements DiagnosisReporter {
 
     private record ReportDto(String summary, List<RootCauseCandidateDto> rootCauseCandidates,
                              List<String> keyEvidenceIds, List<String> recommendedActions,
-                             double confidence, boolean needHumanCheck) {
+                             List<String> missingInformation, double confidence, boolean needHumanCheck) {
     }
 
     private record RootCauseCandidateDto(String hypothesisId, String summary, List<String> evidenceIds,

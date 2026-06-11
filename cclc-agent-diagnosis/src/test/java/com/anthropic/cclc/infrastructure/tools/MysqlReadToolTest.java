@@ -81,6 +81,13 @@ class MysqlReadToolTest {
     }
 
     @Test
+    void capsMaxRowsAtProductionLimit() {
+        tool.execute(ToolArguments.of(Map.of("sql", "SELECT * FROM users", "maxRows", 500)), ctx);
+
+        assertThat(client.lastMaxRows).isEqualTo(100);
+    }
+
+    @Test
     void isReadOnlyTrue() {
         assertThat(tool.isReadOnly()).isTrue();
     }
@@ -94,11 +101,13 @@ class MysqlReadToolTest {
         private SQLException failure;
         private int calls;
         private String lastSql;
+        private int lastMaxRows;
 
         @Override
         public String query(String sql, int maxRows) throws SQLException {
             calls++;
             lastSql = sql;
+            lastMaxRows = maxRows;
             if (failure != null) {
                 throw failure;
             }

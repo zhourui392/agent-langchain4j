@@ -11,6 +11,8 @@ import com.anthropic.cclc.domain.diagnosis.StepStatus;
 import com.anthropic.cclc.domain.message.AiMessage;
 import com.anthropic.cclc.domain.tool.ToolRegistry;
 import com.anthropic.cclc.infrastructure.diagnosis.DiagnosisToolBackends;
+import com.anthropic.cclc.infrastructure.diagnosis.DiagnosisToolPolicy;
+import com.anthropic.cclc.infrastructure.tools.support.HttpReader;
 import com.anthropic.cclc.testsupport.StubLlmClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -21,6 +23,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -54,8 +57,9 @@ class DiagnoseEngineBuilderTest {
                 .sessionId("s-builder")
                 .build(), lines::add, exit::set);
 
-        assertThat(exit).hasValue(1);
+        assertThat(exit).hasValue(0);
         assertThat(llm.capturedRequests()).isEmpty();
+        assertThat(lines).anySatisfy(line -> assertThat(line).contains("diagnosis_report"));
     }
 
     @Test
@@ -102,6 +106,34 @@ class DiagnoseEngineBuilderTest {
                 });
 
         assertThat(lines).anySatisfy(line -> assertThat(line).contains("log line"));
+    }
+
+    @Test
+    void appliesToolPolicyAfterBackendAssembly() {
+        StubLlmClient llm = new StubLlmClient()
+                .enqueue(new AiMessage("", List.of(new com.anthropic.cclc.domain.tool.ToolUseRequest(
+                        new com.anthropic.cclc.domain.tool.ToolUseId("http-1"),
+                        "HttpGet",
+                        "{\"url\":\"https://evil.local/health\"}"))))
+                .enqueue(AiMessage.text("done"));
+        DiagnosisToolBackends backends = DiagnosisToolBackends.builder()
+                .http((url, headers, timeout) -> new HttpReader.HttpResponseView(200, "ok"))
+                .build();
+        DiagnoseEngine engine = DiagnoseEngineBuilder.create()
+                .llm(llm)
+                .toolBackends(backends)
+                .toolPolicy(new DiagnosisToolPolicy(Set.of("svc.local"), Set.of()))
+                .build();
+        List<String> lines = new ArrayList<>();
+
+        engine.runStream(RunRequest.builder()
+                .workingDir(".")
+                .userMessage("hi")
+                .sessionId("s-policy")
+                .build(), lines::add, ignored -> {
+                });
+
+        assertThat(lines).anySatisfy(line -> assertThat(line).contains("not allowlisted"));
     }
 
     @Test

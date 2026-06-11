@@ -10,7 +10,7 @@ import java.util.List;
  */
 public record DiagnosisReport(String summary, List<RootCauseCandidate> rootCauseCandidates,
                               List<String> keyEvidenceIds, List<String> recommendedActions,
-                              double confidence, boolean needHumanCheck) {
+                              List<String> missingInformation, double confidence, boolean needHumanCheck) {
 
     public DiagnosisReport {
         if (summary == null || summary.isBlank()) {
@@ -19,8 +19,16 @@ public record DiagnosisReport(String summary, List<RootCauseCandidate> rootCause
         rootCauseCandidates = List.copyOf(rootCauseCandidates);
         keyEvidenceIds = List.copyOf(keyEvidenceIds);
         recommendedActions = List.copyOf(recommendedActions);
+        missingInformation = List.copyOf(missingInformation == null ? List.of() : missingInformation);
         if (confidence < 0 || confidence > 1) {
             throw new IllegalArgumentException("confidence must be between 0 and 1");
         }
+    }
+
+    public DiagnosisReport(String summary, List<RootCauseCandidate> rootCauseCandidates,
+                           List<String> keyEvidenceIds, List<String> recommendedActions,
+                           double confidence, boolean needHumanCheck) {
+        this(summary, rootCauseCandidates, keyEvidenceIds, recommendedActions,
+                List.of(), confidence, needHumanCheck);
     }
 }

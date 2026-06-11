@@ -1,6 +1,7 @@
 package com.anthropic.cclc.application;
 
 import com.anthropic.cclc.domain.agent.AgentBudget;
+import com.anthropic.cclc.domain.agent.AgentBudgetExceededException;
 import com.anthropic.cclc.domain.conversation.CancellationToken;
 import com.anthropic.cclc.domain.conversation.Conversation;
 import com.anthropic.cclc.domain.message.AiMessage;
@@ -87,6 +88,8 @@ public final class AgentExecutor {
                            AgentEventListener listener, String systemPrompt) {
         try {
             return runLoop(conversation, cancel, listener, systemPrompt);
+        } catch (AgentBudgetExceededException ex) {
+            throw ex;
         } catch (RuntimeException ex) {
             listener.onError(ex);
             throw ex;

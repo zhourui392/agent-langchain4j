@@ -8,10 +8,14 @@ import com.anthropic.cclc.infrastructure.tools.support.HttpReader;
 import com.anthropic.cclc.infrastructure.tools.support.HttpReader.HttpResponseView;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Read-only HTTP GET for verifying endpoints during diagnosis.
@@ -24,9 +28,15 @@ public final class HttpGetTool implements Tool {
     private static final int DEFAULT_TIMEOUT_MS = 15_000;
 
     private final HttpReader httpReader;
+    private final Set<String> allowedHosts;
 
     public HttpGetTool(HttpReader httpReader) {
+        this(httpReader, Set.of());
+    }
+
+    public HttpGetTool(HttpReader httpReader, Set<String> allowedHosts) {
         this.httpReader = Objects.requireNonNull(httpReader, "httpReader");
+        this.allowedHosts = normalizeHosts(allowedHosts);
     }
 
     @Override
@@ -59,6 +69,9 @@ public final class HttpGetTool implements Tool {
         if (!isHttpUrl(url)) {
             return ToolResult.error("HttpGet requires an http(s) url, got: " + url);
         }
+        if (!isAllowedHost(url)) {
+            return ToolResult.error("HttpGet host is not allowlisted: " + host(url));
+        }
         Duration timeout = Duration.ofMillis(args.getInt("timeoutMs", DEFAULT_TIMEOUT_MS));
         try {
             HttpResponseView response = httpReader.get(url, headers(args), timeout);
@@ -70,6 +83,31 @@ public final class HttpGetTool implements Tool {
 
     private static boolean isHttpUrl(String url) {
         return url.startsWith("http://") || url.startsWith("https://");
+    }
+
+    private boolean isAllowedHost(String url) {
+        return allowedHosts.isEmpty() || allowedHosts.contains(host(url));
+    }
+
+    private static String host(String url) {
+        try {
+            String host = new URI(url).getHost();
+            return host == null ? "" : host.toLowerCase();
+        } catch (URISyntaxException ex) {
+            return "";
+        }
+    }
+
+    private static Set<String> normalizeHosts(Set<String> hosts) {
+        if (hosts == null || hosts.isEmpty()) {
+            return Set.of();
+        }
+        return hosts.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(host -> !host.isBlank())
+                .map(String::toLowerCase)
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     private static Map<String, String> headers(ToolArguments args) {

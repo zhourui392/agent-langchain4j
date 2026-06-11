@@ -35,7 +35,8 @@ public final class StructuredDiagnosisPlanner implements DiagnosisPlanner {
             {"type":"object","properties":{\
             "problemStatement":{"type":"string"},\
             "hypotheses":{"type":"array"},\
-            "steps":{"type":"array"}\
+            "steps":{"type":"array"},\
+            "missingInputs":{"type":"array"}\
             },"required":["problemStatement","hypotheses","steps"]}""";
     private static final String SYSTEM_PROMPT =
             "Create or update a diagnosis plan by calling the update_plan tool.";
@@ -73,7 +74,8 @@ public final class StructuredDiagnosisPlanner implements DiagnosisPlanner {
         return new DiagnosisPlan(
                 dto.problemStatement(),
                 toHypotheses(dto.hypotheses()),
-                toSteps(dto.steps()));
+                toSteps(dto.steps()),
+                safeList(dto.missingInputs()));
     }
 
     private static List<Hypothesis> toHypotheses(List<HypothesisDto> items) {
@@ -104,7 +106,8 @@ public final class StructuredDiagnosisPlanner implements DiagnosisPlanner {
         return items == null ? List.of() : items;
     }
 
-    private record PlanDto(String problemStatement, List<HypothesisDto> hypotheses, List<StepDto> steps) {
+    private record PlanDto(String problemStatement, List<HypothesisDto> hypotheses, List<StepDto> steps,
+                           List<String> missingInputs) {
     }
 
     private record HypothesisDto(String id, String statement, double confidence) {

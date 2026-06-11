@@ -1,0 +1,163 @@
+package com.anthropic.cclc.interfaces.cli;
+
+import com.anthropic.cclc.application.AgentExecutor;
+import com.anthropic.cclc.application.SessionResumer;
+import com.anthropic.cclc.application.SystemPromptComposer;
+import com.anthropic.cclc.application.io.TerminalIo;
+import com.anthropic.cclc.domain.conversation.CancellationToken;
+import com.anthropic.cclc.domain.context.ContextProvider;
+import com.anthropic.cclc.domain.conversation.SessionId;
+import com.anthropic.cclc.domain.message.ChatMessage;
+import com.anthropic.cclc.domain.port.ChatMemoryStore;
+import com.anthropic.cclc.domain.port.LlmClient;
+import com.anthropic.cclc.domain.tool.ToolRegistry;
+import com.anthropic.cclc.infrastructure.memory.FileChatMemoryStore;
+import com.anthropic.cclc.infrastructure.tools.support.FileStateCache;
+import com.anthropic.cclc.testsupport.io.ScriptedTerminalIo;
+import org.junit.jupiter.api.Test;
+
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.lang.reflect.Method;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class CclcApplicationTest {
+
+    @Test
+    void mainPrintsVersionAndHelpWithoutStartingRepl() {
+        String version = captureStdout(() -> CclcApplication.main(new String[]{"--version"}));
+        String help = captureStdout(() -> CclcApplication.main(new String[]{"--help"}));
+
+        assertThat(version).contains("claude-code-langchain4j", CclcApplication.version());
+        assertThat(help).contains("Usage:", "ANTHROPIC_API_KEY");
+    }
+
+    @Test
+    void privateHelpersExposeExpectedCliDefaults() throws Exception {
+        assertThat((Boolean) invoke("containsFlag",
+                new Class<?>[]{String[].class, String[].class},
+                new String[]{"-v"}, new String[]{"--version", "-v"})).isTrue();
+        assertThat((Boolean) invoke("containsFlag",
+                new Class<?>[]{String[].class, String[].class},
+                new String[]{"--other"}, new String[]{"--version", "-v"})).isFalse();
+
+        ToolRegistry registry = (ToolRegistry) invoke("registerTools",
+                new Class<?>[]{FileStateCache.class}, new FileStateCache());
+        assertThat(registry.names()).containsExactly("Bash", "Read", "Write", "Edit", "Glob", "Grep");
+
+        @SuppressWarnings("unchecked")
+        List<ContextProvider> providers = (List<ContextProvider>) invoke("contextProviders", new Class<?>[]{});
+        assertThat(providers).extracting(ContextProvider::key)
+                .containsExactly("claude_md", "cwd", "date", "git_status");
+    }
+
+    @Test
+    void historyFileUsesUserHome() throws Exception {
+        String oldHome = System.getProperty("user.home");
+        try {
+            System.setProperty("user.home", "D:\\tmp\\home");
+
+            Path history = (Path) invoke("historyFile", new Class<?>[]{});
+
+            assertThat(history.toString()).endsWith(".claude-code-j\\history");
+        } finally {
+            System.setProperty("user.home", oldHome);
+        }
+    }
+
+    @Test
+    void handleLineExecutesSlashCommandBranches() throws Exception {
+        ScriptedTerminalIo terminal = ScriptedTerminalIo.builder().build();
+        SlashCommandParser parser = new SlashCommandParser()
+                .register(new HelpCommand())
+                .register(new ClearCommand());
+
+        handleLine("/missing", parser, terminal, null);
+        handleLine("/help", parser, terminal, null);
+
+        assertThat(terminal.errorOutput()).contains("unknown command");
+        assertThat(terminal.output()).contains("/help", "/clear");
+    }
+
+    @Test
+    void handleLineResumesExistingSession() throws Exception {
+        ScriptedTerminalIo terminal = ScriptedTerminalIo.builder().build();
+        SlashCommandParser parser = new SlashCommandParser().register(new ResumeCommand());
+        SessionResumer resumer = new SessionResumer(new StubMemoryStore());
+
+        handleLine("/resume session-1", parser, terminal, resumer);
+
+        assertThat(terminal.output()).contains("(resumed session-1)");
+    }
+
+    private static void handleLine(String input, SlashCommandParser parser,
+                                   TerminalIo terminal, SessionResumer resumer) throws Exception {
+        invoke("handleLine", new Class<?>[]{
+                        String.class,
+                        SlashCommandParser.class,
+                        AtomicReference.class,
+                        AgentExecutor.class,
+                        LlmClient.class,
+                        SystemPromptComposer.class,
+                        Path.class,
+                        CancellationToken.class,
+                        FileChatMemoryStore.class,
+                        SessionResumer.class,
+                        OutputRenderer.class,
+                        TerminalIo.class,
+                        SigintHandler.class},
+                input, parser, new AtomicReference<>(), null, null, null, Path.of("."),
+                new CancellationToken(), null, resumer, null, terminal, null);
+    }
+
+    private static Object invoke(String name, Class<?>[] parameterTypes, Object... args) throws Exception {
+        Method method = CclcApplication.class.getDeclaredMethod(name, parameterTypes);
+        method.setAccessible(true);
+        return method.invoke(null, args);
+    }
+
+    private static String captureStdout(Runnable runnable) {
+        PrintStream oldOut = System.out;
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try {
+            System.setOut(new PrintStream(bytes));
+            runnable.run();
+            return bytes.toString();
+        } finally {
+            System.setOut(oldOut);
+        }
+    }
+
+    private static final class ResumeCommand implements SlashCommand {
+
+        @Override
+        public String name() {
+            return "resume";
+        }
+
+        @Override
+        public String execute(List<String> args) {
+            return "unused";
+        }
+    }
+
+    private static final class StubMemoryStore implements ChatMemoryStore {
+
+        @Override
+        public List<ChatMessage> load(SessionId sessionId) {
+            return List.of(com.anthropic.cclc.domain.message.UserMessage.of("old"));
+        }
+
+        @Override
+        public void save(SessionId sessionId, List<ChatMessage> messages) {
+        }
+
+        @Override
+        public void delete(SessionId sessionId) {
+        }
+    }
+}

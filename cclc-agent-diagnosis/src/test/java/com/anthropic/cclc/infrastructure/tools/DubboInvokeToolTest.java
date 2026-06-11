@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -76,6 +77,30 @@ class DubboInvokeToolTest {
 
         assertThat(result.success()).isFalse();
         assertThat(result.content()).contains("connection refused");
+    }
+
+    @Test
+    void rejectsMethodOutsideAllowlist() {
+        DubboInvokeTool guardedTool = new DubboInvokeTool(client, Set.of("com.x.UserService.getUser"));
+
+        ToolResult result = guardedTool.execute(
+                args("10.0.0.1:20880", "com.x.UserService.queryUsers()"), ctx);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.content()).containsIgnoringCase("allowlisted");
+        assertThat(client.calls).isZero();
+    }
+
+    @Test
+    void allowsExplicitMethod() {
+        DubboInvokeTool guardedTool = new DubboInvokeTool(client, Set.of("com.x.UserService.getUser"));
+        client.response = "ok";
+
+        ToolResult result = guardedTool.execute(
+                args("10.0.0.1:20880", "com.x.UserService.getUser(1)"), ctx);
+
+        assertThat(result.success()).isTrue();
+        assertThat(client.calls).isEqualTo(1);
     }
 
     @Test

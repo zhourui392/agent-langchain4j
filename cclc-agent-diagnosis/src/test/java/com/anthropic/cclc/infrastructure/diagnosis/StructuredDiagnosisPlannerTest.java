@@ -32,6 +32,7 @@ class StructuredDiagnosisPlannerTest {
             assertThat(step.allowedTools()).containsExactly("LogQuery");
             assertThat(step.status()).isEqualTo(StepStatus.PENDING);
         });
+        assertThat(plan.missingInputs()).containsExactly("timeWindow");
         assertThat(llm.capturedRequests().get(0).tools())
                 .extracting(com.anthropic.cclc.domain.port.ToolSpec::name)
                 .contains("update_plan");
@@ -52,7 +53,8 @@ class StructuredDiagnosisPlannerTest {
                       "allowedTools": ["LogQuery"],
                       "status": "PENDING"
                     }
-                  ]
+                  ],
+                  "missingInputs": ["timeWindow"]
                 }
                 """;
     }

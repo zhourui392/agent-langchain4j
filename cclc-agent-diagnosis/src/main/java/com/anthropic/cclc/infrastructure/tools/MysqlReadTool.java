@@ -21,6 +21,7 @@ import java.util.Set;
 public final class MysqlReadTool implements Tool {
 
     private static final int DEFAULT_MAX_ROWS = 100;
+    private static final int MAX_ROWS_LIMIT = 100;
     private static final Set<String> READ_VERBS = Set.of(
             "SELECT", "WITH", "SHOW", "DESCRIBE", "DESC", "EXPLAIN");
 
@@ -64,10 +65,18 @@ public final class MysqlReadTool implements Tool {
                     "MysqlRead allows only read-only statements (SELECT/WITH/SHOW/DESCRIBE/EXPLAIN)");
         }
         try {
-            return ToolResult.ok(client.query(sql, args.getInt("maxRows", DEFAULT_MAX_ROWS)));
+            return ToolResult.ok(client.query(sql, maxRows(args)));
         } catch (SQLException ex) {
             return ToolResult.error("MysqlRead failed: " + ex.getMessage());
         }
+    }
+
+    private static int maxRows(ToolArguments args) {
+        int requested = args.getInt("maxRows", DEFAULT_MAX_ROWS);
+        if (requested <= 0) {
+            return DEFAULT_MAX_ROWS;
+        }
+        return Math.min(requested, MAX_ROWS_LIMIT);
     }
 
     private static boolean isReadOnlySql(String sql) {
