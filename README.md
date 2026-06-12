@@ -89,7 +89,7 @@ JaCoCo 报告：`cclc-*/target/site/jacoco/index.html`。
 
 ## 测试覆盖
 
-- 393 unit + ArchUnit，全绿（0 skip）
+- 422 unit + ArchUnit，全绿（0 skip）
 - 3 个 SmokeIT 真实 API 验证：纯对话 / 显式工具 / 隐式工具选择
 
 ## 目录速查

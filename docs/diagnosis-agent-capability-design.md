@@ -61,7 +61,7 @@
 | 只读工具 | 部分已有 | ES / MySQL / Redis / HTTP / Dubbo |
 | 子 Agent | 已有雏形 | `SubAgentTool` 名称为 `Task` |
 | 截断与压缩 | 已有雏形 | `TruncatingTool` / `ContextCompactionService` |
-| usage 透出 | 部分已有 | `cache_read_input_tokens` 在 `LangChain4jLlmClient` 中硬编码为 0（有 TODO），待接入 Anthropic TokenUsage 子类 |
+| usage 透出 | 已有 | `LangChain4jLlmClient` 已透出 Anthropic `cache_read_input_tokens`，非 Anthropic usage 保持 0 不估算 |
 
 ### 3.2 关键缺口
 
