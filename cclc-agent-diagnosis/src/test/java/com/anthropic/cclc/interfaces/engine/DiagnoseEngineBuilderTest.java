@@ -9,6 +9,8 @@ import com.anthropic.cclc.domain.diagnosis.Evidence;
 import com.anthropic.cclc.domain.diagnosis.Hypothesis;
 import com.anthropic.cclc.domain.diagnosis.StepStatus;
 import com.anthropic.cclc.domain.message.AiMessage;
+import com.anthropic.cclc.domain.tool.ToolUseId;
+import com.anthropic.cclc.domain.tool.ToolUseRequest;
 import com.anthropic.cclc.domain.tool.ToolRegistry;
 import com.anthropic.cclc.infrastructure.diagnosis.DiagnosisToolBackends;
 import com.anthropic.cclc.infrastructure.diagnosis.DiagnosisToolPolicy;
@@ -157,12 +159,62 @@ class DiagnoseEngineBuilderTest {
                 .contains("Qpon order diagnosis SOP");
     }
 
+    @Test
+    void skillsAddsCatalogToSystemPromptAndRegistersSkillTool(@TempDir Path skillsRoot) throws IOException {
+        writeSkill(skillsRoot.resolve("es-slow-query"), """
+                ---
+                description: Diagnose slow ES queries when took or P99 spikes.
+                ---
+                # ES Slow Query
+                Use profile output.
+                """);
+        StubLlmClient llm = new StubLlmClient()
+                .enqueue(new AiMessage("", List.of(new ToolUseRequest(
+                        new ToolUseId("skill-1"),
+                        "Skill",
+                        "{\"skill\":\"es-slow-query\"}"))))
+                .enqueue(AiMessage.text("done"));
+        DiagnoseEngine engine = DiagnoseEngineBuilder.create()
+                .llm(llm)
+                .skills(skillsRoot)
+                .build();
+        List<String> lines = new ArrayList<>();
+
+        engine.runStream(RunRequest.builder()
+                .workingDir(".")
+                .userMessage("ES query timeout")
+                .sessionId("s-skill")
+                .build(), lines::add, ignored -> {
+                });
+
+        assertThat(llm.capturedRequests().get(0).systemPrompt())
+                .contains("## skills")
+                .contains("es-slow-query: Diagnose slow ES queries");
+        assertThat(lines).anySatisfy(line -> assertThat(line)
+                .contains("# Skill: es-slow-query")
+                .contains("# ES Slow Query"));
+    }
+
+    @Test
+    void skillsFailsFastWhenRootIsInvalid(@TempDir Path dir) {
+        Path missing = dir.resolve("missing");
+
+        assertThatThrownBy(() -> DiagnoseEngineBuilder.create().skills(missing))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("skills root");
+    }
+
     private String typeOf(String line) {
         try {
             return mapper.readTree(line).path("type").asText();
         } catch (java.io.IOException ex) {
             throw new IllegalStateException(ex);
         }
+    }
+
+    private static void writeSkill(Path directory, String content) throws IOException {
+        Files.createDirectories(directory);
+        Files.writeString(directory.resolve("SKILL.md"), content);
     }
 
     private static final class FakePlanner implements DiagnosisPlanner {

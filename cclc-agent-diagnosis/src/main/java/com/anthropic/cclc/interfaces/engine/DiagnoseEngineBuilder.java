@@ -5,11 +5,17 @@ import com.anthropic.cclc.application.diagnosis.DiagnosisReporter;
 import com.anthropic.cclc.application.diagnosis.PlanGuardMode;
 import com.anthropic.cclc.domain.agent.AgentBudget;
 import com.anthropic.cclc.domain.port.LlmClient;
+import com.anthropic.cclc.domain.skill.SkillCatalog;
 import com.anthropic.cclc.domain.tool.ToolRegistry;
 import com.anthropic.cclc.infrastructure.diagnosis.DiagnoseToolFactory;
 import com.anthropic.cclc.infrastructure.diagnosis.DiagnosisToolBackends;
 import com.anthropic.cclc.infrastructure.diagnosis.DiagnosisToolPolicy;
 import com.anthropic.cclc.infrastructure.diagnosis.PromptPackLoader;
+import com.anthropic.cclc.infrastructure.skill.DirectorySkillSource;
+import com.anthropic.cclc.infrastructure.skill.SkillFrontmatterParser;
+import com.anthropic.cclc.infrastructure.tools.SkillTool;
+import com.anthropic.cclc.infrastructure.tools.TruncatingTool;
+import com.anthropic.cclc.infrastructure.tools.governance.GovernedTool;
 import com.anthropic.cclc.infrastructure.tools.governance.ToolGovernance;
 import com.anthropic.cclc.infrastructure.tools.support.ToolResultTruncator;
 
@@ -35,6 +41,7 @@ public final class DiagnoseEngineBuilder {
     private PlanGuardMode guardMode = PlanGuardMode.OBSERVE;
     private DiagnosisToolPolicy toolPolicy = DiagnosisToolPolicy.allowAll();
     private String promptPack = "";
+    private SkillCatalog skills;
 
     private DiagnoseEngineBuilder() {
     }
@@ -105,15 +112,34 @@ public final class DiagnoseEngineBuilder {
         return this;
     }
 
+    public DiagnoseEngineBuilder skills(Path root) {
+        this.skills = SkillCatalog.of(new DirectorySkillSource(root, new SkillFrontmatterParser()).load());
+        registerSkillTool();
+        return this;
+    }
+
     public DiagnoseEngine build() {
         if (llm == null) {
             throw new IllegalStateException("llm must be configured");
         }
         return new DefaultDiagnoseEngine(llm, tools,
-                new DefaultDiagnoseEngine.EngineOptions(budget, planner, reporter, guardMode, promptPack));
+                new DefaultDiagnoseEngine.EngineOptions(
+                        budget, planner, reporter, guardMode, promptPack, renderSkillCatalog()));
     }
 
     private void assembleBackendTools() {
         this.tools = new DiagnoseToolFactory(governance, truncator, toolPolicy).create(backends);
+        registerSkillTool();
+    }
+
+    private void registerSkillTool() {
+        if (skills == null || skills.isEmpty() || tools.contains("Skill")) {
+            return;
+        }
+        tools.register(new TruncatingTool(new GovernedTool(new SkillTool(skills), governance), truncator));
+    }
+
+    private String renderSkillCatalog() {
+        return skills == null ? "" : skills.renderCatalog();
     }
 }

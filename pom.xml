@@ -73,6 +73,11 @@
                 <version>${jackson.version}</version>
             </dependency>
             <dependency>
+                <groupId>com.fasterxml.jackson.dataformat</groupId>
+                <artifactId>jackson-dataformat-yaml</artifactId>
+                <version>${jackson.version}</version>
+            </dependency>
+            <dependency>
                 <groupId>org.zeroturnaround</groupId>
                 <artifactId>zt-exec</artifactId>
                 <version>${zt-exec.version}</version>

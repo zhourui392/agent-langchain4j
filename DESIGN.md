@@ -36,7 +36,7 @@
 
 - **多模态输入**（图片/截图粘贴）— P2 评估
 - Ink/React 终端 UI（用纯 JLine 替代）
-- IDE Bridge、Remote Session、Plugin、Skill 子系统
+- IDE Bridge、Remote Session、Plugin
 - OAuth/Keychain（用 `ANTHROPIC_API_KEY` 环境变量）
 
 ---
@@ -562,6 +562,17 @@ claude-code-langchain4j/
 | 正式集成 | **进程内 Java API** 是唯一正式形态 | `DiagnoseEngineBuilder` 是宿主组装根；不做 CLI 子进程、Server、RPC 或插件扫描 |
 | CLI 定位 | `cclc-cli` 只作为 kernel 调试壳 | CLI 可单独运行 REPL，但不随诊断专用层发布 |
 | 对外稳定面 | 仅 `DiagnoseEngine`、`RunRequest`、stream-json 事件契约纳入兼容承诺 | 其余类按 internal 处理，优先保持边界清晰 |
+
+### 16.4 引入 Skill 子系统（2026-06-13）
+
+推翻 §1.3 中「Skill 子系统 out of scope」与 capability-design §5.1 中「MVP 不引入可执行 Skill 机制」两项决策。动机：PromptPack 全量注入随场景数线性膨胀，模型无按需取用能力。完整方案见 [`docs/skill-mechanism-design.md`](docs/skill-mechanism-design.md)。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| Skill 形态 | 目录 + `SKILL.md`（YAML frontmatter），对齐 claude-code Agent Skills | 渐进暴露三级：目录注入 name+description，调用时返回正文，附属文件按需 Read |
+| 归属模块 | kernel 通用件（`domain.skill` + `infrastructure.skill`），诊断层和 CLI 仅装配 | 第二个专用 Agent 可直接复用；kernel 不出现 diagnosis 语义 |
+| 能力边界 | **知识型 Skill**，不含可执行脚本 | 与只读诊断引擎姿态一致；Bash 不因 Skill 自动开放 |
+| PromptPack 去留 | 保留，二者分工：常驻必读走 PromptPack，按需取用走 Skill | 存量 SOP 渐进迁移，不做一次性切换 |
 
 ---
 

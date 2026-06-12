@@ -89,7 +89,7 @@ public final class DiagnosisOrchestrator {
         this.planner = config.planner();
         this.reporter = config.reporter();
         this.guardMode = config.guardMode();
-        this.systemPrompt = composeSystemPrompt(config.promptPack());
+        this.systemPrompt = composeSystemPrompt(config.promptPack(), config.skillsCatalog());
     }
 
     public void run(RunRequest request, Conversation conversation,
@@ -114,10 +114,26 @@ public final class DiagnosisOrchestrator {
     }
 
     private static String composeSystemPrompt(String promptPack) {
-        if (promptPack == null || promptPack.isBlank()) {
-            return DIAGNOSIS_SYSTEM_PROMPT;
+        return composeSystemPrompt(promptPack, "");
+    }
+
+    private static String composeSystemPrompt(String promptPack, String skillsCatalog) {
+        StringBuilder sb = new StringBuilder(DIAGNOSIS_SYSTEM_PROMPT);
+        appendPromptPack(sb, promptPack);
+        appendSkillsCatalog(sb, skillsCatalog);
+        return sb.toString();
+    }
+
+    private static void appendPromptPack(StringBuilder sb, String promptPack) {
+        if (promptPack != null && !promptPack.isBlank()) {
+            sb.append("\n\n## Diagnosis PromptPack\n").append(promptPack);
         }
-        return DIAGNOSIS_SYSTEM_PROMPT + "\n\n## Diagnosis PromptPack\n" + promptPack;
+    }
+
+    private static void appendSkillsCatalog(StringBuilder sb, String skillsCatalog) {
+        if (skillsCatalog != null && !skillsCatalog.isBlank()) {
+            sb.append("\n\n## skills\n").append(skillsCatalog);
+        }
     }
 
     private DiagnosisStateListener listener(RunRequest request, Consumer<String> onChunk) {
@@ -183,13 +199,20 @@ public final class DiagnosisOrchestrator {
     }
 
     public record Options(AgentBudget budget, DiagnosisStateCodec stateCodec, DiagnosisPlanner planner,
-                          DiagnosisReporter reporter, PlanGuardMode guardMode, String promptPack) {
+                          DiagnosisReporter reporter, PlanGuardMode guardMode,
+                          String promptPack, String skillsCatalog) {
+
+        public Options(AgentBudget budget, DiagnosisStateCodec stateCodec, DiagnosisPlanner planner,
+                       DiagnosisReporter reporter, PlanGuardMode guardMode, String promptPack) {
+            this(budget, stateCodec, planner, reporter, guardMode, promptPack, "");
+        }
 
         public Options {
             budget = Objects.requireNonNull(budget, "budget");
             stateCodec = Objects.requireNonNull(stateCodec, "stateCodec");
             guardMode = Objects.requireNonNull(guardMode, "guardMode");
             promptPack = promptPack == null ? "" : promptPack;
+            skillsCatalog = skillsCatalog == null ? "" : skillsCatalog;
         }
     }
 

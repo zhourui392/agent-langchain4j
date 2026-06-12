@@ -15,10 +15,13 @@ import com.anthropic.cclc.infrastructure.memory.FileChatMemoryStore;
 import com.anthropic.cclc.infrastructure.tools.support.FileStateCache;
 import com.anthropic.cclc.testsupport.io.ScriptedTerminalIo;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.PrintStream;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
@@ -53,6 +56,30 @@ class CclcApplicationTest {
         List<ContextProvider> providers = (List<ContextProvider>) invoke("contextProviders", new Class<?>[]{});
         assertThat(providers).extracting(ContextProvider::key)
                 .containsExactly("claude_md", "cwd", "date", "git_status");
+    }
+
+    @Test
+    void skillDirectoryEnvironmentAddsSkillToolAndContextProvider(@TempDir Path tempDir) throws Exception {
+        Path skillsRoot = tempDir.resolve("skills");
+        writeSkill(skillsRoot.resolve("es-slow-query"), """
+                ---
+                description: Diagnose slow ES queries.
+                ---
+                # ES
+                """);
+        try {
+            System.setProperty("CCLC_SKILLS_DIR", skillsRoot.toString());
+
+            ToolRegistry registry = (ToolRegistry) invoke("registerTools",
+                    new Class<?>[]{FileStateCache.class}, new FileStateCache());
+            @SuppressWarnings("unchecked")
+            List<ContextProvider> providers = (List<ContextProvider>) invoke("contextProviders", new Class<?>[]{});
+
+            assertThat(registry.names()).contains("Skill");
+            assertThat(providers).extracting(ContextProvider::key).contains("skills");
+        } finally {
+            System.clearProperty("CCLC_SKILLS_DIR");
+        }
     }
 
     @Test
@@ -130,6 +157,11 @@ class CclcApplicationTest {
         } finally {
             System.setOut(oldOut);
         }
+    }
+
+    private static void writeSkill(Path directory, String content) throws IOException {
+        Files.createDirectories(directory);
+        Files.writeString(directory.resolve("SKILL.md"), content);
     }
 
     private static final class ResumeCommand implements SlashCommand {

@@ -20,13 +20,14 @@ Java 21 + LangChain4j 1.8 复刻 [claude-code](https://github.com/anthropics/cla
 | 权限 | 4 模式策略（DEFAULT / PLAN / BYPASS / AUTO）+ 交互式 prompt + 会话级 ALLOW_ALWAYS 缓存。**默认 BYPASS（全部自动放行）**，通过 `CCLC_PERMISSION_MODE` 切回 ASK |
 | 上下文 | CLAUDE.md（含父级合并）/ cwd / git status / 日期 |
 | Prompt cache | 系统指令、CLAUDE.md、工具描述构成稳定前缀；动态段后插入 ephemeral 断点 |
+| Skill 机制 | `skills-root/<name>/SKILL.md` 按需展开；目录注入稳定前缀，正文通过只读 `Skill` 工具返回 |
 | 流式输出 | 逐 token 渲染，SIGINT 二段式（取消 turn → 退出进程）|
 | 持久化 | JSONL 写入 `~/.claude-code-j/sessions/<id>.jsonl`；`/resume <id>` 加载历史不重跑工具 |
 | 工具 schema 上线 | `ToolSpec → LC4J JsonObjectSchema → Anthropic input_schema` 全链路打通 |
 
 ## 不在范围内
 
-Spring / Guice / Lombok、多 LLM provider 抽象、Ink 风格 TUI、多模态输入、IDE / skill 子系统。MCP 已规划（P1）但未实现。
+Spring / Guice / Lombok、多 LLM provider 抽象、Ink 风格 TUI、多模态输入、IDE / Plugin 子系统、可执行脚本型 Skill。MCP 已规划（P1）但未实现。
 
 ## 环境
 
