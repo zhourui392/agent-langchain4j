@@ -10,6 +10,8 @@
 
 ## 1. 项目目标与边界
 
+> **定位已转变（2026-06-08）**：交付物从 CLI 转为 agent-web 的**进程内只读诊断引擎**，详见 [§16.1](#161-定位转变进程内诊断引擎2026-06-08)。下文原 CLI 目标作为底座能力保留（多数已被引擎复用），但 CLI 不再是主交付。
+
 ### 1.1 必须实现（MVP P0）
 
 | 能力 | 来源文件 |
@@ -400,86 +402,26 @@ claude-code-langchain4j/
 ├── pom.xml
 ├── DESIGN.md                            ← 本文件
 ├── README.md
-├── src/
-│   ├── main/java/com/anthropic/cclc/
-│   │   ├── CclcApplication.java         ← main()
-│   │   │
-│   │   ├── interfaces/cli/              ← Interface 层
-│   │   │   ├── ReplLoop.java
-│   │   │   ├── SlashCommandParser.java
-│   │   │   ├── OutputRenderer.java
-│   │   │   └── InteractivePrompter.java
-│   │   │
-│   │   ├── application/                 ← Application 层
-│   │   │   ├── AgentExecutor.java
-│   │   │   ├── ConversationOrchestrator.java
-│   │   │   ├── PermissionService.java
-│   │   │   ├── ContextCompactionService.java
-│   │   │   └── SystemPromptComposer.java
-│   │   │
-│   │   ├── domain/                      ← Domain 层
-│   │   │   ├── conversation/
-│   │   │   │   ├── Conversation.java
-│   │   │   │   ├── SessionId.java
-│   │   │   │   ├── CompactionBoundary.java
-│   │   │   │   └── TokenBudget.java
-│   │   │   ├── message/
-│   │   │   │   ├── ChatMessage.java
-│   │   │   │   ├── UserMessage.java
-│   │   │   │   ├── AiMessage.java
-│   │   │   │   ├── SystemMessage.java
-│   │   │   │   └── ToolResultMessage.java
-│   │   │   ├── tool/
-│   │   │   │   ├── Tool.java
-│   │   │   │   ├── ToolArguments.java
-│   │   │   │   ├── ToolResult.java
-│   │   │   │   ├── ToolInvocation.java
-│   │   │   │   ├── ToolRegistry.java
-│   │   │   │   └── ExecutionContext.java
-│   │   │   ├── permission/
-│   │   │   │   ├── PermissionPolicy.java
-│   │   │   │   ├── PermissionMode.java
-│   │   │   │   └── Decision.java
-│   │   │   ├── context/
-│   │   │   │   └── ContextProvider.java
-│   │   │   └── port/                    ← 出站端口
-│   │   │       ├── LlmClient.java
-│   │   │       └── ChatMemoryStore.java
-│   │   │
-│   │   └── infrastructure/              ← Infrastructure 层
-│   │       ├── llm/
-│   │       │   ├── LangChain4jLlmClient.java
-│   │       │   └── MessageMapper.java
-│   │       ├── tools/
-│   │       │   ├── BashTool.java
-│   │       │   ├── FileReadTool.java
-│   │       │   ├── FileWriteTool.java
-│   │       │   ├── FileEditTool.java
-│   │       │   ├── GlobTool.java
-│   │       │   ├── GrepTool.java
-│   │       │   └── support/
-│   │       │       ├── ProcessRunner.java
-│   │       │       └── FileStateCache.java
-│   │       ├── memory/
-│   │       │   └── FileChatMemoryStore.java
-│   │       ├── context/
-│   │       │   ├── ClaudeMdProvider.java
-│   │       │   ├── GitStatusProvider.java
-│   │       │   ├── CwdProvider.java
-│   │       │   └── DateProvider.java
-│   │       ├── permission/
-│   │       │   └── DefaultPermissionPolicy.java
-│   │       └── mcp/
-│   │           └── McpToolAdapter.java
-│   │
-│   └── test/java/com/anthropic/cclc/
-│       ├── application/                 ← 单元测试（Stub LlmClient）
-│       ├── domain/                      ← 纯单元测试
-│       └── infrastructure/              ← 集成测试（真实进程/文件）
+├── cclc-kernel/                         ← 通用 Agent 底座，无 CLI / 诊断语义
+│   └── src/main/java/com/anthropic/cclc/
+│       ├── application/                 ← AgentExecutor、预算、权限、上下文压缩
+│       ├── domain/                      ← Conversation、Message、Tool、Permission、Port
+│       └── infrastructure/              ← LLM、stream-json、通用 tools、治理包装链
+│
+├── cclc-agent-diagnosis/                ← 诊断专用层，宿主依赖的 artifact
+│   └── src/main/java/com/anthropic/cclc/
+│       ├── interfaces/engine/           ← DiagnoseEngine、RunRequest、Builder
+│       ├── domain/diagnosis/            ← DiagnosisCase、Plan、Evidence、Report
+│       ├── application/diagnosis/       ← PlanGuardPolicy 等诊断编排策略
+│       └── infrastructure/diagnosis/    ← Planner、Reporter、StateCodec、ToolFactory
+│
+├── cclc-cli/                            ← 调试壳，不进入宿主 classpath
+│   └── src/main/java/com/anthropic/cclc/
+│       └── interfaces/cli/              ← CclcApplication、JLine REPL、渲染
 │
 └── docs/
-    ├── decisions/                       ← ADR 目录
-    └── tool-prompts/                    ← 各工具的 system prompt 片段
+    ├── agent-platform-layering-design.md
+    └── diagnosis-agent-capability-design.md
 ```
 
 ---
@@ -566,14 +508,17 @@ claude-code-langchain4j/
 | `src/Tool.ts` | `domain/tool/Tool.java` |
 | `src/tools.ts`（注册表） | `ToolRegistry` |
 | `src/context.ts` | `SystemPromptComposer` + `ContextProvider` 实现 |
-| `src/services/compact/autoCompact.ts` | `ContextCompactionService` |
+| `src/services/compact/autoCompact.ts` | `cclc-kernel/application/context/ContextCompactionService` |
 | `src/hooks/toolPermission/` | `PermissionService` + `PermissionPolicy` |
 | `src/services/tools/toolOrchestration.ts` | `AgentExecutor.dispatchToolCalls` |
 | `src/services/api/claude.ts` | `LangChain4jLlmClient` |
 | `src/memdir/` | `FileChatMemoryStore` |
-| `src/tools/AgentTool/` | `SubAgentTool` |
+| `src/tools/AgentTool/` | `cclc-kernel/infrastructure/tools/SubAgentTool` |
 | `src/tools/BashTool/` | `BashTool` + `ProcessRunner` |
 | `src/tools/FileEditTool/` | `FileEditTool` + `FileStateCache` |
+| Claude stream-json 输出 | `cclc-kernel/infrastructure/streamjson/ClaudeStreamJsonListener` / `ClaudeStreamJsonWriter` |
+| 诊断进程内门面 | `cclc-agent-diagnosis/interfaces/engine/DiagnoseEngine` / `RunRequest` |
+| CLI 调试入口 | `cclc-cli/interfaces/cli/CclcApplication` |
 
 ---
 
@@ -586,10 +531,42 @@ claude-code-langchain4j/
 | JSON 单次模式 | **纳入 P1**（S13） | `--json` flag + 非交互入口，stdout 只输出最终 JSON 结果 |
 | Prompt cache | **S3 起启用** | `SystemPromptComposer` 在系统提示末尾标记 cache breakpoint；工具定义稳定后再标一次 |
 
+### 16.1 定位转变：进程内诊断引擎（2026-06-08）
+
+本项目从「claude-code CLI 复刻」转为 **agent-web 的进程内只读诊断引擎**。完整方案见 [`docs/diagnose-engine-plan.md`](docs/diagnose-engine-plan.md)，wire 契约见 [`docs/samples/README.md`](docs/samples/README.md)。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| 交付形态 | **进程内 jar**，非 CLI | 新增 `interfaces/engine`（`DiagnoseEngine` 门面 + `ClaudeStreamJsonListener/Writer`）；`interfaces/cli` 降级为调试入口；不引入 web 框架 |
+| 工具边界 | **纯只读诊断** | `ReadOnlyPermissionPolicy`（只读 ALLOW / 写 DENY，无 ASK）；新增只读工具 Http/Es/Mysql/Redis/Dubbo（各带读限守卫）；`FileWrite`/`FileEdit` 不注册 |
+| 会话状态 | **引擎无状态** | `ConversationRebuilder` 按传入 history 重建；旁路 `FileChatMemoryStore`；`stop`/超时经 `RunningSessions` + `CancellationToken` |
+| 事件契约 | **Claude `stream-json` 直通** | 增量须包 `{"type":"stream_event","event":{…}}`；`AgentExecutor` 不改，仅加 additive `onUsage` 钩子 |
+
+已实现（分支 `feat/diagnose-engine`）：E0–E3 引擎 MVP、E5 只读工具（含 `LogQueryTool`）、E6 截断 + auto-compact、E7 `SubAgentTool`、E8 usage 透出。**未完**：E4（agent-web 接入 `AgentType.NATIVE` + 手测，跨仓库）、E8 `cache_read_input_tokens`（待核 langchain4j API）。
+
+### 16.2 双层产品形态与三模块拆分（2026-06-11）
+
+本项目从单 Maven jar 拆为 **通用 Agent 底座 + 诊断专用 Agent + CLI 调试壳**。完整方案见 [`docs/agent-platform-layering-design.md`](docs/agent-platform-layering-design.md)。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| 物理模块 | parent reactor 下设 `cclc-kernel`、`cclc-agent-diagnosis`、`cclc-cli` | 宿主只依赖诊断 artifact，kernel 传递带入，CLI/JLine 不进入宿主 classpath |
+| kernel 语义 | kernel 不感知专用方向，不出现 diagnosis 语义 | 第二个专用 Agent 可复用主循环、预算、stream-json、结构化输出、治理包装链 |
+| 通用件归位 | `ContextCompactionService`、`SubAgentTool`、`ClaudeStreamJsonListener/Writer` 移入 kernel | `interfaces.engine` 只保留诊断门面与事件契约对象 |
+| 诊断能力归位 | `AgentBudget`、`StructuredOutputTool`、`GovernedTool` 等机制下沉 kernel，诊断层只注册 schema、规则和后端 | 避免诊断设计复制通用能力 |
+
+### 16.3 CLI 降级与正式集成形态（2026-06-11）
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| 正式集成 | **进程内 Java API** 是唯一正式形态 | `DiagnoseEngineBuilder` 是宿主组装根；不做 CLI 子进程、Server、RPC 或插件扫描 |
+| CLI 定位 | `cclc-cli` 只作为 kernel 调试壳 | CLI 可单独运行 REPL，但不随诊断专用层发布 |
+| 对外稳定面 | 仅 `DiagnoseEngine`、`RunRequest`、stream-json 事件契约纳入兼容承诺 | 其余类按 internal 处理，优先保持边界清晰 |
+
 ---
 
 ## 17. 下一步
 
-1. 完成 S0 脚手架（pom、目录、CI 占位）。
-2. 写 S1 的三个起手测试（Red），确认 Domain 接口形状。
-3. 进入 Green-Refactor 循环，按路线图推进。
+1. agent-web 切换依赖 `cclc-agent-diagnosis`，通过 `DiagnoseEngineBuilder` 组装。
+2. 在宿主侧验证 `AgentType.NATIVE`、stop、历史回放、状态快照往返。
+3. 根据真实调用链补齐生产 allowlist、审计 sink 与日志 API 配置。

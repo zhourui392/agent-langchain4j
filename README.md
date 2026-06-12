@@ -7,6 +7,7 @@ Java 21 + LangChain4j 1.8 复刻 [claude-code](https://github.com/anthropics/cla
 参考实现是 TypeScript 版的 claude-code；本项目用 DDD 四层 + 端口/适配器把 Anthropic 串成 Java 形态，ArchUnit 守住依赖方向。
 
 - 设计：[DESIGN.md](DESIGN.md)
+- 分层设计：[docs/agent-platform-layering-design.md](docs/agent-platform-layering-design.md)
 - 任务（39 项 / S0–S8 + MVP-Gate）：[TASKLIST.md](TASKLIST.md)
 - 协作约定：[CLAUDE.md](CLAUDE.md)
 
@@ -64,16 +65,17 @@ Spring / Guice / Lombok、多 LLM provider 抽象、Ink 风格 TUI、多模态�
 ## 常用命令
 
 ```powershell
-mvn clean verify                                          # 编译 + 单测 + Failsafe IT + JaCoCo
-mvn test                                                  # 仅单测
-mvn -Dtest=AgentExecutorTest test                         # 单类
-mvn -Dtest=ConversationTest#appendsMessagesInOrder test   # 单方法
-mvn -Psmoke "-Dsurefire.skip=true" verify                 # 跑 *SmokeIT.java（需 API key）
-mvn exec:java                                             # 启动 REPL
-mvn exec:java -Dexec.args="--version"
+mvn clean verify                                                               # 编译 + 单测 + Failsafe IT + JaCoCo
+mvn test                                                                       # 全模块单测
+mvn -pl cclc-kernel -Dtest=AgentExecutorTest test                              # 单模块单类
+mvn -pl cclc-kernel -Dtest=ConversationTest#appendsMessagesInOrder test        # 单方法
+mvn -Psmoke "-Dsurefire.skip=true" verify                                      # 跑 *SmokeIT.java（需 API key）
+mvn -q -pl cclc-cli -am test-compile exec:java                                 # 启动 REPL
+mvn -q -pl cclc-cli -am test-compile exec:java "-Dexec.args=--version"
+.\run.bat "-Dexec.args=--version"                                              # Windows 快捷启动
 ```
 
-JaCoCo 报告：`target/site/jacoco/index.html`。
+JaCoCo 报告：`cclc-*/target/site/jacoco/index.html`。
 
 ## REPL 用法
 
@@ -86,23 +88,25 @@ JaCoCo 报告：`target/site/jacoco/index.html`。
 
 ## 测试覆盖
 
-- 206 unit + ArchUnit，全绿（1 skip：ripgrep 缺失时 fallback 不跑）
+- 348 unit + ArchUnit，全绿（0 skip）
 - 3 个 SmokeIT 真实 API 验证：纯对话 / 显式工具 / 隐式工具选择
 
 ## 目录速查
 
 ```
-src/main/java/com/anthropic/cclc/
-  interfaces/cli      JLine REPL、斜杠命令、SIGINT、输出渲染
+cclc-kernel/
   application         AgentExecutor、PermissionService、SystemPromptComposer、SessionResumer
   domain              Conversation、ChatMessage、Tool、PermissionPolicy、端口
-  infrastructure
-    llm               LangChain4j 接入、消息映射、工具规格映射、缓存策略
-    tools             Bash/Read/Write/Edit/Glob/Grep 实现
-    memory            JSONL 会话存储
-    context           CLAUDE.md / cwd / git / date provider
-    permission        默认策略
-    config            env + 文件加载
+  infrastructure      LLM、stream-json、memory、context、permission、通用 tools
+
+cclc-agent-diagnosis/
+  domain/diagnosis    DiagnosisCase、DiagnosisPlan、Evidence、EvidenceLedger
+  application/diagnosis
+  infrastructure      诊断工具、治理包装、planner/reporter/state codec
+  interfaces/engine   DiagnoseEngine、RunRequest、DiagnoseEngineBuilder
+
+cclc-cli/
+  interfaces/cli      JLine REPL、斜杠命令、SIGINT、输出渲染
 ```
 
-DDD 依赖方向：`interfaces → application → domain ← infrastructure`，`LayeredArchitectureTest` 守护。
+依赖边界：`cclc-agent-diagnosis → cclc-kernel`，`cclc-cli → cclc-kernel`；kernel 不感知诊断或 CLI，CLI 不进入宿主 classpath。
