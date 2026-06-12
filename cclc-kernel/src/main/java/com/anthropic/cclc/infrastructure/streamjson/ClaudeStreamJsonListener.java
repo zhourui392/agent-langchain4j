@@ -5,6 +5,8 @@ import com.anthropic.cclc.domain.message.AiMessage;
 import com.anthropic.cclc.domain.tool.ToolResult;
 import com.anthropic.cclc.domain.tool.ToolUseRequest;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -32,6 +34,7 @@ public final class ClaudeStreamJsonListener implements AgentEventListener, Exten
     private int inputTokens;
     private int outputTokens;
     private int cacheReadInputTokens;
+    private final ContentBlockBuffer contentBlocks = new ContentBlockBuffer();
 
     public ClaudeStreamJsonListener(String sessionId, String cwd, Consumer<String> onChunk) {
         this.sessionId = Objects.requireNonNull(sessionId, "sessionId");
@@ -47,12 +50,14 @@ public final class ClaudeStreamJsonListener implements AgentEventListener, Exten
     @Override
     public void onAssistantTextDelta(String delta) {
         ensureInit();
+        contentBlocks.appendText(delta);
         onChunk.accept(writer.textDelta(delta));
     }
 
     @Override
     public void onToolUseStart(ToolUseRequest request) {
         ensureInit();
+        contentBlocks.appendToolUse(request);
         onChunk.accept(writer.toolUseStart(request.id().value(), request.toolName()));
         onChunk.accept(writer.inputJsonDelta(request.argumentsJson()));
         onChunk.accept(writer.contentBlockStop());
@@ -61,6 +66,7 @@ public final class ClaudeStreamJsonListener implements AgentEventListener, Exten
     @Override
     public void onToolUseEnd(ToolUseRequest request, ToolResult result, long durationMs) {
         ensureInit();
+        flushAssistantMessage();
         onChunk.accept(writer.toolResult(request.id().value(), result.content()));
     }
 
@@ -75,6 +81,7 @@ public final class ClaudeStreamJsonListener implements AgentEventListener, Exten
     @Override
     public void onTurnComplete(AiMessage finalMessage) {
         ensureInit();
+        flushAssistantMessage(finalMessage.text());
         onChunk.accept(resultLine(finalMessage.text()));
     }
 
@@ -102,6 +109,50 @@ public final class ClaudeStreamJsonListener implements AgentEventListener, Exten
         if (!initEmitted) {
             initEmitted = true;
             onChunk.accept(writer.systemInit(sessionId, cwd));
+        }
+    }
+
+    private void flushAssistantMessage() {
+        flushAssistantMessage(contentBlocks.text());
+    }
+
+    private void flushAssistantMessage(String text) {
+        if (!contentBlocks.hasContent()) {
+            return;
+        }
+        onChunk.accept(writer.assistantMessage(text, contentBlocks.toolUses()));
+        contentBlocks.clear();
+    }
+
+    private static final class ContentBlockBuffer {
+
+        private final StringBuilder text = new StringBuilder();
+        private final List<ClaudeStreamJsonWriter.AssistantToolUse> toolUses = new ArrayList<>();
+
+        private void appendText(String delta) {
+            text.append(delta);
+        }
+
+        private void appendToolUse(ToolUseRequest request) {
+            toolUses.add(new ClaudeStreamJsonWriter.AssistantToolUse(
+                    request.id().value(), request.toolName(), request.argumentsJson()));
+        }
+
+        private String text() {
+            return text.toString();
+        }
+
+        private List<ClaudeStreamJsonWriter.AssistantToolUse> toolUses() {
+            return List.copyOf(toolUses);
+        }
+
+        private boolean hasContent() {
+            return !text.isEmpty() || !toolUses.isEmpty();
+        }
+
+        private void clear() {
+            text.setLength(0);
+            toolUses.clear();
         }
     }
 }

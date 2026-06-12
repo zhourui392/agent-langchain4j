@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -63,6 +64,24 @@ class ClaudeStreamJsonWriterTest {
         assertThat(block.get("type").asText()).isEqualTo("tool_result");
         assertThat(block.get("tool_use_id").asText()).isEqualTo("tu-1");
         assertThat(block.get("content").asText()).isEqualTo("found 3 errors");
+    }
+
+    @Test
+    void writesConsolidatedAssistantMessage() throws Exception {
+        JsonNode n = parse(writer.assistantMessage("looking",
+                List.of(new ClaudeStreamJsonWriter.AssistantToolUse(
+                        "tu-1", "LogQuery", "{\"q\":\"err\"}"))));
+
+        assertThat(n.get("type").asText()).isEqualTo("assistant");
+        JsonNode text = n.get("message").get("content").get(0);
+        assertThat(text.get("type").asText()).isEqualTo("text");
+        assertThat(text.get("text").asText()).isEqualTo("looking");
+
+        JsonNode toolUse = n.get("message").get("content").get(1);
+        assertThat(toolUse.get("type").asText()).isEqualTo("tool_use");
+        assertThat(toolUse.get("id").asText()).isEqualTo("tu-1");
+        assertThat(toolUse.get("name").asText()).isEqualTo("LogQuery");
+        assertThat(toolUse.get("input").get("q").asText()).isEqualTo("err");
     }
 
     @Test

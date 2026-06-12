@@ -29,6 +29,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -112,6 +113,179 @@ class DefaultDiagnoseEngineTest {
     }
 
     @Test
+    void completesWithSummaryCarryingSnapshotAndUsage() {
+        LlmClient llm = (request, handler) -> {
+            handler.onUsage(11, 7, 3);
+            handler.onPartialText("done");
+            handler.onComplete(AiMessage.text("done"));
+        };
+        DiagnoseEngine engine = new DefaultDiagnoseEngine(llm, new ToolRegistry());
+        AtomicReference<RunSummary> summary = new AtomicReference<>();
+
+        engine.run(request(List.of()), lines::add, summary::set);
+
+        assertThat(summary.get().reason()).isEqualTo(ExitReason.SUCCESS);
+        assertThat(summary.get().usage()).isEqualTo(new RunSummary.Usage(11, 7, 3));
+        assertThat(summary.get().stateSnapshot()).contains("\"schemaVersion\":1");
+        assertThat(summary.get().errorDetail()).isEmpty();
+    }
+
+    @Test
+    void legacyOnExitStillReceivesExitCode() {
+        StubLlmClient llm = new StubLlmClient().enqueue(AiMessage.text("hello"));
+        DiagnoseEngine engine = new DefaultDiagnoseEngine(llm, new ToolRegistry());
+
+        engine.runStream(request(List.of()), lines::add, exitCode::set);
+
+        assertThat(exitCode).hasValue(0);
+    }
+
+    @Test
+    void distinguishesTimeoutFromStop() throws Exception {
+        ControllableLlmClient timeoutLlm = new ControllableLlmClient();
+        DiagnoseEngine timeoutEngine = new DefaultDiagnoseEngine(timeoutLlm, new ToolRegistry());
+        AtomicReference<RunSummary> timeoutSummary = new AtomicReference<>();
+
+        CompletableFuture<Void> timeoutRun = CompletableFuture.runAsync(
+                () -> timeoutEngine.run(request(List.of(), "", "timeout-s", 1), lines::add, timeoutSummary::set),
+                runner);
+        assertThat(timeoutLlm.entered.await(2, TimeUnit.SECONDS)).isTrue();
+        timeoutRun.get(4, TimeUnit.SECONDS);
+
+        ControllableLlmClient stopLlm = new ControllableLlmClient();
+        DiagnoseEngine stopEngine = new DefaultDiagnoseEngine(stopLlm, new ToolRegistry());
+        AtomicReference<RunSummary> stopSummary = new AtomicReference<>();
+        CompletableFuture<Void> stopRun = CompletableFuture.runAsync(
+                () -> stopEngine.run(request(List.of(), "", "stop-s", 0), lines::add, stopSummary::set),
+                runner);
+        assertThat(stopLlm.entered.await(2, TimeUnit.SECONDS)).isTrue();
+        stopEngine.stop("stop-s");
+        stopRun.get(3, TimeUnit.SECONDS);
+
+        assertThat(timeoutSummary.get().reason()).isEqualTo(ExitReason.TIMEOUT);
+        assertThat(stopSummary.get().reason()).isEqualTo(ExitReason.STOPPED);
+        assertThat(timeoutSummary.get().legacyExitCode()).isEqualTo(-1);
+        assertThat(stopSummary.get().legacyExitCode()).isEqualTo(-1);
+    }
+
+    @Test
+    void errorSummaryCarriesDetail() {
+        LlmClient llm = (request, handler) -> {
+            throw new IllegalStateException("llm exploded");
+        };
+        DiagnoseEngine engine = new DefaultDiagnoseEngine(llm, new ToolRegistry());
+        AtomicReference<RunSummary> summary = new AtomicReference<>();
+
+        engine.run(request(List.of()), lines::add, summary::set);
+
+        assertThat(summary.get().reason()).isEqualTo(ExitReason.ERROR);
+        assertThat(summary.get().legacyExitCode()).isEqualTo(1);
+        assertThat(summary.get().errorDetail()).contains("llm exploded");
+    }
+
+    @Test
+    void rejectsDuplicateSessionIdWhileRunning() throws Exception {
+        ControllableLlmClient llm = new ControllableLlmClient();
+        DiagnoseEngine engine = new DefaultDiagnoseEngine(llm, new ToolRegistry());
+        AtomicReference<RunSummary> firstSummary = new AtomicReference<>();
+        AtomicReference<RunSummary> secondSummary = new AtomicReference<>();
+
+        CompletableFuture<Void> firstRun = CompletableFuture.runAsync(
+                () -> engine.run(request(List.of()), lines::add, firstSummary::set), runner);
+
+        assertThat(llm.entered.await(2, TimeUnit.SECONDS)).isTrue();
+        engine.run(request(List.of()), lines::add, secondSummary::set);
+        engine.stop("s-1");
+        firstRun.get(3, TimeUnit.SECONDS);
+
+        assertThat(secondSummary.get().reason()).isEqualTo(ExitReason.REJECTED);
+        assertThat(llm.calls).hasValue(1);
+    }
+
+    @Test
+    void rejectsBeyondMaxConcurrentRuns() throws Exception {
+        ControllableLlmClient llm = new ControllableLlmClient();
+        DiagnoseEngine engine = new DefaultDiagnoseEngine(
+                llm,
+                new ToolRegistry(),
+                new DefaultDiagnoseEngine.EngineOptions(
+                        com.anthropic.cclc.domain.agent.AgentBudget.unlimited(),
+                        null,
+                        null,
+                        com.anthropic.cclc.application.diagnosis.PlanGuardMode.OBSERVE,
+                        "",
+                        1,
+                        10));
+        AtomicReference<RunSummary> secondSummary = new AtomicReference<>();
+
+        CompletableFuture<Void> firstRun = CompletableFuture.runAsync(
+                () -> engine.run(request(List.of(), "", "s-1", 0), lines::add, ignored -> {
+                }), runner);
+
+        assertThat(llm.entered.await(2, TimeUnit.SECONDS)).isTrue();
+        engine.run(request(List.of(), "", "s-2", 0), lines::add, secondSummary::set);
+        engine.stop("s-1");
+        firstRun.get(3, TimeUnit.SECONDS);
+
+        assertThat(secondSummary.get().reason()).isEqualTo(ExitReason.REJECTED);
+        assertThat(llm.calls).hasValue(1);
+    }
+
+    @Test
+    void allowsSameSessionIdAfterCompletion() {
+        StubLlmClient llm = new StubLlmClient()
+                .enqueue(AiMessage.text("one"))
+                .enqueue(AiMessage.text("two"));
+        DiagnoseEngine engine = new DefaultDiagnoseEngine(llm, new ToolRegistry());
+        AtomicReference<RunSummary> first = new AtomicReference<>();
+        AtomicReference<RunSummary> second = new AtomicReference<>();
+
+        engine.run(request(List.of()), lines::add, first::set);
+        engine.run(request(List.of()), lines::add, second::set);
+
+        assertThat(first.get().reason()).isEqualTo(ExitReason.SUCCESS);
+        assertThat(second.get().reason()).isEqualTo(ExitReason.SUCCESS);
+        assertThat(llm.capturedRequests()).hasSize(2);
+    }
+
+    @Test
+    void closeCancelsInFlightRunsAndDrains() throws Exception {
+        ControllableLlmClient llm = new ControllableLlmClient();
+        DiagnoseEngine engine = new DefaultDiagnoseEngine(llm, new ToolRegistry());
+        AtomicReference<RunSummary> summary = new AtomicReference<>();
+
+        CompletableFuture<Void> run = CompletableFuture.runAsync(
+                () -> engine.run(request(List.of()), lines::add, summary::set), runner);
+
+        assertThat(llm.entered.await(2, TimeUnit.SECONDS)).isTrue();
+        engine.close();
+        run.get(3, TimeUnit.SECONDS);
+
+        assertThat(summary.get().reason()).isEqualTo(ExitReason.STOPPED);
+    }
+
+    @Test
+    void closeRejectsNewRuns() {
+        DiagnoseEngine engine = new DefaultDiagnoseEngine(new StubLlmClient(), new ToolRegistry());
+        AtomicReference<RunSummary> summary = new AtomicReference<>();
+
+        engine.close();
+        engine.run(request(List.of()), lines::add, summary::set);
+
+        assertThat(summary.get().reason()).isEqualTo(ExitReason.REJECTED);
+    }
+
+    @Test
+    void closeIsIdempotent() {
+        DiagnoseEngine engine = new DefaultDiagnoseEngine(new StubLlmClient(), new ToolRegistry());
+
+        engine.close();
+        engine.close();
+
+        assertThat(engine.isRunning("s-1")).isFalse();
+    }
+
+    @Test
     void stopCancelsRunningSession() throws Exception {
         ControllableLlmClient llm = new ControllableLlmClient();
         DiagnoseEngine engine = new DefaultDiagnoseEngine(llm, new ToolRegistry());
@@ -152,11 +326,16 @@ class DefaultDiagnoseEngineTest {
     }
 
     private RunRequest request(List<TurnMessage> history, String stateSnapshot) {
+        return request(history, stateSnapshot, "s-1", 0);
+    }
+
+    private RunRequest request(List<TurnMessage> history, String stateSnapshot,
+                               String sessionId, long timeoutSeconds) {
         return RunRequest.builder()
                 .workingDir(System.getProperty("user.dir"))
                 .userMessage("hi")
-                .sessionId("s-1")
-                .timeoutSeconds(0)
+                .sessionId(sessionId)
+                .timeoutSeconds(timeoutSeconds)
                 .history(history)
                 .stateSnapshot(stateSnapshot)
                 .build();

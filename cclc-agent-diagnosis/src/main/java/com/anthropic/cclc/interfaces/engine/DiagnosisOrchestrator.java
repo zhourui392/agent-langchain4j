@@ -92,8 +92,8 @@ public final class DiagnosisOrchestrator {
         this.systemPrompt = composeSystemPrompt(config.promptPack());
     }
 
-    public void run(RunRequest request, Conversation conversation,
-                    CancellationToken cancel, Consumer<String> onChunk) {
+    public OrchestrationResult run(RunRequest request, Conversation conversation,
+                                   CancellationToken cancel, Consumer<String> onChunk) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(conversation, "conversation");
         Objects.requireNonNull(cancel, "cancel");
@@ -102,7 +102,7 @@ public final class DiagnosisOrchestrator {
         DiagnosisStateListener listener = listener(request, onChunk);
         if (planIfConfigured(listener)) {
             listener.finish(AiMessage.text("Need more information before diagnosis."));
-            return;
+            return listener.result();
         }
 
         AgentExecutor executor = new AgentExecutor(llm, tools, permissions(listener), context(request, cancel), budget);
@@ -111,6 +111,7 @@ public final class DiagnosisOrchestrator {
         } catch (CompletionException ex) {
             handleRunFailure(listener, ex);
         }
+        return listener.result();
     }
 
     private static String composeSystemPrompt(String promptPack) {
@@ -199,6 +200,8 @@ public final class DiagnosisOrchestrator {
         private final DiagnosisCase diagnosisCase;
         private final DiagnosisStateCodec stateCodec;
         private final String sessionId;
+        private RunSummary.Usage usage = RunSummary.Usage.zero();
+        private String stateSnapshot = "";
 
         private DiagnosisStateListener(ClaudeStreamJsonListener delegate, DiagnosisCase diagnosisCase,
                                        DiagnosisStateCodec stateCodec, String sessionId) {
@@ -260,6 +263,7 @@ public final class DiagnosisOrchestrator {
         @Override
         public void onUsage(int inputTokens, int outputTokens, int cacheReadInputTokens) {
             delegate.onUsage(inputTokens, outputTokens, cacheReadInputTokens);
+            usage = usage.plus(inputTokens, outputTokens, cacheReadInputTokens);
         }
 
         @Override
@@ -305,9 +309,14 @@ public final class DiagnosisOrchestrator {
         }
 
         private void emitState() {
+            stateSnapshot = stateCodec.encode(diagnosisCase);
             delegate.emit("diagnosis_state", Map.of(
                     "session_id", sessionId,
-                    "snapshot", stateCodec.encode(diagnosisCase)));
+                    "snapshot", stateSnapshot));
+        }
+
+        private OrchestrationResult result() {
+            return new OrchestrationResult(stateSnapshot, usage);
         }
     }
 }

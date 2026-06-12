@@ -54,6 +54,7 @@ class ClaudeStreamJsonListenerTest {
         ToolUseRequest req = new ToolUseRequest(new ToolUseId("tu-1"), "LogQuery", "{\"q\":\"x\"}");
 
         listener.onToolUseStart(req);
+        listener.onTurnComplete(new AiMessage("looking", List.of(req)));
         listener.onToolUseEnd(req, ToolResult.ok("found 3"), 12L);
 
         JsonNode start = firstWhere(n -> n.path("event").path("type").asText().equals("content_block_start"));
@@ -63,6 +64,27 @@ class ClaudeStreamJsonListenerTest {
         JsonNode user = firstWhere(n -> n.path("type").asText().equals("user"));
         assertThat(user.get("message").get("content").get(0).get("content").asText()).isEqualTo("found 3");
         assertThat(user.get("message").get("content").get(0).get("tool_use_id").asText()).isEqualTo("tu-1");
+    }
+
+    @Test
+    void emitsAssistantLineAfterContentBlocks() {
+        ToolUseRequest req = new ToolUseRequest(new ToolUseId("tu-1"), "LogQuery", "{\"q\":\"x\"}");
+
+        listener.onAssistantTextDelta("look");
+        listener.onAssistantTextDelta("ing");
+        listener.onToolUseStart(req);
+        listener.onTurnComplete(new AiMessage("looking", List.of(req)));
+        listener.onToolUseEnd(req, ToolResult.ok("found 3"), 12L);
+
+        List<String> types = lines.stream().map(this::typeOf).toList();
+        int assistantIndex = types.indexOf("assistant");
+        int userIndex = types.indexOf("user");
+        assertThat(assistantIndex).isGreaterThan(lastStreamEventIndex());
+        assertThat(assistantIndex).isLessThan(userIndex);
+
+        JsonNode assistant = firstWhere(n -> n.path("type").asText().equals("assistant"));
+        assertThat(assistant.path("message").path("content").get(0).path("text").asText()).isEqualTo("looking");
+        assertThat(assistant.path("message").path("content").get(1).path("input").path("q").asText()).isEqualTo("x");
     }
 
     @Test
@@ -109,6 +131,16 @@ class ClaudeStreamJsonListenerTest {
 
     private JsonNode firstWhere(Predicate<JsonNode> pred) {
         return lines.stream().map(this::parse).filter(pred).findFirst().orElseThrow();
+    }
+
+    private int lastStreamEventIndex() {
+        int index = -1;
+        for (int i = 0; i < lines.size(); i++) {
+            if (typeOf(lines.get(i)).equals("stream_event")) {
+                index = i;
+            }
+        }
+        return index;
     }
 
     private JsonNode parse(String line) {

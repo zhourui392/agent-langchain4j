@@ -5,6 +5,7 @@ import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.output.TokenUsage;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -16,6 +17,7 @@ final class FakeStreamingChatModel implements StreamingChatModel {
     private final List<ChatRequest> capturedRequests = new ArrayList<>();
     private String completionText = "";
     private Throwable failure;
+    private TokenUsage usage;
 
     List<ChatRequest> capturedRequests() {
         return List.copyOf(capturedRequests);
@@ -42,6 +44,11 @@ final class FakeStreamingChatModel implements StreamingChatModel {
         return this;
     }
 
+    FakeStreamingChatModel usage(TokenUsage usage) {
+        this.usage = usage;
+        return this;
+    }
+
     @Override
     public void chat(ChatRequest request, StreamingChatResponseHandler handler) {
         capturedRequests.add(request);
@@ -55,6 +62,9 @@ final class FakeStreamingChatModel implements StreamingChatModel {
         dev.langchain4j.data.message.AiMessage aiMessage = toolRequests.isEmpty()
                 ? dev.langchain4j.data.message.AiMessage.from(completionText)
                 : dev.langchain4j.data.message.AiMessage.from(completionText, toolRequests);
-        handler.onCompleteResponse(ChatResponse.builder().aiMessage(aiMessage).build());
+        handler.onCompleteResponse(ChatResponse.builder()
+                .aiMessage(aiMessage)
+                .tokenUsage(usage)
+                .build());
     }
 }

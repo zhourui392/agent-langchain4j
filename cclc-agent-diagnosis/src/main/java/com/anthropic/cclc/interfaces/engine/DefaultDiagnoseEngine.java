@@ -3,23 +3,25 @@ package com.anthropic.cclc.interfaces.engine;
 import com.anthropic.cclc.application.diagnosis.DiagnosisPlanner;
 import com.anthropic.cclc.application.diagnosis.DiagnosisReporter;
 import com.anthropic.cclc.application.diagnosis.PlanGuardMode;
+import com.anthropic.cclc.application.context.ContextCompactionService;
 import com.anthropic.cclc.domain.agent.AgentBudget;
-import com.anthropic.cclc.domain.conversation.CancellationToken;
 import com.anthropic.cclc.domain.conversation.Conversation;
 import com.anthropic.cclc.domain.conversation.SessionId;
 import com.anthropic.cclc.domain.conversation.TokenBudget;
 import com.anthropic.cclc.domain.port.LlmClient;
 import com.anthropic.cclc.domain.tool.ToolRegistry;
-import com.anthropic.cclc.application.context.ContextCompactionService;
 import com.anthropic.cclc.infrastructure.diagnosis.DiagnosisStateCodec;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Objects;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
-import java.util.function.IntConsumer;
 
 /**
  * Default {@link DiagnoseEngine}: rebuilds a stateless conversation, runs the
@@ -35,12 +37,10 @@ import java.util.function.IntConsumer;
  */
 public final class DefaultDiagnoseEngine implements DiagnoseEngine {
 
-    private static final int EXIT_SUCCESS = 0;
-    private static final int EXIT_CANCELLED = -1;
-    private static final int EXIT_ERROR = 1;
-
     private static final int DEFAULT_CONTEXT_TOKENS = 180_000;
     private static final int DEFAULT_RECENT_MESSAGES = 30;
+    private static final int DEFAULT_CLOSE_DRAIN_SECONDS = 10;
+    private static final Logger log = LoggerFactory.getLogger(DefaultDiagnoseEngine.class);
 
     private final ConversationRebuilder rebuilder = new ConversationRebuilder();
     private final ContextCompactionService compaction;
@@ -48,6 +48,9 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
     private final RunningSessions running = new RunningSessions();
     private final ScheduledExecutorService timeoutScheduler =
             Executors.newSingleThreadScheduledExecutor(DefaultDiagnoseEngine::daemon);
+    private final Semaphore concurrency;
+    private final long closeDrainSeconds;
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     public DefaultDiagnoseEngine(LlmClient llm, ToolRegistry tools) {
         this(llm, tools, AgentBudget.unlimited());
@@ -79,24 +82,37 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
                 config.reporter(),
                 config.guardMode(),
                 config.promptPack()));
+        this.concurrency = semaphore(config.maxConcurrentRuns());
+        this.closeDrainSeconds = config.closeDrainSeconds();
     }
 
     @Override
-    public void runStream(RunRequest request, Consumer<String> onChunk, IntConsumer onExit) {
+    public void run(RunRequest request, Consumer<String> onChunk, Consumer<RunSummary> onComplete) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(onChunk, "onChunk");
-        Objects.requireNonNull(onExit, "onExit");
+        Objects.requireNonNull(onComplete, "onComplete");
         String sessionId = request.sessionId();
+        RunStart start = tryStartRun(sessionId, onComplete);
+        if (start.rejected()) {
+            return;
+        }
         Conversation conversation = compaction.maybeCompact(rebuilder.from(
                 SessionId.of(sessionId), request.history(), request.userMessage()));
-        CancellationToken cancel = running.register(sessionId);
+        long startedAt = System.nanoTime();
+        log.info("diagnose run started sessionId={} workingDir={} historySize={} hasSnapshot={}",
+                sessionId, request.workingDir(), request.history().size(), !request.stateSnapshot().isBlank());
         try {
-            await(request, conversation, cancel, onChunk);
-            onExit.accept(EXIT_SUCCESS);
+            OrchestrationResult result = await(request, conversation, start.control(), onChunk);
+            RunSummary summary = summary(ExitReason.SUCCESS, result, "");
+            logCompletion(sessionId, startedAt, summary);
+            onComplete.accept(summary);
         } catch (RuntimeException ex) {
-            onExit.accept(cancel.isCancelled() ? EXIT_CANCELLED : EXIT_ERROR);
+            RunSummary summary = summary(exitReason(start.control()), null, errorDetail(ex));
+            logIfUnexpectedFailure(sessionId, summary, ex);
+            logCompletion(sessionId, startedAt, summary);
+            onComplete.accept(summary);
         } finally {
-            running.remove(sessionId);
+            finishRun(sessionId, start.control());
         }
     }
 
@@ -110,11 +126,62 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
         return running.isRunning(sessionId);
     }
 
-    private void await(RunRequest request, Conversation conversation,
-                       CancellationToken cancel, Consumer<String> onChunk) {
-        ScheduledFuture<?> timeout = scheduleTimeout(cancel, request.timeoutSeconds());
+    @Override
+    public void close() {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        running.cancelAll();
+        awaitDrain();
+        timeoutScheduler.shutdownNow();
+    }
+
+    private RunStart tryStartRun(String sessionId, Consumer<RunSummary> onComplete) {
+        if (closed.get()) {
+            reject(onComplete, "engine is closed");
+            return RunStart.rejectedStart();
+        }
+        if (!acquireConcurrency()) {
+            reject(onComplete, "max concurrent diagnosis runs reached");
+            return RunStart.rejectedStart();
+        }
+        return registerSession(sessionId, onComplete);
+    }
+
+    private RunStart registerSession(String sessionId, Consumer<RunSummary> onComplete) {
+        return running.register(sessionId)
+                .map(RunStart::started)
+                .orElseGet(() -> {
+                    releaseConcurrency();
+                    reject(onComplete, "session is already running: " + sessionId);
+                    return RunStart.rejectedStart();
+                });
+    }
+
+    private boolean acquireConcurrency() {
+        return concurrency == null || concurrency.tryAcquire();
+    }
+
+    private void releaseConcurrency() {
+        if (concurrency != null) {
+            concurrency.release();
+        }
+    }
+
+    private void reject(Consumer<RunSummary> onComplete, String reason) {
+        onComplete.accept(new RunSummary(ExitReason.REJECTED, "", RunSummary.Usage.zero(), reason));
+    }
+
+    private void finishRun(String sessionId, RunningSessions.RunControl control) {
+        running.remove(sessionId, control);
+        releaseConcurrency();
+    }
+
+    private OrchestrationResult await(RunRequest request, Conversation conversation,
+                                      RunningSessions.RunControl control, Consumer<String> onChunk) {
+        ScheduledFuture<?> timeout = scheduleTimeout(control, request.timeoutSeconds());
         try {
-            orchestrator.run(request, conversation, cancel, onChunk);
+            return orchestrator.run(request, conversation, control.token(), onChunk);
         } finally {
             if (timeout != null) {
                 timeout.cancel(false);
@@ -122,11 +189,51 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
         }
     }
 
-    private ScheduledFuture<?> scheduleTimeout(CancellationToken cancel, long timeoutSeconds) {
+    private ScheduledFuture<?> scheduleTimeout(RunningSessions.RunControl control, long timeoutSeconds) {
         if (timeoutSeconds <= 0) {
             return null;
         }
-        return timeoutScheduler.schedule(cancel::cancel, timeoutSeconds, TimeUnit.SECONDS);
+        return timeoutScheduler.schedule(control::timeout, timeoutSeconds, TimeUnit.SECONDS);
+    }
+
+    private static RunSummary summary(ExitReason reason, OrchestrationResult result, String errorDetail) {
+        if (result == null) {
+            return new RunSummary(reason, "", RunSummary.Usage.zero(), errorDetail);
+        }
+        return new RunSummary(reason, result.stateSnapshot(), result.usage(), errorDetail);
+    }
+
+    private static ExitReason exitReason(RunningSessions.RunControl control) {
+        if (control.isTimedOut()) {
+            return ExitReason.TIMEOUT;
+        }
+        if (control.isCancelled()) {
+            return ExitReason.STOPPED;
+        }
+        return ExitReason.ERROR;
+    }
+
+    private static String errorDetail(RuntimeException ex) {
+        String message = ex.getMessage();
+        if (message == null || message.isBlank()) {
+            return ex.getClass().getSimpleName();
+        }
+        return message;
+    }
+
+    private static void logCompletion(String sessionId, long startedAt, RunSummary summary) {
+        long durationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+        RunSummary.Usage usage = summary.usage();
+        log.info("diagnose run completed sessionId={} reason={} durationMs={} inputTokens={} "
+                        + "outputTokens={} cacheReadInputTokens={}",
+                sessionId, summary.reason(), durationMs, usage.inputTokens(),
+                usage.outputTokens(), usage.cacheReadInputTokens());
+    }
+
+    private static void logIfUnexpectedFailure(String sessionId, RunSummary summary, RuntimeException ex) {
+        if (summary.reason() == ExitReason.ERROR) {
+            log.error("diagnose run failed sessionId={}", sessionId, ex);
+        }
     }
 
     private static Thread daemon(Runnable runnable) {
@@ -135,19 +242,64 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
         return thread;
     }
 
+    private void awaitDrain() {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(closeDrainSeconds);
+        while (running.size() > 0 && System.nanoTime() < deadline) {
+            sleepQuietly();
+        }
+        if (running.size() > 0) {
+            log.warn("diagnose engine close timed out with runningSessions={}", running.size());
+        }
+    }
+
+    private static void sleepQuietly() {
+        try {
+            Thread.sleep(10);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static Semaphore semaphore(int maxConcurrentRuns) {
+        if (maxConcurrentRuns <= 0) {
+            return null;
+        }
+        return new Semaphore(maxConcurrentRuns);
+    }
+
     private static EngineOptions options(AgentBudget budget, DiagnosisPlanner planner,
                                          DiagnosisReporter reporter, PlanGuardMode guardMode,
                                          String promptPack) {
-        return new EngineOptions(budget, planner, reporter, guardMode, promptPack);
+        return new EngineOptions(
+                budget, planner, reporter, guardMode, promptPack, 0, DEFAULT_CLOSE_DRAIN_SECONDS);
     }
 
     public record EngineOptions(AgentBudget budget, DiagnosisPlanner planner, DiagnosisReporter reporter,
-                                PlanGuardMode guardMode, String promptPack) {
+                                PlanGuardMode guardMode, String promptPack,
+                                int maxConcurrentRuns, long closeDrainSeconds) {
 
         public EngineOptions {
             Objects.requireNonNull(budget, "budget");
             Objects.requireNonNull(guardMode, "guardMode");
             promptPack = promptPack == null ? "" : promptPack;
+            if (closeDrainSeconds <= 0) {
+                closeDrainSeconds = DEFAULT_CLOSE_DRAIN_SECONDS;
+            }
+        }
+
+        public EngineOptions(AgentBudget budget, DiagnosisPlanner planner, DiagnosisReporter reporter,
+                             PlanGuardMode guardMode, String promptPack) {
+            this(budget, planner, reporter, guardMode, promptPack, 0, DEFAULT_CLOSE_DRAIN_SECONDS);
+        }
+    }
+
+    private record RunStart(RunningSessions.RunControl control, boolean rejected) {
+        private static RunStart started(RunningSessions.RunControl control) {
+            return new RunStart(control, false);
+        }
+
+        private static RunStart rejectedStart() {
+            return new RunStart(null, true);
         }
     }
 }

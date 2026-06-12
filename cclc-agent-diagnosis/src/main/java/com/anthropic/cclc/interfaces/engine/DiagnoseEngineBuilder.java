@@ -7,9 +7,13 @@ import com.anthropic.cclc.domain.agent.AgentBudget;
 import com.anthropic.cclc.domain.port.LlmClient;
 import com.anthropic.cclc.domain.tool.ToolRegistry;
 import com.anthropic.cclc.infrastructure.diagnosis.DiagnoseToolFactory;
+import com.anthropic.cclc.infrastructure.diagnosis.DiagnosisBackendConfig;
 import com.anthropic.cclc.infrastructure.diagnosis.DiagnosisToolBackends;
+import com.anthropic.cclc.infrastructure.diagnosis.DiagnosisToolBackendsFactory;
 import com.anthropic.cclc.infrastructure.diagnosis.DiagnosisToolPolicy;
 import com.anthropic.cclc.infrastructure.diagnosis.PromptPackLoader;
+import com.anthropic.cclc.infrastructure.diagnosis.StructuredDiagnosisPlanner;
+import com.anthropic.cclc.infrastructure.diagnosis.StructuredDiagnosisReporter;
 import com.anthropic.cclc.infrastructure.tools.governance.ToolGovernance;
 import com.anthropic.cclc.infrastructure.tools.support.ToolResultTruncator;
 
@@ -72,6 +76,10 @@ public final class DiagnoseEngineBuilder {
         return this;
     }
 
+    public DiagnoseEngineBuilder backendConfig(DiagnosisBackendConfig config) {
+        return toolBackends(DiagnosisToolBackendsFactory.fromConfig(config));
+    }
+
     public DiagnoseEngineBuilder budget(AgentBudget budget) {
         this.budget = Objects.requireNonNull(budget, "budget");
         return this;
@@ -84,6 +92,15 @@ public final class DiagnoseEngineBuilder {
 
     public DiagnoseEngineBuilder reporter(DiagnosisReporter reporter) {
         this.reporter = Objects.requireNonNull(reporter, "reporter");
+        return this;
+    }
+
+    public DiagnoseEngineBuilder structuredDiagnosis() {
+        if (llm == null) {
+            throw new IllegalStateException("llm must be configured before structuredDiagnosis");
+        }
+        this.planner = new StructuredDiagnosisPlanner(llm);
+        this.reporter = new StructuredDiagnosisReporter(llm);
         return this;
     }
 

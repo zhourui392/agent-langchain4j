@@ -1,11 +1,16 @@
 package com.anthropic.cclc.infrastructure.streamjson;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Assembles single-line Claude {@code stream-json} events that agent-web's
@@ -25,6 +30,15 @@ public final class ClaudeStreamJsonWriter {
 
     /** Token accounting echoed on the result event (agent-web persists it). */
     public record Usage(long inputTokens, long outputTokens, long cacheReadInputTokens) {
+    }
+
+    /** Tool-use block carried by a consolidated assistant message line. */
+    public record AssistantToolUse(String id, String name, String inputJson) {
+        public AssistantToolUse {
+            Objects.requireNonNull(id, "id");
+            Objects.requireNonNull(name, "name");
+            Objects.requireNonNull(inputJson, "inputJson");
+        }
     }
 
     public String systemInit(String sessionId, String cwd) {
@@ -77,6 +91,22 @@ public final class ClaudeStreamJsonWriter {
         return root.toString();
     }
 
+    public String assistantMessage(String text, List<AssistantToolUse> toolUses) {
+        ArrayNode blocks = nodes.arrayNode();
+        if (text != null && !text.isEmpty()) {
+            blocks.add(textBlock(text));
+        }
+        for (AssistantToolUse toolUse : safeToolUses(toolUses)) {
+            blocks.add(toolUseBlock(toolUse));
+        }
+        ObjectNode message = nodes.objectNode();
+        message.set("content", blocks);
+        ObjectNode root = nodes.objectNode();
+        root.put("type", "assistant");
+        root.set("message", message);
+        return root.toString();
+    }
+
     public String result(String finalText, String sessionId) {
         return successResult(finalText, sessionId).toString();
     }
@@ -119,6 +149,37 @@ public final class ClaudeStreamJsonWriter {
         node.put("output_tokens", usage.outputTokens());
         node.put("cache_read_input_tokens", usage.cacheReadInputTokens());
         return node;
+    }
+
+    private ObjectNode textBlock(String text) {
+        ObjectNode block = nodes.objectNode();
+        block.put("type", "text");
+        block.put("text", text);
+        return block;
+    }
+
+    private ObjectNode toolUseBlock(AssistantToolUse toolUse) {
+        ObjectNode block = nodes.objectNode();
+        block.put("type", "tool_use");
+        block.put("id", toolUse.id());
+        block.put("name", toolUse.name());
+        block.set("input", inputNode(toolUse.inputJson()));
+        return block;
+    }
+
+    private JsonNode inputNode(String inputJson) {
+        try {
+            return mapper.readTree(inputJson);
+        } catch (IOException ex) {
+            throw new UncheckedIOException("invalid tool input json", ex);
+        }
+    }
+
+    private static List<AssistantToolUse> safeToolUses(List<AssistantToolUse> toolUses) {
+        if (toolUses == null) {
+            return List.of();
+        }
+        return toolUses;
     }
 
     private String streamEvent(String eventType, String childKey, ObjectNode child) {
