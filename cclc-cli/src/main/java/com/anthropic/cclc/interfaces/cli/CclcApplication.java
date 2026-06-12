@@ -13,6 +13,7 @@ import com.anthropic.cclc.domain.conversation.SessionId;
 import com.anthropic.cclc.domain.message.AiMessage;
 import com.anthropic.cclc.domain.message.UserMessage;
 import com.anthropic.cclc.domain.port.LlmClient;
+import com.anthropic.cclc.domain.skill.SkillCatalog;
 import com.anthropic.cclc.domain.tool.ExecutionContext;
 import com.anthropic.cclc.domain.tool.Tool;
 import com.anthropic.cclc.domain.tool.ToolRegistry;
@@ -26,12 +27,16 @@ import com.anthropic.cclc.infrastructure.llm.AnthropicLlmClientFactory;
 import com.anthropic.cclc.infrastructure.memory.FileChatMemoryStore;
 import com.anthropic.cclc.infrastructure.memory.SessionPaths;
 import com.anthropic.cclc.infrastructure.permission.DefaultPermissionPolicy;
+import com.anthropic.cclc.infrastructure.skill.DirectorySkillSource;
+import com.anthropic.cclc.infrastructure.skill.SkillCatalogContextProvider;
+import com.anthropic.cclc.infrastructure.skill.SkillFrontmatterParser;
 import com.anthropic.cclc.infrastructure.tools.BashTool;
 import com.anthropic.cclc.infrastructure.tools.FileEditTool;
 import com.anthropic.cclc.infrastructure.tools.FileReadTool;
 import com.anthropic.cclc.infrastructure.tools.FileWriteTool;
 import com.anthropic.cclc.infrastructure.tools.GlobTool;
 import com.anthropic.cclc.infrastructure.tools.GrepTool;
+import com.anthropic.cclc.infrastructure.tools.SkillTool;
 import com.anthropic.cclc.infrastructure.tools.support.FileStateCache;
 import com.anthropic.cclc.interfaces.cli.io.JLineTerminalIo;
 
@@ -47,6 +52,7 @@ public final class CclcApplication {
             You are Claude Code, a CLI coding assistant. Be concise. \
             Use available tools to read, search, and modify files when asked. \
             Always summarize your actions briefly.""";
+    private static final String SKILLS_DIR_ENV = "CCLC_SKILLS_DIR";
 
     private CclcApplication() {
     }
@@ -77,9 +83,10 @@ public final class CclcApplication {
 
         Path cwd = Paths.get(System.getProperty("user.dir", "."));
         FileStateCache fileStateCache = new FileStateCache();
-        ToolRegistry tools = registerTools(fileStateCache);
+        java.util.Optional<SkillCatalog> skills = loadSkills();
+        ToolRegistry tools = registerTools(fileStateCache, skills);
 
-        SystemPromptComposer composer = new SystemPromptComposer(SYSTEM_INSTRUCTIONS, contextProviders());
+        SystemPromptComposer composer = new SystemPromptComposer(SYSTEM_INSTRUCTIONS, contextProviders(skills));
         FileChatMemoryStore store = new FileChatMemoryStore(SessionPaths.defaultLocation().baseDirectory());
         SessionResumer resumer = new SessionResumer(store);
 
@@ -108,21 +115,52 @@ public final class CclcApplication {
     }
 
     private static ToolRegistry registerTools(FileStateCache fileStateCache) {
-        return new ToolRegistry()
+        return registerTools(fileStateCache, loadSkills());
+    }
+
+    private static ToolRegistry registerTools(FileStateCache fileStateCache,
+                                              java.util.Optional<SkillCatalog> skills) {
+        ToolRegistry registry = new ToolRegistry()
                 .register(new BashTool())
                 .register(new FileReadTool(fileStateCache))
                 .register(new FileWriteTool(fileStateCache))
                 .register(new FileEditTool(fileStateCache))
                 .register(new GlobTool())
                 .register(new GrepTool());
+        skills.ifPresent(catalog -> registry.register(new SkillTool(catalog)));
+        return registry;
     }
 
     private static List<ContextProvider> contextProviders() {
-        return List.of(
+        return contextProviders(loadSkills());
+    }
+
+    private static List<ContextProvider> contextProviders(java.util.Optional<SkillCatalog> skills) {
+        List<ContextProvider> providers = new java.util.ArrayList<>(List.of(
                 new ClaudeMdProvider(),
                 new CwdProvider(),
                 new DateProvider(),
-                new GitStatusProvider());
+                new GitStatusProvider()));
+        skills.ifPresent(catalog -> providers.add(new SkillCatalogContextProvider(catalog)));
+        return List.copyOf(providers);
+    }
+
+    private static java.util.Optional<SkillCatalog> loadSkills() {
+        String directory = skillDirectorySetting();
+        if (directory == null || directory.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        SkillCatalog catalog = SkillCatalog.of(new DirectorySkillSource(
+                Paths.get(directory), new SkillFrontmatterParser()).load());
+        return catalog.isEmpty() ? java.util.Optional.empty() : java.util.Optional.of(catalog);
+    }
+
+    private static String skillDirectorySetting() {
+        String configured = System.getenv(SKILLS_DIR_ENV);
+        if (configured == null || configured.isBlank()) {
+            configured = System.getProperty(SKILLS_DIR_ENV);
+        }
+        return configured;
     }
 
     private static void handleLine(String input,

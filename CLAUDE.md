@@ -75,4 +75,4 @@ Tests are deliverable assets. Every task in `TASKLIST.md` flagged `[TDD]` must f
 
 ## Things explicitly out of scope (do not add)
 
-Per `DESIGN.md` §1.3 and §14.2: no Spring/Guice, no Lombok, no multi-provider LLM abstraction (Anthropic only), no Ink-like rich terminal UI, no multimodal input (text only for MVP), no IDE bridge/plugin/skill subsystem. Configuration is env vars + `~/.claude-code-j/config.json` — no annotations, no reflection-based DI.
+Per `DESIGN.md` §1.3 and §14.2: no Spring/Guice, no Lombok, no multi-provider LLM abstraction (Anthropic only), no Ink-like rich terminal UI, no multimodal input (text only for MVP), and no IDE bridge/plugin subsystem. Skill support is knowledge-only per `DESIGN.md` §16.4; do not add script execution or automatic Bash enablement through skills. Configuration is env vars + `~/.claude-code-j/config.json` — no annotations, no reflection-based DI.

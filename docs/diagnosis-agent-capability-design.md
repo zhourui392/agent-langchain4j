@@ -133,12 +133,12 @@ Skill 用于承载诊断知识、业务背景和 SOP。
 
 Skill 不应该直接承担核心生产能力的治理职责。
 
-落地决策（2026-06-11）：DESIGN.md 已把 Skill 子系统列为 out of scope，本项目 MVP 不引入可执行 Skill 机制。诊断知识以 PromptPack 形式落地：
+落地决策（2026-06-11，已被 DESIGN.md §16.4 于 2026-06-13 推翻）：DESIGN.md 曾把 Skill 子系统列为 out of scope，本项目 MVP 不引入可执行 Skill 机制。该阶段诊断知识以 PromptPack 形式落地：
 
 - 每个业务场景一份 markdown SOP，存放于 `prompts/diagnosis/`。
 - `SystemPromptComposer` 按场景把 SOP 拼接在 system prompt 稳定前缀之后，不破坏 prompt cache。
 - PromptPack 只含知识与流程，不含可执行脚本。
-- 若未来确需引入 Skill 子系统，必须先在 DESIGN.md 第 16 节记录推翻原决策的 dated decision。
+- 2026-06-13 起引入知识型 Skill 子系统：PromptPack 保留为常驻必读知识，场景 SOP 和附属资料迁移到 Skill，由模型按 description 选择并通过 `Skill` 工具展开。
 
 ### 5.2 Java Tool
 

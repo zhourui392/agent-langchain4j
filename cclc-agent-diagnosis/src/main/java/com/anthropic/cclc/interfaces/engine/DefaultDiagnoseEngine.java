@@ -78,7 +78,8 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
                 config.planner(),
                 config.reporter(),
                 config.guardMode(),
-                config.promptPack()));
+                config.promptPack(),
+                config.skillsCatalog()));
     }
 
     @Override
@@ -138,16 +139,22 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
     private static EngineOptions options(AgentBudget budget, DiagnosisPlanner planner,
                                          DiagnosisReporter reporter, PlanGuardMode guardMode,
                                          String promptPack) {
-        return new EngineOptions(budget, planner, reporter, guardMode, promptPack);
+        return new EngineOptions(budget, planner, reporter, guardMode, promptPack, "");
     }
 
     public record EngineOptions(AgentBudget budget, DiagnosisPlanner planner, DiagnosisReporter reporter,
-                                PlanGuardMode guardMode, String promptPack) {
+                                PlanGuardMode guardMode, String promptPack, String skillsCatalog) {
+
+        public EngineOptions(AgentBudget budget, DiagnosisPlanner planner, DiagnosisReporter reporter,
+                             PlanGuardMode guardMode, String promptPack) {
+            this(budget, planner, reporter, guardMode, promptPack, "");
+        }
 
         public EngineOptions {
             Objects.requireNonNull(budget, "budget");
             Objects.requireNonNull(guardMode, "guardMode");
             promptPack = promptPack == null ? "" : promptPack;
+            skillsCatalog = skillsCatalog == null ? "" : skillsCatalog;
         }
     }
 }
