@@ -9,9 +9,9 @@ import com.anthropic.cclc.domain.diagnosis.Evidence;
 import com.anthropic.cclc.domain.diagnosis.Hypothesis;
 import com.anthropic.cclc.domain.diagnosis.StepStatus;
 import com.anthropic.cclc.domain.message.AiMessage;
+import com.anthropic.cclc.domain.tool.ToolRegistry;
 import com.anthropic.cclc.domain.tool.ToolUseId;
 import com.anthropic.cclc.domain.tool.ToolUseRequest;
-import com.anthropic.cclc.domain.tool.ToolRegistry;
 import com.anthropic.cclc.infrastructure.diagnosis.DiagnosisToolBackends;
 import com.anthropic.cclc.infrastructure.diagnosis.DiagnosisToolPolicy;
 import com.anthropic.cclc.infrastructure.tools.support.HttpReader;
@@ -86,8 +86,8 @@ class DiagnoseEngineBuilderTest {
     @Test
     void buildsEngineWithDiagnosisToolBackends() {
         StubLlmClient llm = new StubLlmClient()
-                .enqueue(new AiMessage("", List.of(new com.anthropic.cclc.domain.tool.ToolUseRequest(
-                        new com.anthropic.cclc.domain.tool.ToolUseId("log-1"),
+                .enqueue(new AiMessage("", List.of(new ToolUseRequest(
+                        new ToolUseId("log-1"),
                         "LogQuery",
                         "{\"traceId\":\"trace-1\"}"))))
                 .enqueue(AiMessage.text("done"));
@@ -113,8 +113,8 @@ class DiagnoseEngineBuilderTest {
     @Test
     void appliesToolPolicyAfterBackendAssembly() {
         StubLlmClient llm = new StubLlmClient()
-                .enqueue(new AiMessage("", List.of(new com.anthropic.cclc.domain.tool.ToolUseRequest(
-                        new com.anthropic.cclc.domain.tool.ToolUseId("http-1"),
+                .enqueue(new AiMessage("", List.of(new ToolUseRequest(
+                        new ToolUseId("http-1"),
                         "HttpGet",
                         "{\"url\":\"https://evil.local/health\"}"))))
                 .enqueue(AiMessage.text("done"));
@@ -204,6 +204,40 @@ class DiagnoseEngineBuilderTest {
                 .hasMessageContaining("skills root");
     }
 
+    @Test
+    void structuredDiagnosisWiresPlannerAndReporter() {
+        StubLlmClient llm = new StubLlmClient()
+                .enqueue(new AiMessage("", List.of(new ToolUseRequest(
+                        new ToolUseId("plan-1"), "update_plan", planJson()))))
+                .enqueue(AiMessage.text("planned"))
+                .enqueue(AiMessage.text("done"))
+                .enqueue(new AiMessage("", List.of(new ToolUseRequest(
+                        new ToolUseId("report-1"), "submit_report", reportJson()))))
+                .enqueue(AiMessage.text("reported"));
+        DiagnoseEngine engine = DiagnoseEngineBuilder.create()
+                .llm(llm)
+                .structuredDiagnosis()
+                .build();
+        List<String> lines = new ArrayList<>();
+
+        engine.runStream(RunRequest.builder()
+                .workingDir(".")
+                .userMessage("hi")
+                .sessionId("s-structured")
+                .build(), lines::add, ignored -> {
+                });
+
+        assertThat(lines.stream().map(this::typeOf).toList())
+                .contains("diagnosis_plan", "diagnosis_report");
+    }
+
+    @Test
+    void structuredDiagnosisRequiresLlmFirst() {
+        assertThatThrownBy(() -> DiagnoseEngineBuilder.create().structuredDiagnosis())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("llm");
+    }
+
     private String typeOf(String line) {
         try {
             return mapper.readTree(line).path("type").asText();
@@ -215,6 +249,36 @@ class DiagnoseEngineBuilderTest {
     private static void writeSkill(Path directory, String content) throws IOException {
         Files.createDirectories(directory);
         Files.writeString(directory.resolve("SKILL.md"), content);
+    }
+
+    private static String planJson() {
+        return """
+                {
+                  "problemStatement": "hi",
+                  "hypotheses": [{"id": "H1", "statement": "unknown", "confidence": 0.1}],
+                  "steps": [{
+                    "id": "S1",
+                    "goal": "inspect",
+                    "hypothesisId": "H1",
+                    "allowedTools": ["LogQuery"],
+                    "status": "PENDING"
+                  }]
+                }
+                """;
+    }
+
+    private static String reportJson() {
+        return """
+                {
+                  "summary": "needs more evidence",
+                  "rootCauseCandidates": [],
+                  "keyEvidenceIds": [],
+                  "recommendedActions": ["collect logs"],
+                  "missingInformation": [],
+                  "confidence": 0.1,
+                  "needHumanCheck": true
+                }
+                """;
     }
 
     private static final class FakePlanner implements DiagnosisPlanner {

@@ -4,6 +4,7 @@ import com.anthropic.cclc.domain.message.AiMessage;
 import com.anthropic.cclc.domain.message.UserMessage;
 import com.anthropic.cclc.domain.port.ChatRequest;
 import com.anthropic.cclc.domain.port.LlmClient.StreamHandler;
+import dev.langchain4j.model.anthropic.AnthropicTokenUsage;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -70,6 +71,30 @@ class LangChain4jLlmClientTest {
         });
 
         assertThat(received.get()).hasMessage("boom");
+    }
+
+    @Test
+    void surfacesCacheReadTokensFromAnthropicUsage() {
+        FakeStreamingChatModel fake = new FakeStreamingChatModel()
+                .completionText("ok")
+                .usage(AnthropicTokenUsage.builder()
+                        .inputTokenCount(9)
+                        .outputTokenCount(4)
+                        .cacheReadInputTokens(6)
+                        .build());
+        LangChain4jLlmClient client = new LangChain4jLlmClient(fake);
+        AtomicReference<List<Integer>> usage = new AtomicReference<>();
+
+        client.streamChat(baseRequest, new StreamHandler() {
+            @Override public void onPartialText(String delta) {}
+
+            @Override
+            public void onUsage(int inputTokens, int outputTokens, int cacheReadInputTokens) {
+                usage.set(List.of(inputTokens, outputTokens, cacheReadInputTokens));
+            }
+        });
+
+        assertThat(usage.get()).containsExactly(9, 4, 6);
     }
 
     @Test

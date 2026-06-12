@@ -37,6 +37,7 @@ final class ParallelToolDispatcher {
 
     List<ToolResultMessage> dispatch(AiMessage aiMessage, AgentEventListener listener) {
         List<ToolUseRequest> requests = aiMessage.toolUseRequests();
+        requests.forEach(listener::onToolUseStart);
         if (requests.size() == 1) {
             return List.of(executeSingle(requests.get(0), listener));
         }
@@ -61,7 +62,6 @@ final class ParallelToolDispatcher {
     }
 
     private ToolResult runWithEvents(ToolUseRequest request, AgentEventListener listener) {
-        listener.onToolUseStart(request);
         long startNs = System.nanoTime();
         ToolResult result = runWithPermission(request);
         long durationMs = (System.nanoTime() - startNs) / 1_000_000L;

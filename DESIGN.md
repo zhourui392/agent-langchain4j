@@ -542,7 +542,7 @@ claude-code-langchain4j/
 | 会话状态 | **引擎无状态** | `ConversationRebuilder` 按传入 history 重建；旁路 `FileChatMemoryStore`；`stop`/超时经 `RunningSessions` + `CancellationToken` |
 | 事件契约 | **Claude `stream-json` 直通** | 增量须包 `{"type":"stream_event","event":{…}}`；`AgentExecutor` 不改，仅加 additive `onUsage` 钩子 |
 
-已实现（分支 `feat/diagnose-engine`）：E0–E3 引擎 MVP、E5 只读工具（含 `LogQueryTool`）、E6 截断 + auto-compact、E7 `SubAgentTool`、E8 usage 透出。**未完**：E4（agent-web 接入 `AgentType.NATIVE` + 手测，跨仓库）、E8 `cache_read_input_tokens`（待核 langchain4j API）。
+已实现（分支 `feat/diagnose-engine`）：E0–E3 引擎 MVP、E5 只读工具（含 `LogQueryTool`）、E6 截断 + auto-compact、E7 `SubAgentTool`、E8 usage 透出（含 Anthropic `cache_read_input_tokens`）。**未完**：E4（agent-web 接入 `AgentType.NATIVE` + 手测，跨仓库）。
 
 ### 16.2 双层产品形态与三模块拆分（2026-06-11）
 
@@ -573,6 +573,19 @@ claude-code-langchain4j/
 | 归属模块 | kernel 通用件（`domain.skill` + `infrastructure.skill`），诊断层和 CLI 仅装配 | 第二个专用 Agent 可直接复用；kernel 不出现 diagnosis 语义 |
 | 能力边界 | **知识型 Skill**，不含可执行脚本 | 与只读诊断引擎姿态一致；Bash 不因 Skill 自动开放 |
 | PromptPack 去留 | 保留，二者分工：常驻必读走 PromptPack，按需取用走 Skill | 存量 SOP 渐进迁移，不做一次性切换 |
+
+### 16.5 引擎宿主集成强化（2026-06-13）
+
+完整方案见 [`docs/engine-integration-hardening-plan.md`](docs/engine-integration-hardening-plan.md)。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| 终态契约 | `DiagnoseEngine.run(..., Consumer<RunSummary>)` 为主接口，旧 `runStream` 默认委托 | 宿主可直接落库 `ExitReason`、state snapshot、usage 与错误摘要 |
+| stream-json history | Writer 在 assistant 轮末补整合 `type=assistant` 行，`StreamJsonHistoryParser` 与 Writer 同仓演进 | 持久化 NDJSON 可反解为 `List<TurnMessage>`，工具配对不变式由解析器过滤孤儿侧保护 |
+| 后端装配 | `DiagnosisBackendConfig` + `DiagnosisToolBackendsFactory` 从显式连接配置创建后端 | 宿主无需手写 6 类 client，凭证仍只由宿主传入 |
+| 退出语义 | `ExitReason` 拆分 SUCCESS / STOPPED / TIMEOUT / ERROR / REJECTED | 旧 exit code 兼容，前端与历史可区分 stop、timeout 和拒绝 |
+| 服务端生命周期 | `DiagnoseEngine` 实现 `AutoCloseable`，重复 sessionId 和并发上限快速 REJECTED | Spring `destroyMethod=close` 可 graceful drain，旧 run 不会被新 token 覆盖 |
+| usage | `LangChain4jLlmClient` 识别 `AnthropicTokenUsage.cacheReadInputTokens()` | prompt cache 成本统计不再固定为 0；非 Anthropic usage 仍保持 0 不估算 |
 
 ---
 

@@ -242,6 +242,6 @@ public final class CclcApplication {
     static String version() {
         Package pkg = CclcApplication.class.getPackage();
         String implementationVersion = pkg.getImplementationVersion();
-        return implementationVersion != null ? implementationVersion : "0.1.0-SNAPSHOT";
+        return implementationVersion != null ? implementationVersion : "0.2.0";
     }
 }

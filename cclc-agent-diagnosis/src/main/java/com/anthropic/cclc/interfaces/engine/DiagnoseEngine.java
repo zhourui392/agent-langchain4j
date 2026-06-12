@@ -1,5 +1,6 @@
 package com.anthropic.cclc.interfaces.engine;
 
+import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
 
@@ -12,17 +13,36 @@ import java.util.function.IntConsumer;
  * @author zhourui(V33215020)
  * @since 2026-06-08
  */
-public interface DiagnoseEngine {
+public interface DiagnoseEngine extends AutoCloseable {
+
+    /**
+     * Runs one diagnosis turn and reports the structured terminal state.
+     *
+     * @param request diagnosis request
+     * @param onChunk receives one Claude stream-json line at a time
+     * @param onComplete receives the terminal summary for persistence
+     */
+    void run(RunRequest request, Consumer<String> onChunk, Consumer<RunSummary> onComplete);
 
     /**
      * Runs one diagnosis turn, pushing each Claude {@code stream-json} line to
      * {@code onChunk}, then reports the exit code: {@code 0} success,
      * {@code -1} stopped/timed out, {@code 1} error.
      */
-    void runStream(RunRequest request, Consumer<String> onChunk, IntConsumer onExit);
+    @Deprecated
+    default void runStream(RunRequest request, Consumer<String> onChunk, IntConsumer onExit) {
+        Objects.requireNonNull(onExit, "onExit");
+        run(request, onChunk, summary -> onExit.accept(summary.legacyExitCode()));
+    }
 
     /** Cancels the in-flight run for the given session, if any. */
     void stop(String sessionId);
 
     boolean isRunning(String sessionId);
+
+    /**
+     * Rejects new runs, cancels in-flight runs, and waits briefly for drain.
+     */
+    @Override
+    void close();
 }

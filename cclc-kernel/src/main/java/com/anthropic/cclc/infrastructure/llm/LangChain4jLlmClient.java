@@ -6,6 +6,7 @@ import com.anthropic.cclc.domain.port.ChatRequest;
 import com.anthropic.cclc.domain.port.LlmClient;
 import com.anthropic.cclc.domain.port.ToolSpec;
 import dev.langchain4j.agent.tool.ToolSpecification;
+import dev.langchain4j.model.anthropic.AnthropicTokenUsage;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
@@ -89,9 +90,17 @@ public final class LangChain4jLlmClient implements LlmClient {
             if (usage == null) {
                 return;
             }
-            // TODO: surface cache_read_input_tokens from the Anthropic-specific
-            // TokenUsage subtype once verified against the langchain4j API.
-            handler.onUsage(orZero(usage.inputTokenCount()), orZero(usage.outputTokenCount()), 0);
+            handler.onUsage(
+                    orZero(usage.inputTokenCount()),
+                    orZero(usage.outputTokenCount()),
+                    cacheReadInputTokens(usage));
+        }
+
+        private static int cacheReadInputTokens(TokenUsage usage) {
+            if (usage instanceof AnthropicTokenUsage anthropicUsage) {
+                return orZero(anthropicUsage.cacheReadInputTokens());
+            }
+            return 0;
         }
 
         private static int orZero(Integer value) {
