@@ -27,7 +27,7 @@ Java 21 + LangChain4j 1.8 复刻 [claude-code](https://github.com/anthropics/cla
 
 ## 不在范围内
 
-Spring / Guice / Lombok、多 LLM provider 抽象、Ink 风格 TUI、多模态输入、IDE / Plugin 子系统、可执行脚本型 Skill。MCP 已规划（P1）但未实现。
+Spring / Guice / Lombok、Ink 风格 TUI、多模态输入、IDE / Plugin 子系统、可执行脚本型 Skill。MCP 已规划（P1）但未实现。
 
 ## 环境
 
@@ -40,17 +40,21 @@ Spring / Guice / Lombok、多 LLM provider 抽象、Ink 风格 TUI、多模态�
 两种方式，env 覆盖文件：
 
 1. 环境变量
-   - `ANTHROPIC_API_KEY`（必需）
-   - `CCLC_MODEL`（默认 `claude-sonnet-4-6`）
+   - `CCLC_PROVIDER`（可选：`OPENAI` / `ANTHROPIC`，默认 `OPENAI`）
+   - `CCLC_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`（按此顺序取第一个非空）
+   - `CCLC_MODEL`（OpenAI 默认 `gpt-5`；Anthropic 默认 `claude-sonnet-4-6`）
    - `CCLC_MAX_TOKENS`
+   - `CCLC_BASE_URL` / `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`（按此顺序取第一个非空）
    - `CCLC_PERMISSION_MODE`（DEFAULT / PLAN / BYPASS / AUTO，默认 `BYPASS`）
    - `CCLC_SKILLS_DIR`（可选，指向 `skills-root`，加载 `<name>/SKILL.md` 知识型 Skill）
 2. `~/.claude-code-j/config.json`
    ```json
    {
+     "provider": "OPENAI",
      "apiKey": "...",
-     "model": "claude-sonnet-4-6",
+     "model": "gpt-5",
      "maxTokens": 8000,
+     "baseUrl": "https://www.packyapi.com/v1",
      "permissionMode": "BYPASS"
    }
    ```

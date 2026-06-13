@@ -23,7 +23,7 @@ import com.anthropic.cclc.infrastructure.context.ClaudeMdProvider;
 import com.anthropic.cclc.infrastructure.context.CwdProvider;
 import com.anthropic.cclc.infrastructure.context.DateProvider;
 import com.anthropic.cclc.infrastructure.context.GitStatusProvider;
-import com.anthropic.cclc.infrastructure.llm.AnthropicLlmClientFactory;
+import com.anthropic.cclc.infrastructure.llm.LlmClientFactories;
 import com.anthropic.cclc.infrastructure.memory.FileChatMemoryStore;
 import com.anthropic.cclc.infrastructure.memory.SessionPaths;
 import com.anthropic.cclc.infrastructure.permission.DefaultPermissionPolicy;
@@ -90,14 +90,14 @@ public final class CclcApplication {
 
     private void run() throws IOException {
         AppConfig config = ConfigLoader.fromSystem().load();
-        LlmClient llm = AnthropicLlmClientFactory.withCacheEnabled().create(config);
+        LlmClient llm = LlmClientFactories.create(config);
 
         Path cwd = Paths.get(System.getProperty("user.dir", "."));
         FileStateCache fileStateCache = new FileStateCache();
         java.util.Optional<SkillCatalog> skills = loadSkills();
         ToolRegistry tools = registerTools(fileStateCache, skills);
-        log.info("cclc starting: model={}, permissionMode={}, skillsEnabled={}, registeredTools={}",
-                config.model(), config.permissionMode(), skills.isPresent(), tools.names().size());
+        log.info("cclc starting: provider={}, model={}, permissionMode={}, skillsEnabled={}, registeredTools={}",
+                config.provider(), config.model(), config.permissionMode(), skills.isPresent(), tools.names().size());
 
         SystemPromptComposer composer = new SystemPromptComposer(SYSTEM_INSTRUCTIONS, contextProviders(skills));
         FileChatMemoryStore store = new FileChatMemoryStore(SessionPaths.defaultLocation().baseDirectory());
@@ -249,9 +249,9 @@ public final class CclcApplication {
                   --version, -v   Print version
                   --help, -h      Print this help
 
-                Required env: ANTHROPIC_API_KEY
-                Optional env:  CCLC_MODEL, CCLC_MAX_TOKENS, CCLC_SKILLS_DIR
-                Config file:   ~/.claude-code-j/config.json (apiKey/model/maxTokens)""");
+                Required env: CCLC_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY
+                Optional env: CCLC_PROVIDER, CCLC_MODEL, CCLC_MAX_TOKENS, CCLC_BASE_URL, CCLC_SKILLS_DIR
+                Config file:  ~/.claude-code-j/config.json (provider/apiKey/model/maxTokens/baseUrl)""");
     }
 
     static String version() {

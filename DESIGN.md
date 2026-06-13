@@ -37,7 +37,7 @@
 - **多模态输入**（图片/截图粘贴）— P2 评估
 - Ink/React 终端 UI（用纯 JLine 替代）
 - IDE Bridge、Remote Session、Plugin
-- OAuth/Keychain（用 `ANTHROPIC_API_KEY` 环境变量）
+- OAuth/Keychain（用 `CCLC_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` 环境变量）
 
 ---
 
@@ -490,7 +490,7 @@ claude-code-langchain4j/
 
 ### 14.2 已决定的取舍
 
-- **不抽象 LLM provider** — 只支持 Anthropic。多 provider 是 YAGNI。
+- **provider 抽象保持窄口径** — 只支持 §16.6 记录的 OpenAI / Anthropic 两个 LangChain4j 工厂，不引入通用 SPI、反射扫描或第三方 provider 扩展面。
 - **不做 Ink 等价物** — 纯文本输出。UI 不是核心价值。
 - **不引入 Spring** — `main()` 手工组装依赖图，对小项目最清晰。
 - **配置不走代码注解** — 全部环境变量 + JSON 文件，避免 reflection / 启动魔法。
@@ -586,6 +586,18 @@ claude-code-langchain4j/
 | 退出语义 | `ExitReason` 拆分 SUCCESS / STOPPED / TIMEOUT / ERROR / REJECTED | 旧 exit code 兼容，前端与历史可区分 stop、timeout 和拒绝 |
 | 服务端生命周期 | `DiagnoseEngine` 实现 `AutoCloseable`，重复 sessionId 和并发上限快速 REJECTED | Spring `destroyMethod=close` 可 graceful drain，旧 run 不会被新 token 覆盖 |
 | usage | `LangChain4jLlmClient` 识别 `AnthropicTokenUsage.cacheReadInputTokens()` | prompt cache 成本统计不再固定为 0；非 Anthropic usage 仍保持 0 不估算 |
+
+### 16.6 接入 OpenAI 协议（2026-06-13）
+
+推翻 §14.2 中「只支持 Anthropic」的取舍，新增 OpenAI-compatible provider，并把默认 provider 切到 `OPENAI`。完整方案见 [`docs/openai-provider-plan.md`](docs/openai-provider-plan.md)。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| provider 选择 | `CCLC_PROVIDER` / config `provider` 支持 `OPENAI`、`ANTHROPIC`，默认 `OPENAI` | 本地默认走 OpenAI-compatible endpoint；旧 Anthropic 用户需显式 `CCLC_PROVIDER=anthropic` |
+| 凭据别名 | API key 依次读取 `CCLC_API_KEY`、`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`；baseUrl 依次读取 `CCLC_BASE_URL`、`OPENAI_BASE_URL`、`ANTHROPIC_BASE_URL` | 兼容旧环境变量，同时提供 provider-neutral 配置 |
+| 默认模型 | OpenAI 默认 `gpt-5`；Anthropic 默认 `claude-sonnet-4-6` | `CCLC_MODEL` 仍可覆盖 |
+| 实现边界 | `LangChain4jLlmClient` 继续依赖通用 `StreamingChatModel`；provider 差异只在工厂层 | 主循环、消息映射、工具 schema、权限链不改 |
+| prompt cache | Anthropic 工厂保留 `CacheBreakpointStrategy`；OpenAI 工厂不设置 prompt-cache marker | OpenAI 路径 cache token 统计保持 0，不估算 |
 
 ---
 

@@ -17,24 +17,27 @@ class ConfigLoaderTest {
 
     @Test
     void loadsApiKeyFromEnvironmentOnly() {
-        ConfigLoader loader = new ConfigLoader(envOf(Map.of("ANTHROPIC_API_KEY", "sk-env")), null);
+        ConfigLoader loader = new ConfigLoader(envOf(Map.of("CCLC_API_KEY", "sk-env")), null);
 
         AppConfig config = loader.load();
 
         assertThat(config.apiKey()).isEqualTo("sk-env");
-        assertThat(config.model()).isEqualTo(ConfigLoader.DEFAULT_MODEL);
+        assertThat(config.provider()).isEqualTo(LlmProvider.OPENAI);
+        assertThat(config.model()).isEqualTo(ConfigLoader.DEFAULT_OPENAI_MODEL);
         assertThat(config.maxTokens()).isEqualTo(ConfigLoader.DEFAULT_MAX_TOKENS);
     }
 
     @Test
     void loadsAllValuesFromFileOnly(@TempDir Path dir) throws IOException {
         Path configFile = writeJson(dir,
-                "{\"apiKey\":\"sk-file\",\"model\":\"claude-haiku\",\"maxTokens\":1024}");
+                "{\"apiKey\":\"sk-file\",\"provider\":\"anthropic\","
+                        + "\"model\":\"claude-haiku\",\"maxTokens\":1024}");
 
         ConfigLoader loader = new ConfigLoader(envOf(Map.of()), configFile);
         AppConfig config = loader.load();
 
         assertThat(config.apiKey()).isEqualTo("sk-file");
+        assertThat(config.provider()).isEqualTo(LlmProvider.ANTHROPIC);
         assertThat(config.model()).isEqualTo("claude-haiku");
         assertThat(config.maxTokens()).isEqualTo(1024);
     }
@@ -45,13 +48,15 @@ class ConfigLoaderTest {
                 "{\"apiKey\":\"sk-file\",\"model\":\"claude-haiku\",\"maxTokens\":1024}");
 
         ConfigLoader loader = new ConfigLoader(
-                envOf(Map.of("ANTHROPIC_API_KEY", "sk-env",
+                envOf(Map.of("CCLC_API_KEY", "sk-env",
+                        "CCLC_PROVIDER", "openai",
                         "CCLC_MODEL", "claude-opus",
                         "CCLC_MAX_TOKENS", "2048")),
                 configFile);
         AppConfig config = loader.load();
 
         assertThat(config.apiKey()).isEqualTo("sk-env");
+        assertThat(config.provider()).isEqualTo(LlmProvider.OPENAI);
         assertThat(config.model()).isEqualTo("claude-opus");
         assertThat(config.maxTokens()).isEqualTo(2048);
     }
@@ -62,20 +67,22 @@ class ConfigLoaderTest {
 
         assertThatThrownBy(loader::load)
                 .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("CCLC_API_KEY")
+                .hasMessageContaining("OPENAI_API_KEY")
                 .hasMessageContaining("ANTHROPIC_API_KEY");
     }
 
     @Test
     void treatsBlankEnvAsAbsent(@TempDir Path dir) throws IOException {
         Path configFile = writeJson(dir, "{\"apiKey\":\"sk-file\"}");
-        ConfigLoader loader = new ConfigLoader(envOf(Map.of("ANTHROPIC_API_KEY", "   ")), configFile);
+        ConfigLoader loader = new ConfigLoader(envOf(Map.of("CCLC_API_KEY", "   ")), configFile);
 
         assertThat(loader.load().apiKey()).isEqualTo("sk-file");
     }
 
     @Test
     void baseUrlAbsentByDefault() {
-        ConfigLoader loader = new ConfigLoader(envOf(Map.of("ANTHROPIC_API_KEY", "sk-env")), null);
+        ConfigLoader loader = new ConfigLoader(envOf(Map.of("CCLC_API_KEY", "sk-env")), null);
 
         assertThat(loader.load().baseUrlIfPresent()).isEmpty();
     }
@@ -94,7 +101,7 @@ class ConfigLoaderTest {
         Path configFile = writeJson(dir,
                 "{\"apiKey\":\"sk-file\",\"baseUrl\":\"https://from-file.example.com\"}");
         ConfigLoader loader = new ConfigLoader(
-                envOf(Map.of("ANTHROPIC_BASE_URL", "https://from-env.example.com")),
+                envOf(Map.of("CCLC_BASE_URL", "https://from-env.example.com")),
                 configFile);
 
         assertThat(loader.load().baseUrl()).isEqualTo("https://from-env.example.com");
@@ -102,7 +109,7 @@ class ConfigLoaderTest {
 
     @Test
     void defaultsPermissionModeToBypass() {
-        ConfigLoader loader = new ConfigLoader(envOf(Map.of("ANTHROPIC_API_KEY", "sk-env")), null);
+        ConfigLoader loader = new ConfigLoader(envOf(Map.of("CCLC_API_KEY", "sk-env")), null);
 
         assertThat(loader.load().permissionMode()).isEqualTo(PermissionMode.BYPASS);
     }
@@ -110,7 +117,7 @@ class ConfigLoaderTest {
     @Test
     void readsPermissionModeFromEnv() {
         ConfigLoader loader = new ConfigLoader(
-                envOf(Map.of("ANTHROPIC_API_KEY", "sk-env",
+                envOf(Map.of("CCLC_API_KEY", "sk-env",
                         "CCLC_PERMISSION_MODE", "plan")),
                 null);
 
@@ -129,13 +136,84 @@ class ConfigLoaderTest {
     @Test
     void invalidPermissionModeFailsFast() {
         ConfigLoader loader = new ConfigLoader(
-                envOf(Map.of("ANTHROPIC_API_KEY", "sk-env",
+                envOf(Map.of("CCLC_API_KEY", "sk-env",
                         "CCLC_PERMISSION_MODE", "WIDE_OPEN")),
                 null);
 
         assertThatThrownBy(loader::load)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("permissionMode");
+    }
+
+    @Test
+    void providerEnvOverridesFile(@TempDir Path dir) throws IOException {
+        Path configFile = writeJson(dir,
+                "{\"apiKey\":\"sk-file\",\"provider\":\"anthropic\"}");
+        ConfigLoader loader = new ConfigLoader(
+                envOf(Map.of("CCLC_PROVIDER", "openai")),
+                configFile);
+
+        assertThat(loader.load().provider()).isEqualTo(LlmProvider.OPENAI);
+    }
+
+    @Test
+    void anthropicProviderUsesAnthropicDefaultModel() {
+        ConfigLoader loader = new ConfigLoader(
+                envOf(Map.of("ANTHROPIC_API_KEY", "sk-env", "CCLC_PROVIDER", "anthropic")),
+                null);
+
+        AppConfig config = loader.load();
+
+        assertThat(config.provider()).isEqualTo(LlmProvider.ANTHROPIC);
+        assertThat(config.model()).isEqualTo(ConfigLoader.DEFAULT_ANTHROPIC_MODEL);
+    }
+
+    @Test
+    void apiKeyAliasesPreferGenericThenOpenAiThenAnthropic() {
+        ConfigLoader loader = new ConfigLoader(
+                envOf(Map.of(
+                        "CCLC_API_KEY", "sk-generic",
+                        "OPENAI_API_KEY", "sk-openai",
+                        "ANTHROPIC_API_KEY", "sk-anthropic")),
+                null);
+        ConfigLoader openAiOnly = new ConfigLoader(
+                envOf(Map.of(
+                        "OPENAI_API_KEY", "sk-openai",
+                        "ANTHROPIC_API_KEY", "sk-anthropic")),
+                null);
+        ConfigLoader anthropicOnly = new ConfigLoader(
+                envOf(Map.of("ANTHROPIC_API_KEY", "sk-anthropic")),
+                null);
+
+        assertThat(loader.load().apiKey()).isEqualTo("sk-generic");
+        assertThat(openAiOnly.load().apiKey()).isEqualTo("sk-openai");
+        assertThat(anthropicOnly.load().apiKey()).isEqualTo("sk-anthropic");
+    }
+
+    @Test
+    void baseUrlAliasesPreferGenericThenOpenAiThenAnthropic() {
+        ConfigLoader loader = new ConfigLoader(
+                envOf(Map.of(
+                        "CCLC_API_KEY", "sk-env",
+                        "CCLC_BASE_URL", "https://generic.example.com",
+                        "OPENAI_BASE_URL", "https://openai.example.com",
+                        "ANTHROPIC_BASE_URL", "https://anthropic.example.com")),
+                null);
+
+        assertThat(loader.load().baseUrl()).isEqualTo("https://generic.example.com");
+    }
+
+    @Test
+    void invalidProviderFailsFast() {
+        ConfigLoader loader = new ConfigLoader(
+                envOf(Map.of("CCLC_API_KEY", "sk-env", "CCLC_PROVIDER", "ollama")),
+                null);
+
+        assertThatThrownBy(loader::load)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("provider")
+                .hasMessageContaining("ANTHROPIC")
+                .hasMessageContaining("OPENAI");
     }
 
     private static Function<String, String> envOf(Map<String, String> entries) {

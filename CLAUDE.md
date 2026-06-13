@@ -12,14 +12,14 @@ Two living documents drive the work:
 
 ## Commands
 
-Maven 3.9+ and JDK 21 required. Set `ANTHROPIC_API_KEY` env var to run against real API.
+Maven 3.9+ and JDK 21 required. Set `CCLC_API_KEY` or `OPENAI_API_KEY` for the default OpenAI-compatible provider; set `CCLC_PROVIDER=anthropic` with `ANTHROPIC_API_KEY` for Anthropic.
 
 ```powershell
 mvn clean verify                                  # compile + unit tests + failsafe IT + jacoco
 mvn test                                          # unit tests only (surefire)
 mvn -Dtest=ConversationTest test                  # single test class
 mvn -Dtest=ConversationTest#appendsMessagesInOrder test   # single test method
-mvn verify -Psmoke                                # runs *SmokeIT.java (needs ANTHROPIC_API_KEY; skipped in CI)
+mvn verify -Psmoke                                # runs *SmokeIT.java (needs provider API key; skipped in CI)
 mvn exec:java                                     # launch CclcApplication REPL
 mvn exec:java -Dexec.args="--version"             # CLI flags
 ```
@@ -75,4 +75,4 @@ Tests are deliverable assets. Every task in `TASKLIST.md` flagged `[TDD]` must f
 
 ## Things explicitly out of scope (do not add)
 
-Per `DESIGN.md` §1.3 and §14.2: no Spring/Guice, no Lombok, no multi-provider LLM abstraction (Anthropic only), no Ink-like rich terminal UI, no multimodal input (text only for MVP), and no IDE bridge/plugin subsystem. Skill support is knowledge-only per `DESIGN.md` §16.4; do not add script execution or automatic Bash enablement through skills. Configuration is env vars + `~/.claude-code-j/config.json` — no annotations, no reflection-based DI.
+Per `DESIGN.md` §1.3 and §14.2: no Spring/Guice, no Lombok, no Ink-like rich terminal UI, no multimodal input (text only for MVP), and no IDE bridge/plugin subsystem. Multi-provider support is limited to the explicit OpenAI/Anthropic factories recorded in `DESIGN.md` §16.6. Skill support is knowledge-only per `DESIGN.md` §16.4; do not add script execution or automatic Bash enablement through skills. Configuration is env vars + `~/.claude-code-j/config.json` — no annotations, no reflection-based DI.

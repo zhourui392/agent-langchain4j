@@ -9,12 +9,14 @@ public record AppConfig(String apiKey,
                          String model,
                          int maxTokens,
                          String baseUrl,
-                         PermissionMode permissionMode) {
+                         PermissionMode permissionMode,
+                         LlmProvider provider) {
 
     public AppConfig {
         Objects.requireNonNull(apiKey, "apiKey");
         Objects.requireNonNull(model, "model");
         Objects.requireNonNull(permissionMode, "permissionMode");
+        Objects.requireNonNull(provider, "provider");
         if (apiKey.isBlank()) {
             throw new IllegalArgumentException("apiKey must not be blank");
         }
@@ -24,11 +26,16 @@ public record AppConfig(String apiKey,
     }
 
     public AppConfig(String apiKey, String model, int maxTokens) {
-        this(apiKey, model, maxTokens, null, PermissionMode.BYPASS);
+        this(apiKey, model, maxTokens, null, PermissionMode.BYPASS, LlmProvider.OPENAI);
     }
 
     public AppConfig(String apiKey, String model, int maxTokens, String baseUrl) {
-        this(apiKey, model, maxTokens, baseUrl, PermissionMode.BYPASS);
+        this(apiKey, model, maxTokens, baseUrl, PermissionMode.BYPASS, LlmProvider.OPENAI);
+    }
+
+    public AppConfig(String apiKey, String model, int maxTokens, String baseUrl,
+                     PermissionMode permissionMode) {
+        this(apiKey, model, maxTokens, baseUrl, permissionMode, LlmProvider.OPENAI);
     }
 
     public Optional<String> baseUrlIfPresent() {

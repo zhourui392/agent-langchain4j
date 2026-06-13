@@ -15,15 +15,19 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@EnabledIfEnvironmentVariable(named = "ANTHROPIC_API_KEY", matches = ".+")
-class EndToEndSmokeIT {
+@EnabledIfEnvironmentVariable(named = "CCLC_API_KEY", matches = ".+")
+class OpenAiEndToEndSmokeIT {
 
     @Test
-    void sayHelloReachesAnthropicAndReturnsNonEmptyText() {
-        AppConfig config = anthropicConfig();
-        LangChain4jLlmClient client = AnthropicLlmClientFactory
-                .withCacheEnabled()
-                .create(config);
+    void sayHelloReachesOpenAiCompatibleEndpointAndReturnsNonEmptyText() {
+        AppConfig config = new AppConfig(
+                System.getenv("CCLC_API_KEY"),
+                ConfigLoader.DEFAULT_OPENAI_MODEL,
+                ConfigLoader.DEFAULT_MAX_TOKENS,
+                openAiBaseUrl(),
+                PermissionMode.BYPASS,
+                LlmProvider.OPENAI);
+        LangChain4jLlmClient client = LlmClientFactories.create(config);
 
         ChatRequest request = ChatRequest.builder()
                 .systemPrompt("You are a brief assistant. Reply in 5 words or less.")
@@ -43,20 +47,10 @@ class EndToEndSmokeIT {
         assertThat(completed.get().text()).as("response is non-empty").isNotBlank();
     }
 
-    private static AppConfig anthropicConfig() {
-        return new AppConfig(
-                System.getenv("ANTHROPIC_API_KEY"),
-                anthropicModel(),
-                ConfigLoader.DEFAULT_MAX_TOKENS,
-                System.getenv("ANTHROPIC_BASE_URL"),
-                PermissionMode.BYPASS,
-                LlmProvider.ANTHROPIC);
-    }
-
-    private static String anthropicModel() {
-        String configured = System.getenv("CCLC_MODEL");
+    private static String openAiBaseUrl() {
+        String configured = System.getenv("CCLC_BASE_URL");
         return configured == null || configured.isBlank()
-                ? ConfigLoader.DEFAULT_ANTHROPIC_MODEL
+                ? "https://www.packyapi.com/v1"
                 : configured;
     }
 }

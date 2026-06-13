@@ -6,7 +6,7 @@ import dev.langchain4j.model.anthropic.AnthropicStreamingChatModel;
 import java.time.Duration;
 import java.util.Objects;
 
-public final class AnthropicLlmClientFactory {
+public final class AnthropicLlmClientFactory implements LlmClientFactory {
 
     private final CacheBreakpointStrategy cacheStrategy;
 
@@ -18,6 +18,7 @@ public final class AnthropicLlmClientFactory {
         return new AnthropicLlmClientFactory(CacheBreakpointStrategy.enabled());
     }
 
+    @Override
     public LangChain4jLlmClient create(AppConfig config) {
         Objects.requireNonNull(config, "config");
         var builder = AnthropicStreamingChatModel.builder()

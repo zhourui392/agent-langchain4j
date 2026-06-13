@@ -7,10 +7,12 @@ import com.anthropic.cclc.domain.message.AiMessage;
 import com.anthropic.cclc.domain.message.ChatMessage;
 import com.anthropic.cclc.domain.message.ToolResultMessage;
 import com.anthropic.cclc.domain.message.UserMessage;
+import com.anthropic.cclc.domain.permission.PermissionMode;
 import com.anthropic.cclc.domain.tool.ExecutionContext;
 import com.anthropic.cclc.domain.tool.ToolRegistry;
 import com.anthropic.cclc.infrastructure.config.AppConfig;
 import com.anthropic.cclc.infrastructure.config.ConfigLoader;
+import com.anthropic.cclc.infrastructure.config.LlmProvider;
 import com.anthropic.cclc.infrastructure.llm.AnthropicLlmClientFactory;
 import com.anthropic.cclc.infrastructure.llm.LangChain4jLlmClient;
 import com.anthropic.cclc.infrastructure.tools.BashTool;
@@ -28,7 +30,7 @@ class AgentExecutorBashSmokeIT {
 
     @Test
     void runsBashToolThroughRealAnthropic() throws Exception {
-        AppConfig config = ConfigLoader.fromSystem().load();
+        AppConfig config = anthropicConfig();
         LangChain4jLlmClient llm = AnthropicLlmClientFactory.withCacheEnabled().create(config);
         ToolRegistry tools = new ToolRegistry().register(new BashTool());
 
@@ -62,6 +64,23 @@ class AgentExecutorBashSmokeIT {
                     throw new IllegalStateException("interactive prompter must not run in smoke IT");
                 },
                 com.anthropic.cclc.domain.permission.PermissionMode.BYPASS);
+    }
+
+    private static AppConfig anthropicConfig() {
+        return new AppConfig(
+                System.getenv("ANTHROPIC_API_KEY"),
+                anthropicModel(),
+                ConfigLoader.DEFAULT_MAX_TOKENS,
+                System.getenv("ANTHROPIC_BASE_URL"),
+                PermissionMode.BYPASS,
+                LlmProvider.ANTHROPIC);
+    }
+
+    private static String anthropicModel() {
+        String configured = System.getenv("CCLC_MODEL");
+        return configured == null || configured.isBlank()
+                ? ConfigLoader.DEFAULT_ANTHROPIC_MODEL
+                : configured;
     }
 
     private static java.util.List<ToolResultMessage> toolResults(Conversation conversation) {
