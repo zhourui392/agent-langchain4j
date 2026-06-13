@@ -1,6 +1,8 @@
 package com.anthropic.cclc.infrastructure.llm;
 
+import ch.qos.logback.classic.Level;
 import com.anthropic.cclc.infrastructure.config.AppConfig;
+import com.anthropic.cclc.testsupport.LogCapture;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -31,6 +33,19 @@ class PromptCacheTest {
         CacheBreakpointStrategy strategy = CacheBreakpointStrategy.systemOnly();
         assertThat(strategy.cacheSystemPrompt()).isTrue();
         assertThat(strategy.cacheToolDefinitions()).isFalse();
+    }
+
+    @Test
+    void strategyLogsCacheBreakpointSegmentsAtDebugLevel() {
+        try (LogCapture logs = LogCapture.forClass(CacheBreakpointStrategy.class, Level.DEBUG)) {
+            CacheBreakpointStrategy.enabled();
+
+            assertThat(logs.events()).anySatisfy(event ->
+                    assertThat(event.getFormattedMessage())
+                            .contains("cache breakpoint strategy configured")
+                            .contains("systemPrompt=true")
+                            .contains("toolDefinitions=true"));
+        }
     }
 
     @Test
