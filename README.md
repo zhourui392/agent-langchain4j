@@ -44,6 +44,7 @@ Spring / Guice / Lombok、多 LLM provider 抽象、Ink 风格 TUI、多模态�
    - `CCLC_MODEL`（默认 `claude-sonnet-4-6`）
    - `CCLC_MAX_TOKENS`
    - `CCLC_PERMISSION_MODE`（DEFAULT / PLAN / BYPASS / AUTO，默认 `BYPASS`）
+   - `CCLC_SKILLS_DIR`（可选，指向 `skills-root`，加载 `<name>/SKILL.md` 知识型 Skill）
 2. `~/.claude-code-j/config.json`
    ```json
    {
@@ -53,6 +54,8 @@ Spring / Guice / Lombok、多 LLM provider 抽象、Ink 风格 TUI、多模态�
      "permissionMode": "BYPASS"
    }
    ```
+
+Skill 编写契约见 [docs/skill-authoring.md](docs/skill-authoring.md)。
 
 **权限模式速查**
 
@@ -89,7 +92,7 @@ JaCoCo 报告：`cclc-*/target/site/jacoco/index.html`。
 
 ## 测试覆盖
 
-- 422 unit + ArchUnit，全绿（0 skip）
+- 426 unit + ArchUnit，全绿（0 skip）
 - 3 个 SmokeIT 真实 API 验证：纯对话 / 显式工具 / 隐式工具选择
 
 ## 目录速查

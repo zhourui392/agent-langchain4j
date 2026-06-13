@@ -38,6 +38,14 @@ class SkillTest {
     }
 
     @Test
+    void rejectsBaseDirectoryThatDoesNotMatchName() {
+        assertThatThrownBy(() -> new Skill("es-slow-query", "valid description", "body",
+                Path.of("skills/trade-refund-trace")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("directory");
+    }
+
+    @Test
     void rejectsBlankDescription() {
         assertThatThrownBy(() -> buildSkill("es-slow-query", " ", "body"))
                 .isInstanceOf(IllegalArgumentException.class)

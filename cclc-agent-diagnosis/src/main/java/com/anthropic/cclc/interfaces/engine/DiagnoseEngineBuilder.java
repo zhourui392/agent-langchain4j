@@ -22,6 +22,8 @@ import com.anthropic.cclc.infrastructure.tools.TruncatingTool;
 import com.anthropic.cclc.infrastructure.tools.governance.GovernedTool;
 import com.anthropic.cclc.infrastructure.tools.governance.ToolGovernance;
 import com.anthropic.cclc.infrastructure.tools.support.ToolResultTruncator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
 import java.util.Objects;
@@ -33,6 +35,9 @@ import java.util.Objects;
  * @since 2026-06-11
  */
 public final class DiagnoseEngineBuilder {
+
+    private static final int SKILL_CATALOG_WARN_THRESHOLD = 50;
+    private static final Logger log = LoggerFactory.getLogger(DiagnoseEngineBuilder.class);
 
     private LlmClient llm;
     private ToolRegistry tools = new ToolRegistry();
@@ -61,6 +66,7 @@ public final class DiagnoseEngineBuilder {
 
     public DiagnoseEngineBuilder tools(ToolRegistry tools) {
         this.tools = Objects.requireNonNull(tools, "tools");
+        registerSkillTool();
         return this;
     }
 
@@ -131,6 +137,7 @@ public final class DiagnoseEngineBuilder {
 
     public DiagnoseEngineBuilder skills(Path root) {
         this.skills = SkillCatalog.of(new DirectorySkillSource(root, new SkillFrontmatterParser()).load());
+        warnIfSkillCatalogIsLarge(root);
         registerSkillTool();
         return this;
     }
@@ -158,5 +165,13 @@ public final class DiagnoseEngineBuilder {
 
     private String renderSkillCatalog() {
         return skills == null ? "" : skills.renderCatalog();
+    }
+
+    private void warnIfSkillCatalogIsLarge(Path root) {
+        if (skills.names().size() <= SKILL_CATALOG_WARN_THRESHOLD) {
+            return;
+        }
+        log.warn("loaded {} skills from {}; catalog prompt may be large",
+                skills.names().size(), root);
     }
 }

@@ -2,7 +2,7 @@
 
 > @author zhourui(V33215020)
 > @since 2026-06-13
-> 状态：待评审。落地前需在 `DESIGN.md` §16 追加 dated decision（见 §1.2 草案），推翻原 out-of-scope 决策。
+> 状态：已落地。`DESIGN.md` §16.4 已追加 dated decision，推翻原 out-of-scope 决策。
 
 ---
 
@@ -17,7 +17,7 @@
   3. **无层级结构**：SOP 引用的附属资料（表结构说明、错误码对照表）只能内联，进一步放大注入体积。
 - 该决策文档同时预留了反悔通道：「若未来确需引入 Skill 子系统，必须先在 DESIGN.md 第 16 节记录推翻原决策的 dated decision」。本设计即该通道的执行产物。
 
-### 1.2 DESIGN.md §16.4 决策草案（评审通过后合入）
+### 1.2 DESIGN.md §16.4 决策（已合入）
 
 ```markdown
 ### 16.4 引入 Skill 子系统（2026-06-13）

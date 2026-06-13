@@ -80,6 +80,22 @@ class DirectorySkillSourceTest {
                 .hasMessageContaining("skills root");
     }
 
+    @Test
+    void failFastMessageIncludesSkillFileWhenDomainValidationFails(@TempDir Path root) throws IOException {
+        writeSkill(root.resolve("es-slow-query"), """
+                ---
+                description: Diagnose slow ES queries.
+                ---
+
+                """);
+        DirectorySkillSource source = new DirectorySkillSource(root, new SkillFrontmatterParser());
+
+        assertThatThrownBy(source::load)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("SKILL.md")
+                .hasMessageContaining("body");
+    }
+
     private static void writeSkill(Path directory, String content) throws IOException {
         Files.createDirectories(directory);
         Files.writeString(directory.resolve("SKILL.md"), content);

@@ -36,7 +36,7 @@ class CclcApplicationTest {
         String help = captureStdout(() -> CclcApplication.main(new String[]{"--help"}));
 
         assertThat(version).contains("claude-code-langchain4j", CclcApplication.version());
-        assertThat(help).contains("Usage:", "ANTHROPIC_API_KEY");
+        assertThat(help).contains("Usage:", "ANTHROPIC_API_KEY", "CCLC_SKILLS_DIR");
     }
 
     @Test

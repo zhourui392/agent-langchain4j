@@ -17,8 +17,13 @@ import com.anthropic.cclc.infrastructure.diagnosis.DiagnosisToolPolicy;
 import com.anthropic.cclc.infrastructure.tools.support.HttpReader;
 import com.anthropic.cclc.testsupport.StubLlmClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -196,12 +201,77 @@ class DiagnoseEngineBuilderTest {
     }
 
     @Test
+    void skillsStayRegisteredWhenCustomToolsAreConfiguredAfterSkills(@TempDir Path skillsRoot) throws IOException {
+        writeSkill(skillsRoot.resolve("es-slow-query"), """
+                ---
+                description: Diagnose slow ES queries.
+                ---
+                # ES Slow Query
+                """);
+        StubLlmClient llm = new StubLlmClient()
+                .enqueue(new AiMessage("", List.of(new ToolUseRequest(
+                        new ToolUseId("skill-1"),
+                        "Skill",
+                        "{\"skill\":\"es-slow-query\"}"))))
+                .enqueue(AiMessage.text("done"));
+        DiagnoseEngine engine = DiagnoseEngineBuilder.create()
+                .llm(llm)
+                .skills(skillsRoot)
+                .tools(new ToolRegistry())
+                .build();
+        List<String> lines = new ArrayList<>();
+
+        engine.runStream(RunRequest.builder()
+                .workingDir(".")
+                .userMessage("ES query timeout")
+                .sessionId("s-skill-order")
+                .build(), lines::add, ignored -> {
+                });
+
+        assertThat(lines).anySatisfy(line -> assertThat(line)
+                .contains("# Skill: es-slow-query")
+                .contains("# ES Slow Query"));
+    }
+
+    @Test
     void skillsFailsFastWhenRootIsInvalid(@TempDir Path dir) {
         Path missing = dir.resolve("missing");
 
         assertThatThrownBy(() -> DiagnoseEngineBuilder.create().skills(missing))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("skills root");
+    }
+
+    @Test
+    void skillsWarnsButBuildsWhenCatalogIsLarge(@TempDir Path skillsRoot) throws IOException {
+        for (int i = 0; i < 51; i++) {
+            writeSkill(skillsRoot.resolve("skill-" + i), """
+                    ---
+                    description: Diagnose scenario %d.
+                    ---
+                    # Scenario
+                    """.formatted(i));
+        }
+        Logger logger = (Logger) LoggerFactory.getLogger(DiagnoseEngineBuilder.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+
+        try {
+            DiagnoseEngine engine = DiagnoseEngineBuilder.create()
+                    .llm(new StubLlmClient().enqueue(AiMessage.text("done")))
+                    .skills(skillsRoot)
+                    .build();
+
+            assertThat(engine).isNotNull();
+            assertThat(appender.list).anySatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.WARN);
+                assertThat(event.getFormattedMessage()).contains("51", "skills");
+            });
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
     }
 
     @Test

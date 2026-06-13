@@ -235,7 +235,7 @@ public final class CclcApplication {
                   --help, -h      Print this help
 
                 Required env: ANTHROPIC_API_KEY
-                Optional env:  CCLC_MODEL, CCLC_MAX_TOKENS
+                Optional env:  CCLC_MODEL, CCLC_MAX_TOKENS, CCLC_SKILLS_DIR
                 Config file:   ~/.claude-code-j/config.json (apiKey/model/maxTokens)""");
     }
 

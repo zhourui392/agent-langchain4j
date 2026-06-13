@@ -56,7 +56,16 @@ public final class DirectorySkillSource implements SkillSource {
         SkillFrontmatterParser.ParsedSkill parsed = parseSkillFile(normalized);
         String skillName = parsed.name().orElse(directoryName);
         validateDirectoryName(directoryName, skillName);
-        return new Skill(skillName, parsed.description(), parsed.body(), normalized);
+        return createSkill(skillName, parsed, normalized);
+    }
+
+    private Skill createSkill(String skillName, SkillFrontmatterParser.ParsedSkill parsed, Path directory) {
+        try {
+            return new Skill(skillName, parsed.description(), parsed.body(), directory);
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("invalid skill file: " + directory.resolve(SKILL_FILE)
+                    + " - " + ex.getMessage(), ex);
+        }
     }
 
     private SkillFrontmatterParser.ParsedSkill parseSkillFile(Path directory) {

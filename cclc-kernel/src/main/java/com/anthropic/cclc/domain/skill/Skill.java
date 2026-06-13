@@ -28,6 +28,7 @@ public record Skill(String name, String description, String body, Path baseDir) 
         validateDescription(description);
         validateBody(body);
         baseDir = baseDir.normalize();
+        validateBaseDir(name, baseDir);
     }
 
     public static boolean isValidName(String name) {
@@ -49,6 +50,13 @@ public record Skill(String name, String description, String body, Path baseDir) 
     private static void validateBody(String body) {
         if (body.isBlank() || body.length() > MAX_BODY_LENGTH) {
             throw new IllegalArgumentException("skill body must be 1..65536 characters");
+        }
+    }
+
+    private static void validateBaseDir(String name, Path baseDir) {
+        Path fileName = baseDir.getFileName();
+        if (fileName == null || !name.equals(fileName.toString())) {
+            throw new IllegalArgumentException("skill name must match directory: " + name);
         }
     }
 }
