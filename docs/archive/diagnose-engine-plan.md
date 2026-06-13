@@ -87,7 +87,7 @@ agent-web 的统一前端契约就是 **Claude CLI `--output-format stream-json 
 
 因此 `NativeAgentGateway` 的 `normalizeChunk` 也是 **pass-through**——引擎直接产出统一契约。需要对齐的事件（最终以 D0 采集的真实样本为准）：
 
-> 逐字段权威契约见 [`docs/samples/README.md`](samples/README.md)（基于 agent-web 消费侧实测）。下表为骨架速览。
+> 逐字段权威契约见 [`docs/samples/README.md`](../samples/README.md)（基于 agent-web 消费侧实测）。下表为骨架速览。
 
 | 时机 | 事件骨架 | 来源钩子 |
 |---|---|---|

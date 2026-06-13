@@ -10,7 +10,7 @@
 
 ### 1.1 现状
 
-- `DESIGN.md` §1.3 将 Skill 子系统列为 out of scope；`docs/diagnosis-agent-capability-design.md` §5.1（2026-06-11 决策）以 PromptPack 替代：每个场景一份 markdown SOP，`SystemPromptComposer` 全量拼入 system prompt。
+- `DESIGN.md` §1.3 将 Skill 子系统列为 out of scope；`docs/archive/diagnosis-agent-capability-design.md` §5.1（2026-06-11 决策）以 PromptPack 替代：每个场景一份 markdown SOP，`SystemPromptComposer` 全量拼入 system prompt。
 - PromptPack 的局限在引擎接入更多业务场景后暴露：
   1. **无条件注入**：所有 SOP 不论本次诊断是否用到，都占 system prompt token；场景增多后线性膨胀。
   2. **无选择能力**：模型无法按问题特征挑选 SOP，只能靠宿主在 `promptPacks(Path)` 装配期预选目录。
@@ -23,7 +23,7 @@
 ### 16.4 引入 Skill 子系统（2026-06-13）
 
 推翻 §1.3 中「Skill 子系统 out of scope」与 capability-design §5.1 中「MVP 不引入可执行 Skill 机制」两项决策。
-动机：PromptPack 全量注入随场景数线性膨胀，模型无按需取用能力。完整方案见 docs/skill-mechanism-design.md。
+动机：PromptPack 全量注入随场景数线性膨胀，模型无按需取用能力。完整方案见 docs/archive/skill-mechanism-design.md。
 
 | 议题 | 决策 | 影响 |
 |---|---|---|

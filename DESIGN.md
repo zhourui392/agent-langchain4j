@@ -420,8 +420,14 @@ claude-code-langchain4j/
 │       └── interfaces/cli/              ← CclcApplication、JLine REPL、渲染
 │
 └── docs/
-    ├── agent-platform-layering-design.md
-    └── diagnosis-agent-capability-design.md
+    ├── archive/
+    │   ├── agent-platform-layering-design.md
+    │   ├── diagnose-engine-plan.md
+    │   ├── diagnosis-agent-capability-design.md
+    │   ├── engine-integration-hardening-plan.md
+    │   └── skill-mechanism-design.md
+    ├── samples/
+    └── skill-authoring.md
 ```
 
 ---
@@ -533,7 +539,7 @@ claude-code-langchain4j/
 
 ### 16.1 定位转变：进程内诊断引擎（2026-06-08）
 
-本项目从「claude-code CLI 复刻」转为 **agent-web 的进程内只读诊断引擎**。完整方案见 [`docs/diagnose-engine-plan.md`](docs/diagnose-engine-plan.md)，wire 契约见 [`docs/samples/README.md`](docs/samples/README.md)。
+本项目从「claude-code CLI 复刻」转为 **agent-web 的进程内只读诊断引擎**。完整方案见 [`docs/archive/diagnose-engine-plan.md`](docs/archive/diagnose-engine-plan.md)，wire 契约见 [`docs/samples/README.md`](docs/samples/README.md)。
 
 | 议题 | 决策 | 影响 |
 |---|---|---|
@@ -546,7 +552,7 @@ claude-code-langchain4j/
 
 ### 16.2 双层产品形态与三模块拆分（2026-06-11）
 
-本项目从单 Maven jar 拆为 **通用 Agent 底座 + 诊断专用 Agent + CLI 调试壳**。完整方案见 [`docs/agent-platform-layering-design.md`](docs/agent-platform-layering-design.md)。
+本项目从单 Maven jar 拆为 **通用 Agent 底座 + 诊断专用 Agent + CLI 调试壳**。完整方案见 [`docs/archive/agent-platform-layering-design.md`](docs/archive/agent-platform-layering-design.md)。
 
 | 议题 | 决策 | 影响 |
 |---|---|---|
@@ -565,7 +571,7 @@ claude-code-langchain4j/
 
 ### 16.4 引入 Skill 子系统（2026-06-13）
 
-推翻 §1.3 中「Skill 子系统 out of scope」与 capability-design §5.1 中「MVP 不引入可执行 Skill 机制」两项决策。动机：PromptPack 全量注入随场景数线性膨胀，模型无按需取用能力。完整方案见 [`docs/skill-mechanism-design.md`](docs/skill-mechanism-design.md)。
+推翻 §1.3 中「Skill 子系统 out of scope」与 capability-design §5.1 中「MVP 不引入可执行 Skill 机制」两项决策。动机：PromptPack 全量注入随场景数线性膨胀，模型无按需取用能力。完整方案见 [`docs/archive/skill-mechanism-design.md`](docs/archive/skill-mechanism-design.md)。
 
 | 议题 | 决策 | 影响 |
 |---|---|---|
@@ -576,7 +582,7 @@ claude-code-langchain4j/
 
 ### 16.5 引擎宿主集成强化（2026-06-13）
 
-完整方案见 [`docs/engine-integration-hardening-plan.md`](docs/engine-integration-hardening-plan.md)。
+完整方案见 [`docs/archive/engine-integration-hardening-plan.md`](docs/archive/engine-integration-hardening-plan.md)。
 
 | 议题 | 决策 | 影响 |
 |---|---|---|
@@ -595,7 +601,7 @@ claude-code-langchain4j/
 |---|---|---|
 | provider 选择 | `CCLC_PROVIDER` / config `provider` 支持 `OPENAI`、`ANTHROPIC`，默认 `OPENAI` | 本地默认走 OpenAI-compatible endpoint；旧 Anthropic 用户需显式 `CCLC_PROVIDER=anthropic` |
 | 凭据别名 | API key 依次读取 `CCLC_API_KEY`、`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`；baseUrl 依次读取 `CCLC_BASE_URL`、`OPENAI_BASE_URL`、`ANTHROPIC_BASE_URL` | 兼容旧环境变量，同时提供 provider-neutral 配置 |
-| 默认模型 | OpenAI 默认 `gpt-5`；Anthropic 默认 `claude-sonnet-4-6` | `CCLC_MODEL` 仍可覆盖 |
+| 默认模型 | OpenAI 默认 `gpt-5.5`；Anthropic 默认 `claude-sonnet-4-6` | `CCLC_MODEL` 仍可覆盖 |
 | 实现边界 | `LangChain4jLlmClient` 继续依赖通用 `StreamingChatModel`；provider 差异只在工厂层 | 主循环、消息映射、工具 schema、权限链不改 |
 | prompt cache | Anthropic 工厂保留 `CacheBreakpointStrategy`；OpenAI 工厂不设置 prompt-cache marker | OpenAI 路径 cache token 统计保持 0，不估算 |
 
