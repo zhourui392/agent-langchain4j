@@ -22,7 +22,7 @@ class OpenAiEndToEndSmokeIT {
     void sayHelloReachesOpenAiCompatibleEndpointAndReturnsNonEmptyText() {
         AppConfig config = new AppConfig(
                 System.getenv("CCLC_API_KEY"),
-                ConfigLoader.DEFAULT_OPENAI_MODEL,
+                openAiModel(),
                 ConfigLoader.DEFAULT_MAX_TOKENS,
                 openAiBaseUrl(),
                 PermissionMode.BYPASS,
@@ -51,6 +51,13 @@ class OpenAiEndToEndSmokeIT {
         String configured = System.getenv("CCLC_BASE_URL");
         return configured == null || configured.isBlank()
                 ? "https://www.packyapi.com/v1"
+                : configured;
+    }
+
+    private static String openAiModel() {
+        String configured = System.getenv("CCLC_MODEL");
+        return configured == null || configured.isBlank()
+                ? ConfigLoader.DEFAULT_OPENAI_MODEL
                 : configured;
     }
 }

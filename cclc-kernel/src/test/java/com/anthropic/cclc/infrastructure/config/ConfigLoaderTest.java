@@ -23,7 +23,7 @@ class ConfigLoaderTest {
 
         assertThat(config.apiKey()).isEqualTo("sk-env");
         assertThat(config.provider()).isEqualTo(LlmProvider.OPENAI);
-        assertThat(config.model()).isEqualTo(ConfigLoader.DEFAULT_OPENAI_MODEL);
+        assertThat(config.model()).isEqualTo("gpt-5.5");
         assertThat(config.maxTokens()).isEqualTo(ConfigLoader.DEFAULT_MAX_TOKENS);
     }
 

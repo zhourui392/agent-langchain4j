@@ -13,7 +13,7 @@ class LlmClientFactoriesTest {
     void createsOpenAiClientFromProviderConfig() {
         AppConfig config = new AppConfig(
                 "sk-fake-for-build-test",
-                "gpt-5",
+                "gpt-5.5",
                 1024,
                 "https://www.packyapi.com/v1",
                 PermissionMode.BYPASS,

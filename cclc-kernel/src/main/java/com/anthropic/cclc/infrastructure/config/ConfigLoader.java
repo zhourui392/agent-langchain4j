@@ -18,7 +18,7 @@ public final class ConfigLoader {
     static final String ENV_MAX_TOKENS = "CCLC_MAX_TOKENS";
     static final String ENV_PERMISSION_MODE = "CCLC_PERMISSION_MODE";
 
-    public static final String DEFAULT_OPENAI_MODEL = "gpt-5";
+    public static final String DEFAULT_OPENAI_MODEL = "gpt-5.5";
     public static final String DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6";
     public static final int DEFAULT_MAX_TOKENS = 8192;
     static final PermissionMode DEFAULT_PERMISSION_MODE = PermissionMode.BYPASS;
