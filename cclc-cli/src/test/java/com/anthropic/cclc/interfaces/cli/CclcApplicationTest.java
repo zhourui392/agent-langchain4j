@@ -55,7 +55,7 @@ class CclcApplicationTest {
         @SuppressWarnings("unchecked")
         List<ContextProvider> providers = (List<ContextProvider>) invoke("contextProviders", new Class<?>[]{});
         assertThat(providers).extracting(ContextProvider::key)
-                .containsExactly("claude_md", "cwd", "date", "git_status");
+                .containsExactly("agents_md", "cwd", "date", "git_status");
     }
 
     @Test

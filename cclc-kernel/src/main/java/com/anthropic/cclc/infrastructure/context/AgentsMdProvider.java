@@ -11,13 +11,13 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
-public final class ClaudeMdProvider implements ContextProvider {
+public final class AgentsMdProvider implements ContextProvider {
 
-    private static final String FILENAME = "CLAUDE.md";
+    private static final String FILENAME = "AGENTS.md";
 
     @Override
     public String key() {
-        return "claude_md";
+        return "agents_md";
     }
 
     @Override

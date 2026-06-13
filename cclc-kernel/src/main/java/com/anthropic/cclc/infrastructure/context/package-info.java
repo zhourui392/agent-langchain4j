@@ -1,4 +1,4 @@
 /**
- * Infrastructure：上下文提供者（ClaudeMdProvider、GitStatusProvider、CwdProvider、DateProvider）。
+ * Infrastructure：上下文提供者（AgentsMdProvider、GitStatusProvider、CwdProvider、DateProvider）。
  */
 package com.anthropic.cclc.infrastructure.context;

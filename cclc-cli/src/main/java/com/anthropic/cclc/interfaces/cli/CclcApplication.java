@@ -19,7 +19,7 @@ import com.anthropic.cclc.domain.tool.Tool;
 import com.anthropic.cclc.domain.tool.ToolRegistry;
 import com.anthropic.cclc.infrastructure.config.AppConfig;
 import com.anthropic.cclc.infrastructure.config.ConfigLoader;
-import com.anthropic.cclc.infrastructure.context.ClaudeMdProvider;
+import com.anthropic.cclc.infrastructure.context.AgentsMdProvider;
 import com.anthropic.cclc.infrastructure.context.CwdProvider;
 import com.anthropic.cclc.infrastructure.context.DateProvider;
 import com.anthropic.cclc.infrastructure.context.GitStatusProvider;
@@ -150,7 +150,7 @@ public final class CclcApplication {
 
     private static List<ContextProvider> contextProviders(java.util.Optional<SkillCatalog> skills) {
         List<ContextProvider> providers = new java.util.ArrayList<>(List.of(
-                new ClaudeMdProvider(),
+                new AgentsMdProvider(),
                 new CwdProvider(),
                 new DateProvider(),
                 new GitStatusProvider()));

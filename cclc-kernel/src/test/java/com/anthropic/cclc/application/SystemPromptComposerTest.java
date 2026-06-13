@@ -1,7 +1,7 @@
 package com.anthropic.cclc.application;
 
 import com.anthropic.cclc.application.SystemPromptComposer.SystemPrompt;
-import com.anthropic.cclc.infrastructure.context.ClaudeMdProvider;
+import com.anthropic.cclc.infrastructure.context.AgentsMdProvider;
 import com.anthropic.cclc.infrastructure.context.CwdProvider;
 import com.anthropic.cclc.infrastructure.context.DateProvider;
 import org.junit.jupiter.api.Test;
@@ -21,11 +21,11 @@ class SystemPromptComposerTest {
 
     @Test
     void producesStablePrefixAcrossInvocations(@TempDir Path dir) throws IOException {
-        Files.writeString(dir.resolve("CLAUDE.md"), "stable guidance");
+        Files.writeString(dir.resolve("AGENTS.md"), "stable guidance");
 
         SystemPromptComposer composer = new SystemPromptComposer(
                 "system instructions",
-                List.of(new ClaudeMdProvider(),
+                List.of(new AgentsMdProvider(),
                         new DateProvider(fixedClock("2026-05-17T00:00:00Z"))));
 
         SystemPrompt first = composer.compose(dir);
@@ -68,10 +68,10 @@ class SystemPromptComposerTest {
 
     @Test
     void emptyDynamicProducesNoMarker(@TempDir Path dir) throws IOException {
-        Files.writeString(dir.resolve("CLAUDE.md"), "guide");
+        Files.writeString(dir.resolve("AGENTS.md"), "guide");
         SystemPromptComposer composer = new SystemPromptComposer(
                 "instructions",
-                List.of(new ClaudeMdProvider()));
+                List.of(new AgentsMdProvider()));
 
         SystemPrompt prompt = composer.compose(dir);
 

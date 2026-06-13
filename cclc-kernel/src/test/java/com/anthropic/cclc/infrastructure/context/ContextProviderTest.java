@@ -17,23 +17,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ContextProviderTest {
 
     @Test
-    void claudeMdProviderReadsFromCwd(@TempDir Path dir) throws IOException {
-        Files.writeString(dir.resolve("CLAUDE.md"), "project-specific guide");
+    void agentsMdProviderReadsFromCwd(@TempDir Path dir) throws IOException {
+        Files.writeString(dir.resolve("AGENTS.md"), "project-specific guide");
 
-        Optional<String> result = new ClaudeMdProvider().provide(dir);
+        Optional<String> result = new AgentsMdProvider().provide(dir);
 
         assertThat(result).isPresent();
         assertThat(result.get()).contains("project-specific guide");
     }
 
     @Test
-    void claudeMdProviderMergesParentDirectories(@TempDir Path root) throws IOException {
-        Files.writeString(root.resolve("CLAUDE.md"), "ROOT guidance");
+    void agentsMdProviderMergesParentDirectories(@TempDir Path root) throws IOException {
+        Files.writeString(root.resolve("AGENTS.md"), "ROOT guidance");
         Path child = root.resolve("project");
         Files.createDirectories(child);
-        Files.writeString(child.resolve("CLAUDE.md"), "PROJECT guidance");
+        Files.writeString(child.resolve("AGENTS.md"), "PROJECT guidance");
 
-        Optional<String> result = new ClaudeMdProvider().provide(child);
+        Optional<String> result = new AgentsMdProvider().provide(child);
 
         assertThat(result).isPresent();
         String content = result.get();
@@ -44,8 +44,8 @@ class ContextProviderTest {
     }
 
     @Test
-    void claudeMdProviderReturnsEmptyWhenAbsent(@TempDir Path dir) {
-        Optional<String> result = new ClaudeMdProvider().provide(dir);
+    void agentsMdProviderReturnsEmptyWhenAbsent(@TempDir Path dir) {
+        Optional<String> result = new AgentsMdProvider().provide(dir);
         assertThat(result).isEmpty();
     }
 
