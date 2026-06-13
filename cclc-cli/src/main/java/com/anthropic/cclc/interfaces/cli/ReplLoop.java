@@ -6,7 +6,12 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class ReplLoop {
+
+    private static final Logger log = LoggerFactory.getLogger(ReplLoop.class);
 
     private static final String PROMPT = "cclc> ";
     private static final String CONTINUE_PROMPT = "    > ";
@@ -28,12 +33,16 @@ public final class ReplLoop {
             }
             String text = input.get();
             if (text.isBlank()) {
+                log.debug("repl input skipped: chars=0");
                 continue;
             }
             String trimmed = text.trim();
             if ("exit".equalsIgnoreCase(trimmed) || "quit".equalsIgnoreCase(trimmed)) {
+                log.info("repl exit command received: command={}", trimmed.toLowerCase());
                 return;
             }
+            log.debug("repl input accepted: chars={}, multiline={}, fenced={}",
+                    text.length(), text.contains("\n"), text.trim().startsWith(FENCE));
             handler.accept(text);
         }
     }

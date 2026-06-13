@@ -8,7 +8,12 @@ import com.anthropic.cclc.domain.port.ChatMemoryStore;
 import java.util.List;
 import java.util.Objects;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class SessionResumer {
+
+    private static final Logger log = LoggerFactory.getLogger(SessionResumer.class);
 
     private final ChatMemoryStore store;
 
@@ -20,12 +25,14 @@ public final class SessionResumer {
         Objects.requireNonNull(sessionId, "sessionId");
         List<ChatMessage> messages = store.load(sessionId);
         if (messages.isEmpty()) {
+            log.warn("session resume failed: sessionId={}, reason=not_found", sessionId);
             throw new SessionNotFoundException(sessionId);
         }
         Conversation conversation = new Conversation(sessionId);
         for (ChatMessage message : messages) {
             conversation.append(message);
         }
+        log.info("session resumed: sessionId={}, messages={}, replayTools=false", sessionId, messages.size());
         return conversation;
     }
 

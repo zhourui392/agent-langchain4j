@@ -6,7 +6,12 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Objects;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class SystemPromptComposer {
+
+    private static final Logger log = LoggerFactory.getLogger(SystemPromptComposer.class);
 
     static final String DYNAMIC_MARKER = "\n\n--- session context ---\n";
 
@@ -22,6 +27,8 @@ public final class SystemPromptComposer {
         Objects.requireNonNull(workingDirectory, "workingDirectory");
         String stablePrefix = renderSection(workingDirectory, false, systemInstructions);
         String dynamicSuffix = renderSection(workingDirectory, true, "");
+        log.debug("system prompt composed: cwd={}, stableChars={}, dynamicChars={}, providers={}",
+                workingDirectory, stablePrefix.length(), dynamicSuffix.length(), providerKeys());
         return new SystemPrompt(stablePrefix, dynamicSuffix);
     }
 
@@ -39,6 +46,10 @@ public final class SystemPromptComposer {
             });
         }
         return sb.toString();
+    }
+
+    private List<String> providerKeys() {
+        return providers.stream().map(ContextProvider::key).toList();
     }
 
     public record SystemPrompt(String stablePrefix, String dynamicSuffix) {

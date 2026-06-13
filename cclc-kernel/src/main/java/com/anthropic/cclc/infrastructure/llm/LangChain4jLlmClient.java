@@ -18,7 +18,12 @@ import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class LangChain4jLlmClient implements LlmClient {
+
+    private static final Logger log = LoggerFactory.getLogger(LangChain4jLlmClient.class);
 
     private final StreamingChatModel model;
 
@@ -30,13 +35,18 @@ public final class LangChain4jLlmClient implements LlmClient {
     public void streamChat(ChatRequest request, StreamHandler handler) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(handler, "handler");
+        long startNs = System.nanoTime();
+        log.info("lc4j stream started: messages={}, tools={}", request.messages().size(), request.tools().size());
         dev.langchain4j.model.chat.request.ChatRequest lcRequest = buildLcRequest(request);
         HandlerBridge bridge = new HandlerBridge(handler);
         model.chat(lcRequest, bridge);
         bridge.awaitTerminalSignal();
+        log.info("lc4j stream finished: durationMs={}", elapsedMs(startNs));
     }
 
     private static dev.langchain4j.model.chat.request.ChatRequest buildLcRequest(ChatRequest req) {
+        log.debug("building lc4j request: systemPromptChars={}, messages={}, tools={}",
+                req.systemPrompt().length(), req.messages().size(), req.tools().size());
         List<dev.langchain4j.data.message.ChatMessage> lcMessages = new ArrayList<>();
         if (!req.systemPrompt().isEmpty()) {
             lcMessages.add(dev.langchain4j.data.message.SystemMessage.from(req.systemPrompt()));
@@ -110,6 +120,7 @@ public final class LangChain4jLlmClient implements LlmClient {
         @Override
         public void onError(Throwable error) {
             try {
+                log.error("lc4j stream error", error);
                 handler.onError(error);
             } finally {
                 terminalSignal.countDown();
@@ -120,6 +131,7 @@ public final class LangChain4jLlmClient implements LlmClient {
             try {
                 boolean signaled = terminalSignal.await(90, TimeUnit.SECONDS);
                 if (!signaled) {
+                    log.error("lc4j stream timed out after 90s");
                     handler.onError(new IllegalStateException(
                             "LLM stream timed out after 90s without onComplete/onError"));
                 }
@@ -128,5 +140,9 @@ public final class LangChain4jLlmClient implements LlmClient {
                 throw new IllegalStateException("interrupted while waiting for LLM stream", e);
             }
         }
+    }
+
+    private static long elapsedMs(long startNs) {
+        return (System.nanoTime() - startNs) / 1_000_000L;
     }
 }

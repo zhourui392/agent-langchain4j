@@ -8,6 +8,9 @@ import com.anthropic.cclc.infrastructure.tools.support.ToolResultTruncator;
 
 import java.util.Objects;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Decorates any {@link Tool} so its output is truncated before it enters the
  * conversation. Metadata (name/schema/read-only) passes through unchanged; only
@@ -17,6 +20,8 @@ import java.util.Objects;
  * @since 2026-06-08
  */
 public final class TruncatingTool implements Tool {
+
+    private static final Logger log = LoggerFactory.getLogger(TruncatingTool.class);
 
     private final Tool delegate;
     private final ToolResultTruncator truncator;
@@ -49,6 +54,11 @@ public final class TruncatingTool implements Tool {
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
         ToolResult result = delegate.execute(args, ctx);
-        return new ToolResult(result.success(), truncator.truncate(result.content()));
+        String truncated = truncator.truncate(result.content());
+        if (truncated.length() != result.content().length()) {
+            log.warn("tool result truncated: tool={}, originalChars={}, truncatedChars={}",
+                    delegate.name(), result.content().length(), truncated.length());
+        }
+        return new ToolResult(result.success(), truncated);
     }
 }

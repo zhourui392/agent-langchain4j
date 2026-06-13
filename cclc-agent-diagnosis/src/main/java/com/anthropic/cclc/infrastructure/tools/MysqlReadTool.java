@@ -5,11 +5,15 @@ import com.anthropic.cclc.domain.tool.Tool;
 import com.anthropic.cclc.domain.tool.ToolArguments;
 import com.anthropic.cclc.domain.tool.ToolResult;
 import com.anthropic.cclc.infrastructure.tools.support.MysqlReadClient;
+import com.anthropic.cclc.infrastructure.tools.support.LogSanitizer;
 
 import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.Objects;
 import java.util.Set;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Read-only MySQL tool: runs a single read statement and returns the rows.
@@ -19,6 +23,8 @@ import java.util.Set;
  * @since 2026-06-08
  */
 public final class MysqlReadTool implements Tool {
+
+    private static final Logger log = LoggerFactory.getLogger(MysqlReadTool.class);
 
     private static final int DEFAULT_MAX_ROWS = 100;
     private static final int MAX_ROWS_LIMIT = 100;
@@ -56,17 +62,25 @@ public final class MysqlReadTool implements Tool {
 
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
+        long startNs = System.nanoTime();
         String sql = args.getString("sql", "").trim();
         if (sql.isEmpty()) {
+            log.warn("mysql read blocked: reason=missing_sql");
             return ToolResult.error("MysqlRead requires 'sql'");
         }
+        log.debug("mysql read args: sql={}, maxRows={}", LogSanitizer.summarizeSql(sql), maxRows(args));
         if (!isReadOnlySql(sql)) {
+            log.warn("mysql read blocked: reason=non_read_only, sql={}", LogSanitizer.summarizeSql(sql));
             return ToolResult.error(
                     "MysqlRead allows only read-only statements (SELECT/WITH/SHOW/DESCRIBE/EXPLAIN)");
         }
         try {
-            return ToolResult.ok(client.query(sql, maxRows(args)));
+            String output = client.query(sql, maxRows(args));
+            log.info("mysql read completed: verb={}, maxRows={}, lines={}, chars={}, durationMs={}",
+                    firstVerb(sql), maxRows(args), lineCount(output), output.length(), elapsedMs(startNs));
+            return ToolResult.ok(output);
         } catch (SQLException ex) {
+            log.error("mysql read failed: sql={}", LogSanitizer.summarizeSql(sql), ex);
             return ToolResult.error("MysqlRead failed: " + ex.getMessage());
         }
     }
@@ -88,5 +102,17 @@ public final class MysqlReadTool implements Tool {
         }
         String firstToken = sql.split("\\s+", 2)[0].toUpperCase();
         return READ_VERBS.contains(firstToken);
+    }
+
+    private static String firstVerb(String sql) {
+        return sql.split("\\s+", 2)[0].toUpperCase();
+    }
+
+    private static int lineCount(String output) {
+        return output == null || output.isEmpty() ? 0 : output.split("\\R", -1).length;
+    }
+
+    private static long elapsedMs(long startNs) {
+        return (System.nanoTime() - startNs) / 1_000_000L;
     }
 }

@@ -17,8 +17,12 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Stream;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class GlobTool implements Tool {
 
+    private static final Logger log = LoggerFactory.getLogger(GlobTool.class);
     private static final String INPUT_SCHEMA = """
             {"type":"object","properties":{\
             "pattern":{"type":"string","description":"glob pattern, e.g. **/*.java"},\
@@ -32,15 +36,20 @@ public final class GlobTool implements Tool {
 
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
+        long startNs = System.nanoTime();
         String pattern = args.getString("pattern");
         boolean respectGitignore = args.getBoolean("respectGitignore", true);
+        log.debug("glob args: pattern={}, respectGitignore={}", pattern, respectGitignore);
         List<PathMatcher> matchers = buildMatchers(pattern);
 
         try {
             List<Path> matches = collectMatches(ctx.cwd(), matchers, respectGitignore);
             matches.sort(Comparator.comparing(GlobTool::mtime).reversed());
+            log.info("glob completed: pattern={}, matches={}, durationMs={}",
+                    pattern, matches.size(), elapsedMs(startNs));
             return ToolResult.ok(formatMatches(matches, ctx.cwd()));
         } catch (IOException ex) {
+            log.error("glob failed: pattern={}, cwd={}", pattern, ctx.cwd(), ex);
             return ToolResult.error("glob error: " + ex.getMessage());
         }
     }
@@ -96,5 +105,9 @@ public final class GlobTool implements Tool {
             sb.append(root.relativize(p)).append('\n');
         }
         return sb.toString().stripTrailing();
+    }
+
+    private static long elapsedMs(long startNs) {
+        return (System.nanoTime() - startNs) / 1_000_000L;
     }
 }

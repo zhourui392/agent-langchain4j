@@ -5,9 +5,13 @@ import com.anthropic.cclc.domain.tool.Tool;
 import com.anthropic.cclc.domain.tool.ToolArguments;
 import com.anthropic.cclc.domain.tool.ToolResult;
 import com.anthropic.cclc.infrastructure.tools.support.EsReadClient;
+import com.anthropic.cclc.infrastructure.tools.support.LogSanitizer;
 
 import java.io.IOException;
 import java.util.Objects;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Read-only Elasticsearch tool: search / count / get / mapping.
@@ -16,6 +20,8 @@ import java.util.Objects;
  * @since 2026-06-08
  */
 public final class EsReadTool implements Tool {
+
+    private static final Logger log = LoggerFactory.getLogger(EsReadTool.class);
 
     private static final int DEFAULT_SIZE = 10;
 
@@ -53,22 +59,43 @@ public final class EsReadTool implements Tool {
 
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
+        long startNs = System.nanoTime();
         String op = args.getString("op", "").trim();
         String index = args.getString("index", "").trim();
         if (index.isEmpty()) {
+            log.warn("es read blocked: reason=missing_index");
             return ToolResult.error("EsRead requires 'index'");
         }
         try {
-            return switch (op) {
-                case "search" -> ToolResult.ok(
-                        client.search(index, args.getString("query", "{}"), args.getInt("size", DEFAULT_SIZE)));
-                case "count" -> ToolResult.ok("count: " + client.count(index, args.getString("query", "{}")));
-                case "get" -> ToolResult.ok(client.get(index, args.getString("id", "")));
-                case "mapping" -> ToolResult.ok(client.mapping(index));
-                default -> ToolResult.error("EsRead unknown op: '" + op + "' (use search|count|get|mapping)");
-            };
+            ToolResult result = executeRead(args, op, index);
+            log.info("es read completed: op={}, index={}, success={}, chars={}, durationMs={}",
+                    op, index, result.success(), result.content().length(), elapsedMs(startNs));
+            return result;
         } catch (IOException ex) {
+            log.error("es read failed: op={}, index={}, query={}",
+                    op, index, LogSanitizer.truncate(args.getString("query", "{}"), 80), ex);
             return ToolResult.error("EsRead failed: " + ex.getMessage());
         }
+    }
+
+    private ToolResult executeRead(ToolArguments args, String op, String index) throws IOException {
+        log.debug("es read args: op={}, index={}, query={}, size={}",
+                op, index, LogSanitizer.truncate(args.getString("query", "{}"), 120),
+                args.getInt("size", DEFAULT_SIZE));
+        return switch (op) {
+            case "search" -> ToolResult.ok(
+                    client.search(index, args.getString("query", "{}"), args.getInt("size", DEFAULT_SIZE)));
+            case "count" -> ToolResult.ok("count: " + client.count(index, args.getString("query", "{}")));
+            case "get" -> ToolResult.ok(client.get(index, args.getString("id", "")));
+            case "mapping" -> ToolResult.ok(client.mapping(index));
+            default -> {
+                log.warn("es read blocked: reason=unknown_op, op={}", op);
+                yield ToolResult.error("EsRead unknown op: '" + op + "' (use search|count|get|mapping)");
+            }
+        };
+    }
+
+    private static long elapsedMs(long startNs) {
+        return (System.nanoTime() - startNs) / 1_000_000L;
     }
 }

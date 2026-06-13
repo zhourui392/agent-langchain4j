@@ -13,6 +13,9 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Applies timeout, redaction, and audit around a raw tool implementation.
  *
@@ -20,6 +23,8 @@ import java.util.concurrent.TimeoutException;
  * @since 2026-06-11
  */
 public final class GovernedTool implements Tool {
+
+    private static final Logger log = LoggerFactory.getLogger(GovernedTool.class);
 
     private final Tool delegate;
     private final ToolGovernance governance;
@@ -54,6 +59,10 @@ public final class GovernedTool implements Tool {
         long startNs = System.nanoTime();
         ToolResult result = redact(runWithTimeout(args, ctx));
         long durationMs = (System.nanoTime() - startNs) / 1_000_000L;
+        if (!result.success()) {
+            log.warn("governed tool finished with failure: tool={}, durationMs={}",
+                    delegate.name(), durationMs);
+        }
         governance.auditSink().record(new ToolAuditEvent(
                 delegate.name(), result.success(), durationMs, auditError(result)));
         return result;
@@ -71,11 +80,15 @@ public final class GovernedTool implements Tool {
             return future.get(governance.timeout().toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException ex) {
             future.cancel(true);
+            log.warn("governed tool timed out: tool={}, timeoutMs={}",
+                    delegate.name(), governance.timeout().toMillis());
             return ToolResult.error("tool timed out after " + governance.timeout().toMillis() + "ms");
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
+            log.warn("governed tool interrupted: tool={}", delegate.name());
             return ToolResult.error("tool interrupted");
         } catch (ExecutionException ex) {
+            log.error("governed tool execution failed: tool={}", delegate.name(), ex);
             return ToolResult.error(executionFailureMessage(ex));
         }
     }

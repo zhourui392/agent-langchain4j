@@ -22,6 +22,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * LLM reporter that receives reports through the kernel structured-output tool.
  *
@@ -29,6 +32,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * @since 2026-06-11
  */
 public final class StructuredDiagnosisReporter implements DiagnosisReporter {
+
+    private static final Logger log = LoggerFactory.getLogger(StructuredDiagnosisReporter.class);
 
     private static final String TOOL_NAME = "submit_report";
     private static final String REPORT_SCHEMA = """
@@ -55,6 +60,7 @@ public final class StructuredDiagnosisReporter implements DiagnosisReporter {
 
     @Override
     public DiagnosisReport report(DiagnosisCase diagnosisCase) {
+        long startNs = System.nanoTime();
         AtomicReference<Map<String, Object>> acceptedReport = new AtomicReference<>();
         ToolRegistry tools = new ToolRegistry().register(new StructuredOutputTool(
                 TOOL_NAME, "Submit a structured diagnosis report", REPORT_SCHEMA, acceptedReport::set));
@@ -64,6 +70,9 @@ public final class StructuredDiagnosisReporter implements DiagnosisReporter {
                 AgentEventListener.NO_OP, SYSTEM_PROMPT).join();
         DiagnosisReport report = toReport(acceptedReport.get());
         validate(report, diagnosisCase);
+        log.info("diagnosis report created: caseId={}, candidates={}, confidence={}, durationMs={}",
+                diagnosisCase.caseId(), report.rootCauseCandidates().size(),
+                report.confidence(), elapsedMs(startNs));
         return report;
     }
 
@@ -91,8 +100,10 @@ public final class StructuredDiagnosisReporter implements DiagnosisReporter {
     private void validate(DiagnosisReport report, DiagnosisCase diagnosisCase) {
         DiagnosisReportValidationResult result = validator.validate(report, diagnosisCase.ledger().all());
         if (!result.valid()) {
+            log.info("diagnosis report validation failed: errors={}", result.errors().size());
             throw new IllegalStateException("invalid diagnosis report: " + String.join("; ", result.errors()));
         }
+        log.info("diagnosis report validation passed: evidenceCount={}", diagnosisCase.ledger().all().size());
     }
 
     private static List<RootCauseCandidate> toCandidates(List<RootCauseCandidateDto> items) {
@@ -108,6 +119,10 @@ public final class StructuredDiagnosisReporter implements DiagnosisReporter {
 
     private static <T> List<T> safeList(List<T> items) {
         return items == null ? List.of() : items;
+    }
+
+    private static long elapsedMs(long startNs) {
+        return (System.nanoTime() - startNs) / 1_000_000L;
     }
 
     private record ReportDto(String summary, List<RootCauseCandidateDto> rootCauseCandidates,

@@ -11,6 +11,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Objects;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * {@link RedisReadClient} speaking RESP over a raw socket — no Redis client
  * dependency. Sends one command and renders the reply as text. Thin protocol
@@ -20,6 +23,8 @@ import java.util.Objects;
  * @since 2026-06-08
  */
 public final class SocketRedisClient implements RedisReadClient {
+
+    private static final Logger log = LoggerFactory.getLogger(SocketRedisClient.class);
 
     private final String host;
     private final int port;
@@ -35,21 +40,33 @@ public final class SocketRedisClient implements RedisReadClient {
 
     @Override
     public String execute(String command, Duration timeout) throws IOException {
+        long startNs = System.nanoTime();
         int timeoutMs = (int) Math.max(1, timeout.toMillis());
+        log.debug("redis socket connecting: host={}, port={}, database={}, timeoutMs={}, command={}",
+                host, port, database, timeoutMs, LogSanitizer.summarizeCommand(command));
         try (Socket socket = new Socket()) {
             socket.connect(new InetSocketAddress(host, port), timeoutMs);
             socket.setSoTimeout(timeoutMs);
+            log.debug("redis socket connected: host={}, port={}", host, port);
             OutputStream out = socket.getOutputStream();
             BufferedInputStream in = new BufferedInputStream(socket.getInputStream());
             authenticateIfNeeded(out, in);
             selectDatabaseIfNeeded(out, in);
             writeCommand(out, command.trim().split("\\s+"));
-            return readReply(in);
+            String reply = readReply(in);
+            log.debug("redis socket command completed: host={}, port={}, bytes={}, durationMs={}",
+                    host, port, reply.getBytes(StandardCharsets.UTF_8).length, elapsedMs(startNs));
+            return reply;
+        } catch (IOException ex) {
+            log.error("redis socket command failed: host={}, port={}, command={}",
+                    host, port, LogSanitizer.summarizeCommand(command), ex);
+            throw ex;
         }
     }
 
     private void authenticateIfNeeded(OutputStream out, InputStream in) throws IOException {
         if (password != null && !password.isBlank()) {
+            log.debug("redis socket authenticating: host={}, port={}", host, port);
             writeCommand(out, new String[]{"AUTH", password});
             readReply(in);
         }
@@ -57,6 +74,7 @@ public final class SocketRedisClient implements RedisReadClient {
 
     private void selectDatabaseIfNeeded(OutputStream out, InputStream in) throws IOException {
         if (database > 0) {
+            log.debug("redis socket selecting database: host={}, port={}, database={}", host, port, database);
             writeCommand(out, new String[]{"SELECT", Integer.toString(database)});
             readReply(in);
         }
@@ -123,5 +141,9 @@ public final class SocketRedisClient implements RedisReadClient {
             buffer.write(b);
         }
         return buffer.toString(StandardCharsets.UTF_8);
+    }
+
+    private static long elapsedMs(long startNs) {
+        return (System.nanoTime() - startNs) / 1_000_000L;
     }
 }

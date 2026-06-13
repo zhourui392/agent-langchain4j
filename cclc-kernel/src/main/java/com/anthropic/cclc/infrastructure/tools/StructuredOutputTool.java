@@ -14,6 +14,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Internal tool used by specialized agents to submit schema-bound output.
  *
@@ -22,6 +25,7 @@ import java.util.function.Consumer;
  */
 public final class StructuredOutputTool implements Tool {
 
+    private static final Logger log = LoggerFactory.getLogger(StructuredOutputTool.class);
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private final String name;
@@ -61,11 +65,14 @@ public final class StructuredOutputTool implements Tool {
 
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
+        log.debug("structured output args: name={}, fields={}", name, args.values().keySet());
         String missingField = firstMissingRequiredField(args.values());
         if (missingField != null) {
+            log.debug("structured output validation failed: name={}, missingField={}", name, missingField);
             return ToolResult.error("missing structured output field: " + missingField);
         }
         sink.accept(Map.copyOf(args.values()));
+        log.debug("structured output validation passed: name={}, fields={}", name, args.values().keySet());
         return ToolResult.ok("structured output accepted: " + name);
     }
 

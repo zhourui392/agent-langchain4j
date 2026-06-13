@@ -4,18 +4,23 @@ import com.anthropic.cclc.domain.tool.ExecutionContext;
 import com.anthropic.cclc.domain.tool.Tool;
 import com.anthropic.cclc.domain.tool.ToolArguments;
 import com.anthropic.cclc.domain.tool.ToolResult;
+import com.anthropic.cclc.infrastructure.tools.support.LogSanitizer;
 import com.anthropic.cclc.infrastructure.tools.support.HttpReader;
 import com.anthropic.cclc.infrastructure.tools.support.HttpReader.HttpResponseView;
 
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Read-only HTTP GET for verifying endpoints during diagnosis.
@@ -24,6 +29,8 @@ import java.util.stream.Collectors;
  * @since 2026-06-08
  */
 public final class HttpGetTool implements Tool {
+
+    private static final Logger log = LoggerFactory.getLogger(HttpGetTool.class);
 
     private static final int DEFAULT_TIMEOUT_MS = 15_000;
 
@@ -65,18 +72,28 @@ public final class HttpGetTool implements Tool {
 
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
+        long startNs = System.nanoTime();
         String url = args.getString("url", "").trim();
         if (!isHttpUrl(url)) {
+            log.warn("http get blocked: reason=invalid_url, url={}", LogSanitizer.stripQuery(url));
             return ToolResult.error("HttpGet requires an http(s) url, got: " + url);
         }
         if (!isAllowedHost(url)) {
+            log.warn("http get blocked: reason=host_not_allowlisted, host={}", host(url));
             return ToolResult.error("HttpGet host is not allowlisted: " + host(url));
         }
         Duration timeout = Duration.ofMillis(args.getInt("timeoutMs", DEFAULT_TIMEOUT_MS));
+        log.debug("http get args: url={}, headers={}, timeoutMs={}",
+                LogSanitizer.stripQuery(url), headers(args).keySet(), timeout.toMillis());
         try {
             HttpResponseView response = httpReader.get(url, headers(args), timeout);
+            log.info("http get completed: url={}, status={}, responseBytes={}, durationMs={}",
+                    LogSanitizer.stripQuery(url), response.statusCode(),
+                    response.body().getBytes(StandardCharsets.UTF_8).length,
+                    elapsedMs(startNs));
             return ToolResult.ok("HTTP " + response.statusCode() + "\n" + response.body());
         } catch (IOException ex) {
+            log.error("http get failed: url={}", LogSanitizer.stripQuery(url), ex);
             return ToolResult.error("HttpGet failed: " + ex.getMessage());
         }
     }
@@ -118,5 +135,9 @@ public final class HttpGetTool implements Tool {
         Map<String, String> headers = new LinkedHashMap<>();
         rawMap.forEach((key, value) -> headers.put(String.valueOf(key), String.valueOf(value)));
         return headers;
+    }
+
+    private static long elapsedMs(long startNs) {
+        return (System.nanoTime() - startNs) / 1_000_000L;
     }
 }

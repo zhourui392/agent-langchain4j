@@ -14,8 +14,12 @@ import java.nio.file.Path;
 import java.util.Objects;
 import java.util.Optional;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class FileWriteTool implements Tool {
 
+    private static final Logger log = LoggerFactory.getLogger(FileWriteTool.class);
     private static final String INPUT_SCHEMA = """
             {"type":"object","properties":{\
             "path":{"type":"string","description":"absolute or cwd-relative file path"},\
@@ -37,11 +41,15 @@ public final class FileWriteTool implements Tool {
 
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
+        long startNs = System.nanoTime();
         Path file = ctx.cwd().resolve(args.getString("path")).normalize();
         String content = args.getString("content");
+        boolean existedBefore = Files.exists(file);
+        log.debug("file write args: path={}, bytes={}", file, content.getBytes(StandardCharsets.UTF_8).length);
 
         Optional<ToolResult> guard = requireReadGuard.checkBeforeOverwrite(file);
         if (guard.isPresent()) {
+            log.warn("file write blocked: path={}", file);
             return guard.get();
         }
 
@@ -51,9 +59,17 @@ public final class FileWriteTool implements Tool {
             }
             Files.writeString(file, content, StandardCharsets.UTF_8);
             fileStateCache.recordRead(file);
+            log.info("file write completed: path={}, bytes={}, mode={}, durationMs={}",
+                    file, content.getBytes(StandardCharsets.UTF_8).length,
+                    existedBefore ? "overwrite" : "create", elapsedMs(startNs));
             return ToolResult.ok("wrote " + file);
         } catch (IOException ex) {
+            log.error("file write failed: path={}", file, ex);
             return ToolResult.error("write error: " + ex.getMessage());
         }
+    }
+
+    private static long elapsedMs(long startNs) {
+        return (System.nanoTime() - startNs) / 1_000_000L;
     }
 }

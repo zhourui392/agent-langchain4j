@@ -9,6 +9,9 @@ import java.sql.Statement;
 import java.util.Objects;
 import java.util.StringJoiner;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * {@link MysqlReadClient} over {@code java.sql} only — the MySQL JDBC driver is
  * loaded from the runtime classpath (provided by the host), so the engine carries
@@ -20,6 +23,8 @@ import java.util.StringJoiner;
  * @since 2026-06-08
  */
 public final class JdbcMysqlReadClient implements MysqlReadClient {
+
+    private static final Logger log = LoggerFactory.getLogger(JdbcMysqlReadClient.class);
 
     private final String jdbcUrl;
     private final String user;
@@ -33,12 +38,18 @@ public final class JdbcMysqlReadClient implements MysqlReadClient {
 
     @Override
     public String query(String sql, int maxRows) throws SQLException {
+        long startNs = System.nanoTime();
+        log.debug("jdbc mysql query started: jdbcUrl={}, maxRows={}, sql={}",
+                LogSanitizer.summarizeCommand(jdbcUrl), maxRows, LogSanitizer.summarizeSql(sql));
         try (Connection connection = DriverManager.getConnection(jdbcUrl, user, password)) {
             connection.setReadOnly(true);
             try (Statement statement = connection.createStatement()) {
                 statement.setMaxRows(Math.max(0, maxRows));
                 try (ResultSet resultSet = statement.executeQuery(sql)) {
-                    return format(resultSet);
+                    String output = format(resultSet);
+                    log.debug("jdbc mysql query completed: rows={}, chars={}, durationMs={}",
+                            rowCount(output), output.length(), elapsedMs(startNs));
+                    return output;
                 }
             }
         }
@@ -71,5 +82,22 @@ public final class JdbcMysqlReadClient implements MysqlReadClient {
             joiner.add(value == null ? "NULL" : value.toString());
         }
         return joiner.toString();
+    }
+
+    private static int rowCount(String output) {
+        int marker = output.lastIndexOf('(');
+        int suffix = output.lastIndexOf(" rows)");
+        if (marker < 0 || suffix <= marker) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(output.substring(marker + 1, suffix));
+        } catch (NumberFormatException ex) {
+            return -1;
+        }
+    }
+
+    private static long elapsedMs(long startNs) {
+        return (System.nanoTime() - startNs) / 1_000_000L;
     }
 }

@@ -20,6 +20,9 @@ import com.anthropic.cclc.infrastructure.permission.ReadOnlyPermissionPolicy;
 import java.util.Objects;
 import java.util.concurrent.CompletionException;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Spawns an isolated read-only sub-agent to chase one hypothesis, returning its
  * final findings as the tool result. The child runs its own {@code AgentExecutor}
@@ -30,6 +33,8 @@ import java.util.concurrent.CompletionException;
  * @since 2026-06-08
  */
 public final class SubAgentTool implements Tool {
+
+    private static final Logger log = LoggerFactory.getLogger(SubAgentTool.class);
 
     private static final InteractivePrompter REJECTING_PROMPTER = (invocation, tool) -> {
         throw new IllegalStateException("read-only sub-agent has no interactive approval");
@@ -67,14 +72,21 @@ public final class SubAgentTool implements Tool {
 
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
+        long startNs = System.nanoTime();
+        String prompt = args.getString("prompt");
+        log.info("sub-agent started: promptChars={}, childToolCount={}", prompt.length(), childTools.names().size());
         Conversation child = new Conversation(SessionId.fresh());
-        child.append(UserMessage.of(args.getString("prompt")));
+        child.append(UserMessage.of(prompt));
         try {
             AiMessage finalMessage = childExecutor(ctx)
                     .run(child, ctx.cancellation(), AgentEventListener.NO_OP)
                     .join();
+            log.info("sub-agent completed: sessionId={}, turns={}, resultChars={}, durationMs={}",
+                    child.sessionId(), assistantTurns(child), finalMessage.text().length(), elapsedMs(startNs));
             return ToolResult.ok(finalMessage.text());
         } catch (CompletionException ex) {
+            log.warn("sub-agent failed: sessionId={}, cancelled={}, durationMs={}",
+                    child.sessionId(), ctx.cancellation().isCancelled(), elapsedMs(startNs));
             return ToolResult.error(failureMessage(ctx, ex));
         }
     }
@@ -91,5 +103,13 @@ public final class SubAgentTool implements Tool {
         }
         Throwable cause = ex.getCause();
         return "sub-agent failed: " + (cause == null ? ex.getMessage() : cause.getMessage());
+    }
+
+    private static long assistantTurns(Conversation conversation) {
+        return conversation.messages().stream().filter(AiMessage.class::isInstance).count();
+    }
+
+    private static long elapsedMs(long startNs) {
+        return (System.nanoTime() - startNs) / 1_000_000L;
     }
 }

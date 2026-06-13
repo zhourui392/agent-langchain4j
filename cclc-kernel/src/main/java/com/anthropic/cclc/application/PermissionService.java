@@ -9,7 +9,12 @@ import com.anthropic.cclc.domain.tool.ToolInvocation;
 
 import java.util.Objects;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class PermissionService {
+
+    private static final Logger log = LoggerFactory.getLogger(PermissionService.class);
 
     private final PermissionPolicy policy;
     private final InteractivePrompter prompter;
@@ -34,21 +39,29 @@ public final class PermissionService {
 
     public Decision check(ToolInvocation invocation, Tool tool) {
         if (cache.allows(tool.name())) {
+            log.debug("permission cache hit: tool={}, decision={}", tool.name(), Decision.ALLOW);
+            log.info("permission check: tool={}, decision={}", tool.name(), Decision.ALLOW);
             return Decision.ALLOW;
         }
         Decision policyDecision = policy.decide(invocation, tool, mode);
         if (policyDecision != Decision.ASK) {
+            log.info("permission check: tool={}, decision={}", tool.name(), policyDecision);
             return policyDecision;
         }
-        return askInteractively(invocation, tool);
+        Decision interactiveDecision = askInteractively(invocation, tool);
+        log.info("permission check: tool={}, decision={}", tool.name(), interactiveDecision);
+        return interactiveDecision;
     }
 
     private Decision askInteractively(ToolInvocation invocation, Tool tool) {
         synchronized (prompterLock) {
             if (cache.allows(tool.name())) {
+                log.debug("permission cache hit during prompt lock: tool={}", tool.name());
                 return Decision.ALLOW;
             }
+            log.warn("permission prompt shown: tool={}", tool.name());
             UserPermissionResponse response = prompter.ask(invocation, tool);
+            log.warn("permission prompt answered: tool={}, response={}", tool.name(), response);
             return switch (response) {
                 case ALLOW_ONCE -> Decision.ALLOW;
                 case ALLOW_ALWAYS -> {

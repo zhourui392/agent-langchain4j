@@ -8,6 +8,10 @@ import com.anthropic.cclc.domain.tool.ToolArguments;
 import com.anthropic.cclc.domain.tool.ToolResult;
 
 import java.util.Objects;
+import java.util.Optional;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Expands one cataloged skill into the conversation as a read-only tool result.
@@ -17,6 +21,7 @@ import java.util.Objects;
  */
 public final class SkillTool implements Tool {
 
+    private static final Logger log = LoggerFactory.getLogger(SkillTool.class);
     private static final String INPUT_SCHEMA = """
             {"type":"object","properties":{\
             "skill":{"type":"string","description":"skills catalog 中列出的 skill 名称"}\
@@ -51,9 +56,15 @@ public final class SkillTool implements Tool {
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
         String name = args.getString("skill");
-        return catalog.find(name)
-                .map(skill -> ToolResult.ok(renderSkill(skill)))
-                .orElseGet(() -> ToolResult.error(unknownSkill(name)));
+        log.debug("skill args: name={}", name);
+        Optional<Skill> skill = catalog.find(name);
+        if (skill.isEmpty()) {
+            log.warn("skill not found: name={}, available={}", name, catalog.names());
+            return ToolResult.error(unknownSkill(name));
+        }
+        log.info("skill loaded: name={}, baseDir={}, bodyChars={}",
+                skill.get().name(), skill.get().baseDir(), skill.get().body().length());
+        return ToolResult.ok(renderSkill(skill.get()));
     }
 
     private static String renderSkill(Skill skill) {

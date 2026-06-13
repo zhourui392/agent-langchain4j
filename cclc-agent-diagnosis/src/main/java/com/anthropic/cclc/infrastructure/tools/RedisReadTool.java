@@ -4,12 +4,16 @@ import com.anthropic.cclc.domain.tool.ExecutionContext;
 import com.anthropic.cclc.domain.tool.Tool;
 import com.anthropic.cclc.domain.tool.ToolArguments;
 import com.anthropic.cclc.domain.tool.ToolResult;
+import com.anthropic.cclc.infrastructure.tools.support.LogSanitizer;
 import com.anthropic.cclc.infrastructure.tools.support.RedisReadClient;
 
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.Set;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Read-only Redis tool. An allowlist of read commands (GET/TTL/TYPE/SCAN/...) is
@@ -19,6 +23,8 @@ import java.util.Set;
  * @since 2026-06-08
  */
 public final class RedisReadTool implements Tool {
+
+    private static final Logger log = LoggerFactory.getLogger(RedisReadTool.class);
 
     private static final int DEFAULT_TIMEOUT_MS = 5_000;
     private static final Set<String> READ_COMMANDS = Set.of(
@@ -62,19 +68,31 @@ public final class RedisReadTool implements Tool {
 
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
+        long startNs = System.nanoTime();
         String command = args.getString("command", "").trim();
         if (command.isEmpty()) {
+            log.warn("redis read blocked: reason=missing_command");
             return ToolResult.error("RedisRead requires 'command'");
         }
         String verb = command.split("\\s+", 2)[0].toUpperCase();
+        log.debug("redis read args: verb={}, command={}", verb, LogSanitizer.summarizeCommand(command));
         if (!READ_COMMANDS.contains(verb)) {
+            log.warn("redis read blocked: verb={}", verb);
             return ToolResult.error("RedisRead permits only read-only commands (got '" + verb + "')");
         }
         Duration timeout = Duration.ofMillis(args.getInt("timeoutMs", DEFAULT_TIMEOUT_MS));
         try {
-            return ToolResult.ok(client.execute(command, timeout));
+            String output = client.execute(command, timeout);
+            log.info("redis read completed: verb={}, chars={}, durationMs={}",
+                    verb, output.length(), elapsedMs(startNs));
+            return ToolResult.ok(output);
         } catch (IOException ex) {
+            log.error("redis read failed: verb={}, command={}", verb, LogSanitizer.summarizeCommand(command), ex);
             return ToolResult.error("RedisRead failed: " + ex.getMessage());
         }
+    }
+
+    private static long elapsedMs(long startNs) {
+        return (System.nanoTime() - startNs) / 1_000_000L;
     }
 }

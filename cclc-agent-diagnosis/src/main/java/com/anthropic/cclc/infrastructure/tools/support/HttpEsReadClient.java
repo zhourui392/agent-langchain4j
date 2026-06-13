@@ -14,6 +14,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Objects;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * {@link EsReadClient} over the ES REST API using the JDK {@code HttpClient} — no
  * heavyweight ES client on the classpath (keeps transitive deps light for the
@@ -23,6 +26,8 @@ import java.util.Objects;
  * @since 2026-06-08
  */
 public final class HttpEsReadClient implements EsReadClient {
+
+    private static final Logger log = LoggerFactory.getLogger(HttpEsReadClient.class);
 
     private static final Duration TIMEOUT = Duration.ofSeconds(30);
 
@@ -73,10 +78,20 @@ public final class HttpEsReadClient implements EsReadClient {
     }
 
     private String send(HttpRequest request) throws IOException {
+        long startNs = System.nanoTime();
+        log.debug("es http request started: method={}, uri={}",
+                request.method(), LogSanitizer.stripQuery(request.uri().toString()));
         try {
-            return http.send(request, HttpResponse.BodyHandlers.ofString()).body();
+            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+            log.debug("es http request completed: method={}, uri={}, status={}, bytes={}, durationMs={}",
+                    request.method(), LogSanitizer.stripQuery(request.uri().toString()),
+                    response.statusCode(), response.body().getBytes(StandardCharsets.UTF_8).length,
+                    elapsedMs(startNs));
+            return response.body();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            log.error("es http request interrupted: method={}, uri={}",
+                    request.method(), LogSanitizer.stripQuery(request.uri().toString()), e);
             throw new IOException("es request interrupted", e);
         }
     }
@@ -91,5 +106,9 @@ public final class HttpEsReadClient implements EsReadClient {
 
     private static String stripTrailingSlash(String url) {
         return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
+    }
+
+    private static long elapsedMs(long startNs) {
+        return (System.nanoTime() - startNs) / 1_000_000L;
     }
 }

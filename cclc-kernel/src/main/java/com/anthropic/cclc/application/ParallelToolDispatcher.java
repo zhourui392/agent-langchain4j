@@ -13,13 +13,20 @@ import com.anthropic.cclc.domain.tool.ToolUseRequest;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
+
 final class ParallelToolDispatcher {
+
+    private static final Logger log = LoggerFactory.getLogger(ParallelToolDispatcher.class);
 
     private final ToolRegistry tools;
     private final ExecutionContext executionContext;
@@ -38,6 +45,7 @@ final class ParallelToolDispatcher {
     List<ToolResultMessage> dispatch(AiMessage aiMessage, AgentEventListener listener) {
         List<ToolUseRequest> requests = aiMessage.toolUseRequests();
         requests.forEach(listener::onToolUseStart);
+        log.info("dispatching tools: names={}, concurrency={}", toolNames(requests), requests.size());
         if (requests.size() == 1) {
             return List.of(executeSingle(requests.get(0), listener));
         }
@@ -45,8 +53,11 @@ final class ParallelToolDispatcher {
     }
 
     private ToolResultMessage executeSingle(ToolUseRequest request, AgentEventListener listener) {
-        ToolResult result = runWithEvents(request, listener);
-        return ToolResultMessage.of(request.id(), result.content());
+        Map<String, String> parentMdc = MDC.getCopyOfContextMap();
+        return withMdc(parentMdc, request, () -> {
+            ToolResult result = runWithEvents(request, listener);
+            return ToolResultMessage.of(request.id(), result.content());
+        });
     }
 
     private List<ToolResultMessage> executeAll(List<ToolUseRequest> requests, AgentEventListener listener) {
@@ -54,7 +65,11 @@ final class ParallelToolDispatcher {
         try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
             List<Future<?>> futures = new ArrayList<>(requests.size());
             for (ToolUseRequest req : requests) {
-                futures.add(pool.submit(() -> resultsById.put(req.id(), runWithEvents(req, listener))));
+                Map<String, String> parentMdc = MDC.getCopyOfContextMap();
+                futures.add(pool.submit(() -> withMdc(parentMdc, req, () -> {
+                    resultsById.put(req.id(), runWithEvents(req, listener));
+                    return null;
+                })));
             }
             awaitAll(futures);
         }
@@ -73,7 +88,9 @@ final class ParallelToolDispatcher {
         Tool tool = tools.find(request.toolName());
         ToolInvocation invocation = InvocationFactory.from(request);
         Decision decision = permissions.check(invocation, tool);
+        log.info("permission decision: tool={}, decision={}", tool.name(), decision);
         if (decision == Decision.DENY) {
+            log.warn("permission denied: {}", tool.name());
             invocation.deny();
             return ToolResult.error("permission denied: " + tool.name());
         }
@@ -82,13 +99,22 @@ final class ParallelToolDispatcher {
     }
 
     private ToolResult runTool(Tool tool, ToolInvocation invocation) {
+        long startNs = System.nanoTime();
+        if (log.isDebugEnabled()) {
+            log.debug("tool arguments summary: tool={}, args={}", tool.name(), summarizeArgs(invocation.args()));
+        }
         try {
             ToolResult result = tool.execute(invocation.args(), executionContext);
             invocation.complete(result);
+            log.info("tool completed: tool={}, success={}, durationMs={}",
+                    tool.name(), result.success(), elapsedMs(startNs));
             return result;
         } catch (RuntimeException ex) {
             ToolResult failure = ToolResult.error(ex.getMessage());
             invocation.fail(failure);
+            log.error("tool failed: tool={}, errorType={}, message={}",
+                    tool.name(), ex.getClass().getSimpleName(), ex.getMessage());
+            log.debug("tool failure stack", ex);
             return failure;
         }
     }
@@ -116,8 +142,42 @@ final class ParallelToolDispatcher {
         List<ToolResultMessage> ordered = new ArrayList<>(requests.size());
         for (ToolUseRequest req : requests) {
             ToolResult result = resultsById.get(req.id());
+            log.debug("assembling tool result: toolUseId={}, toolName={}, present={}",
+                    req.id().value(), req.toolName(), result != null);
             ordered.add(ToolResultMessage.of(req.id(), result.content()));
         }
         return ordered;
+    }
+
+    private static <T> T withMdc(Map<String, String> parentMdc, ToolUseRequest request,
+                                 java.util.function.Supplier<T> action) {
+        Map<String, String> previousMdc = MDC.getCopyOfContextMap();
+        try {
+            if (parentMdc == null) {
+                MDC.clear();
+            } else {
+                MDC.setContextMap(parentMdc);
+            }
+            MDC.put("toolUseId", request.id().value());
+            return action.get();
+        } finally {
+            if (previousMdc == null) {
+                MDC.clear();
+            } else {
+                MDC.setContextMap(previousMdc);
+            }
+        }
+    }
+
+    private static List<String> toolNames(List<ToolUseRequest> requests) {
+        return requests.stream().map(ToolUseRequest::toolName).toList();
+    }
+
+    private static String summarizeArgs(com.anthropic.cclc.domain.tool.ToolArguments args) {
+        return args.values().keySet().toString();
+    }
+
+    private static long elapsedMs(long startNs) {
+        return (System.nanoTime() - startNs) / 1_000_000L;
     }
 }

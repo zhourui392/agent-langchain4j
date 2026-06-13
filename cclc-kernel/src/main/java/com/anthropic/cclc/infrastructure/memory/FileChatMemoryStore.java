@@ -11,7 +11,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class FileChatMemoryStore implements ChatMemoryStore {
+
+    private static final Logger log = LoggerFactory.getLogger(FileChatMemoryStore.class);
 
     private final Path baseDirectory;
 
@@ -29,11 +34,14 @@ public final class FileChatMemoryStore implements ChatMemoryStore {
                 try {
                     messages.add(MessageJsonCodec.fromJson(line));
                 } catch (IOException partialWrite) {
-                    // skip malformed line — most likely a crash mid-append
+                    log.warn("skipping malformed session line: sessionId={}, file={}", sessionId, file);
                 }
             }
+            log.info("session loaded: sessionId={}, lines={}, messages={}, file={}",
+                    sessionId, lines.size(), messages.size(), file);
             return messages;
         } catch (IOException ex) {
+            log.error("failed to load session: sessionId={}, file={}", sessionId, file, ex);
             throw new IllegalStateException("failed to load session " + sessionId, ex);
         }
     }
@@ -47,7 +55,9 @@ public final class FileChatMemoryStore implements ChatMemoryStore {
                 lines.add(MessageJsonCodec.toJson(message));
             }
             JsonlAppender.writeAtomically(file, lines);
+            log.info("session saved: sessionId={}, messages={}, file={}", sessionId, messages.size(), file);
         } catch (IOException ex) {
+            log.error("failed to save session: sessionId={}, file={}", sessionId, file, ex);
             throw new IllegalStateException("failed to save session " + sessionId, ex);
         }
     }
@@ -57,7 +67,9 @@ public final class FileChatMemoryStore implements ChatMemoryStore {
         Path file = pathFor(sessionId);
         try {
             Files.deleteIfExists(file);
+            log.info("session deleted: sessionId={}, file={}", sessionId, file);
         } catch (IOException ex) {
+            log.error("failed to delete session: sessionId={}, file={}", sessionId, file, ex);
             throw new IllegalStateException("failed to delete session " + sessionId, ex);
         }
     }

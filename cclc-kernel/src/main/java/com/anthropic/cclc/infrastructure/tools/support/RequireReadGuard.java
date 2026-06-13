@@ -7,7 +7,12 @@ import java.nio.file.Path;
 import java.util.Objects;
 import java.util.Optional;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class RequireReadGuard {
+
+    private static final Logger log = LoggerFactory.getLogger(RequireReadGuard.class);
 
     private final FileStateCache fileStateCache;
 
@@ -20,10 +25,12 @@ public final class RequireReadGuard {
             return Optional.empty();
         }
         if (!fileStateCache.hasBeenRead(file)) {
+            log.warn("read-before-write guard blocked: file={}, reason=not_read", file);
             return Optional.of(ToolResult.error(
                     "must Read " + file + " before modifying it"));
         }
         if (fileStateCache.isStale(file)) {
+            log.warn("read-before-write guard blocked: file={}, reason=stale", file);
             return Optional.of(ToolResult.error(
                     "file modified externally since last Read: " + file
                             + " — Read it again before modifying"));

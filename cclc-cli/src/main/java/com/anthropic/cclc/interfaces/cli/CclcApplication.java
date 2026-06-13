@@ -46,7 +46,12 @@ import java.nio.file.Paths;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class CclcApplication {
+
+    private static final Logger log = LoggerFactory.getLogger(CclcApplication.class);
 
     private static final String SYSTEM_INSTRUCTIONS = """
             You are Claude Code, a CLI coding assistant. Be concise. \
@@ -69,10 +74,16 @@ public final class CclcApplication {
         try {
             new CclcApplication().run();
         } catch (IllegalStateException missingConfig) {
+            log.error("configuration load failed", missingConfig);
             System.err.println(missingConfig.getMessage());
             System.exit(1);
         } catch (IOException io) {
+            log.error("fatal io error during startup", io);
             System.err.println("io error: " + io.getMessage());
+            System.exit(1);
+        } catch (RuntimeException fatal) {
+            log.error("fatal startup error", fatal);
+            System.err.println("fatal error: " + fatal.getMessage());
             System.exit(1);
         }
     }
@@ -85,6 +96,8 @@ public final class CclcApplication {
         FileStateCache fileStateCache = new FileStateCache();
         java.util.Optional<SkillCatalog> skills = loadSkills();
         ToolRegistry tools = registerTools(fileStateCache, skills);
+        log.info("cclc starting: model={}, permissionMode={}, skillsEnabled={}, registeredTools={}",
+                config.model(), config.permissionMode(), skills.isPresent(), tools.names().size());
 
         SystemPromptComposer composer = new SystemPromptComposer(SYSTEM_INSTRUCTIONS, contextProviders(skills));
         FileChatMemoryStore store = new FileChatMemoryStore(SessionPaths.defaultLocation().baseDirectory());
@@ -148,10 +161,12 @@ public final class CclcApplication {
     private static java.util.Optional<SkillCatalog> loadSkills() {
         String directory = skillDirectorySetting();
         if (directory == null || directory.isBlank()) {
+            log.debug("skills directory not configured");
             return java.util.Optional.empty();
         }
         SkillCatalog catalog = SkillCatalog.of(new DirectorySkillSource(
                 Paths.get(directory), new SkillFrontmatterParser()).load());
+        log.info("skills loaded: directory={}, count={}", directory, catalog.names().size());
         return catalog.isEmpty() ? java.util.Optional.empty() : java.util.Optional.of(catalog);
     }
 

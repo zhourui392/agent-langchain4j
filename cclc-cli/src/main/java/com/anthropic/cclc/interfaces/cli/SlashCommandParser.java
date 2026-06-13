@@ -6,7 +6,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class SlashCommandParser {
+
+    private static final Logger log = LoggerFactory.getLogger(SlashCommandParser.class);
 
     private final Map<String, SlashCommand> commands = new LinkedHashMap<>();
 
@@ -29,6 +34,7 @@ public final class SlashCommandParser {
         }
         SlashCommand command = commands.get(name);
         if (command == null) {
+            log.warn("slash command unknown: name={}", name);
             return ParseResult.unknownCommand(name);
         }
         List<String> args = new ArrayList<>();
@@ -37,6 +43,7 @@ public final class SlashCommandParser {
                 args.add(tokens[i]);
             }
         }
+        log.info("slash command parsed: name={}, args={}", name, args);
         return ParseResult.command(command, args);
     }
 

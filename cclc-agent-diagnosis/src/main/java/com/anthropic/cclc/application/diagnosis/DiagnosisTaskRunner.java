@@ -10,6 +10,9 @@ import com.anthropic.cclc.infrastructure.tools.SubAgentTool;
 import java.util.Map;
 import java.util.Objects;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Runs one diagnosis sub-task through the kernel {@code Task} tool.
  *
@@ -17,6 +20,8 @@ import java.util.Objects;
  * @since 2026-06-11
  */
 public final class DiagnosisTaskRunner {
+
+    private static final Logger log = LoggerFactory.getLogger(DiagnosisTaskRunner.class);
 
     private final SubAgentTool taskTool;
 
@@ -36,7 +41,18 @@ public final class DiagnosisTaskRunner {
     public ToolResult run(DiagnosisTaskRequest request, ExecutionContext context) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(context, "context");
-        return taskTool.execute(ToolArguments.of(Map.of("prompt", formatPrompt(request))), context);
+        long startNs = System.nanoTime();
+        log.info("diagnosis task started: taskType={}, hypothesisId={}",
+                request.taskType(), request.hypothesisId());
+        ToolResult result = taskTool.execute(ToolArguments.of(Map.of("prompt", formatPrompt(request))), context);
+        long durationMs = (System.nanoTime() - startNs) / 1_000_000L;
+        if (!result.success()) {
+            log.warn("diagnosis task failed: taskType={}, hypothesisId={}, durationMs={}",
+                    request.taskType(), request.hypothesisId(), durationMs);
+        }
+        log.info("diagnosis task completed: taskType={}, hypothesisId={}, success={}, resultChars={}, durationMs={}",
+                request.taskType(), request.hypothesisId(), result.success(), result.content().length(), durationMs);
+        return result;
     }
 
     private static String formatPrompt(DiagnosisTaskRequest request) {

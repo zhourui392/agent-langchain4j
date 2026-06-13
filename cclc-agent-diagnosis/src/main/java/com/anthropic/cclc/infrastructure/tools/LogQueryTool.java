@@ -4,11 +4,15 @@ import com.anthropic.cclc.domain.tool.ExecutionContext;
 import com.anthropic.cclc.domain.tool.Tool;
 import com.anthropic.cclc.domain.tool.ToolArguments;
 import com.anthropic.cclc.domain.tool.ToolResult;
+import com.anthropic.cclc.infrastructure.tools.support.LogSanitizer;
 import com.anthropic.cclc.infrastructure.tools.support.LogQueryClient;
 import com.anthropic.cclc.infrastructure.tools.support.LogQueryRequest;
 
 import java.io.IOException;
 import java.util.Objects;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Read-only log search tool for incident diagnosis.
@@ -17,6 +21,8 @@ import java.util.Objects;
  * @since 2026-06-11
  */
 public final class LogQueryTool implements Tool {
+
+    private static final Logger log = LoggerFactory.getLogger(LogQueryTool.class);
 
     private static final int DEFAULT_LIMIT = 100;
 
@@ -55,13 +61,23 @@ public final class LogQueryTool implements Tool {
 
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
+        long startNs = System.nanoTime();
         LogQueryRequest request = request(args);
+        log.debug("log query args: traceIdPresent={}, keywordChars={}, service={}, startTime={}, endTime={}, level={}, limit={}",
+                !request.traceId().isBlank(), request.keyword().length(), request.service(),
+                request.startTime(), request.endTime(), request.level(), request.limit());
         if (!request.hasQueryAnchor()) {
+            log.warn("log query blocked: reason=missing_query_anchor");
             return ToolResult.error("LogQuery requires traceId or keyword");
         }
         try {
-            return ToolResult.ok(client.query(request));
+            String output = client.query(request);
+            log.info("log query completed: service={}, lines={}, chars={}, durationMs={}",
+                    request.service(), lineCount(output), output.length(), elapsedMs(startNs));
+            return ToolResult.ok(output);
         } catch (IOException ex) {
+            log.error("log query failed: service={}, keyword={}",
+                    request.service(), LogSanitizer.truncate(request.keyword(), 64), ex);
             return ToolResult.error("LogQuery failed: " + ex.getMessage());
         }
     }
@@ -75,5 +91,13 @@ public final class LogQueryTool implements Tool {
                 args.getString("endTime", ""),
                 args.getString("level", ""),
                 args.getInt("limit", DEFAULT_LIMIT));
+    }
+
+    private static int lineCount(String output) {
+        return output == null || output.isEmpty() ? 0 : output.split("\\R", -1).length;
+    }
+
+    private static long elapsedMs(long startNs) {
+        return (System.nanoTime() - startNs) / 1_000_000L;
     }
 }

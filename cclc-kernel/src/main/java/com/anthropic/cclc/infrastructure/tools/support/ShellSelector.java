@@ -13,6 +13,10 @@ public final class ShellSelector {
         return List.of(SHELL_PREFIX.get(0), SHELL_PREFIX.get(1), command);
     }
 
+    public static String shellName() {
+        return SHELL_PREFIX.get(0);
+    }
+
     private static List<String> detect() {
         if (isBashOnPath()) {
             return List.of("bash", "-c");

@@ -5,7 +5,12 @@ import com.anthropic.cclc.domain.conversation.CancellationToken;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class SigintHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(SigintHandler.class);
 
     public enum State { IDLE, CANCELLING, EXIT }
 
@@ -27,21 +32,25 @@ public final class SigintHandler {
         switch (previous) {
             case IDLE -> {
                 if (state.compareAndSet(State.IDLE, State.CANCELLING)) {
+                    log.warn("SIGINT received: action=cancel_turn");
                     cancellation.cancel();
                 }
             }
             case CANCELLING -> {
                 if (state.compareAndSet(State.CANCELLING, State.EXIT)) {
+                    log.warn("SIGINT received: action=exit_process");
                     exitAction.run();
                 }
             }
             case EXIT -> {
-                // already exiting; no-op
+                log.warn("SIGINT received: action=already_exiting");
             }
         }
     }
 
     public void turnFinished() {
-        state.compareAndSet(State.CANCELLING, State.IDLE);
+        if (state.compareAndSet(State.CANCELLING, State.IDLE)) {
+            log.debug("SIGINT state reset after turn finished");
+        }
     }
 }

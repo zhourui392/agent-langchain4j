@@ -5,6 +5,7 @@ import com.anthropic.cclc.domain.tool.Tool;
 import com.anthropic.cclc.domain.tool.ToolArguments;
 import com.anthropic.cclc.domain.tool.ToolResult;
 import com.anthropic.cclc.infrastructure.tools.support.DubboTelnetClient;
+import com.anthropic.cclc.infrastructure.tools.support.LogSanitizer;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -12,6 +13,9 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Read-only Dubbo telnet invoke. Because {@code invoke} can reach any method, a
@@ -25,6 +29,8 @@ import java.util.stream.Collectors;
  * @since 2026-06-08
  */
 public final class DubboInvokeTool implements Tool {
+
+    private static final Logger log = LoggerFactory.getLogger(DubboInvokeTool.class);
 
     private static final int DEFAULT_TIMEOUT_MS = 10_000;
     private static final List<String> READ_PREFIXES = List.of(
@@ -70,26 +76,37 @@ public final class DubboInvokeTool implements Tool {
 
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
+        long startNs = System.nanoTime();
         String address = args.getString("address", "").trim();
         String invocation = args.getString("invocation", "").trim();
         if (address.isEmpty()) {
+            log.warn("dubbo invoke blocked: reason=missing_address");
             return ToolResult.error("DubboInvoke requires 'address' (host:port)");
         }
         if (invocation.isEmpty()) {
+            log.warn("dubbo invoke blocked: reason=missing_invocation, address={}", address);
             return ToolResult.error("DubboInvoke requires 'invocation' (Service.method(args))");
         }
         String method = methodName(invocation);
+        log.debug("dubbo invoke args: address={}, method={}, invocation={}",
+                address, method, LogSanitizer.truncate(invocation, 120));
         if (!isReadMethod(method)) {
+            log.warn("dubbo invoke blocked: reason=not_read_method, method={}", method);
             return ToolResult.error(
                     "DubboInvoke permits only read-shaped methods (get/query/list/...): " + invocation);
         }
         if (!isAllowlisted(invocation, method)) {
+            log.warn("dubbo invoke blocked: reason=not_allowlisted, method={}", method);
             return ToolResult.error("DubboInvoke method is not allowlisted: " + method);
         }
         Duration timeout = Duration.ofMillis(args.getInt("timeoutMs", DEFAULT_TIMEOUT_MS));
         try {
-            return ToolResult.ok(client.invoke(address, invocation, timeout));
+            String output = client.invoke(address, invocation, timeout);
+            log.info("dubbo invoke completed: address={}, method={}, chars={}, durationMs={}",
+                    address, method, output.length(), elapsedMs(startNs));
+            return ToolResult.ok(output);
         } catch (IOException ex) {
+            log.error("dubbo invoke failed: address={}, method={}", address, method, ex);
             return ToolResult.error("DubboInvoke failed: " + ex.getMessage());
         }
     }
@@ -126,5 +143,9 @@ public final class DubboInvokeTool implements Tool {
                 .map(String::trim)
                 .filter(method -> !method.isBlank())
                 .collect(Collectors.toUnmodifiableSet());
+    }
+
+    private static long elapsedMs(long startNs) {
+        return (System.nanoTime() - startNs) / 1_000_000L;
     }
 }

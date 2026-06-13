@@ -8,7 +8,12 @@ import com.anthropic.cclc.domain.tool.ToolUseRequest;
 
 import java.util.Objects;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class OutputRenderer implements AgentEventListener {
+
+    private static final Logger log = LoggerFactory.getLogger(OutputRenderer.class);
 
     private static final String ANSI_RESET = "[0m";
     private static final String ANSI_DIM = "[2m";
@@ -69,6 +74,7 @@ public final class OutputRenderer implements AgentEventListener {
     @Override
     public void onError(Throwable error) {
         closeAssistantTextIfOpen();
+        log.error("output renderer received error", error);
         String text = "error: " + error.getMessage();
         terminalIo.writeError(paint(ANSI_RED, text));
     }

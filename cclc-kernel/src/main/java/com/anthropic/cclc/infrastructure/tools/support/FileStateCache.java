@@ -7,7 +7,12 @@ import java.nio.file.attribute.FileTime;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class FileStateCache {
+
+    private static final Logger log = LoggerFactory.getLogger(FileStateCache.class);
 
     private final Map<Path, FileTime> readMtimes = new ConcurrentHashMap<>();
 
@@ -15,6 +20,7 @@ public final class FileStateCache {
         FileTime mtime = currentMtime(file);
         if (mtime != null) {
             readMtimes.put(file.toAbsolutePath().normalize(), mtime);
+            log.debug("file read state recorded: file={}, mtime={}", file, mtime);
         }
     }
 
@@ -29,11 +35,16 @@ public final class FileStateCache {
             return false;
         }
         FileTime current = currentMtime(file);
-        return current != null && current.compareTo(recorded) > 0;
+        boolean stale = current != null && current.compareTo(recorded) > 0;
+        if (stale) {
+            log.warn("file state stale: file={}, recordedMtime={}, currentMtime={}", file, recorded, current);
+        }
+        return stale;
     }
 
     public void clear() {
         readMtimes.clear();
+        log.debug("file read state cache cleared");
     }
 
     private static FileTime currentMtime(Path file) {

@@ -13,6 +13,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.StringJoiner;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * {@link LogQueryClient} backed by a host-provided HTTP endpoint.
  *
@@ -20,6 +23,8 @@ import java.util.StringJoiner;
  * @since 2026-06-13
  */
 public final class HttpLogQueryClient implements LogQueryClient {
+
+    private static final Logger log = LoggerFactory.getLogger(HttpLogQueryClient.class);
 
     private static final Duration TIMEOUT = Duration.ofSeconds(30);
 
@@ -34,12 +39,21 @@ public final class HttpLogQueryClient implements LogQueryClient {
 
     @Override
     public String query(LogQueryRequest request) throws IOException {
+        long startNs = System.nanoTime();
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri(request)).timeout(TIMEOUT).GET();
         headers.forEach(builder::header);
+        log.debug("log http query started: endpoint={}, traceIdPresent={}, service={}, limit={}",
+                LogSanitizer.stripQuery(endpointUrl), !request.traceId().isBlank(),
+                request.service(), request.limit());
         try {
-            return client.send(builder.build(), HttpResponse.BodyHandlers.ofString()).body();
+            HttpResponse<String> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+            log.debug("log http query completed: endpoint={}, status={}, bytes={}, durationMs={}",
+                    LogSanitizer.stripQuery(endpointUrl), response.statusCode(),
+                    response.body().getBytes(StandardCharsets.UTF_8).length, elapsedMs(startNs));
+            return response.body();
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
+            log.error("log http query interrupted: endpoint={}", LogSanitizer.stripQuery(endpointUrl), ex);
             throw new IOException("log query interrupted", ex);
         }
     }
@@ -76,5 +90,9 @@ public final class HttpLogQueryClient implements LogQueryClient {
 
     private static String encode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
+    private static long elapsedMs(long startNs) {
+        return (System.nanoTime() - startNs) / 1_000_000L;
     }
 }
