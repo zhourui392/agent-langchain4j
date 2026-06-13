@@ -30,7 +30,9 @@ public final class AnthropicLlmClientFactory implements LlmClientFactory {
                 .logResponses(true)
                 .cacheSystemMessages(cacheStrategy.cacheSystemPrompt())
                 .cacheTools(cacheStrategy.cacheToolDefinitions());
-        config.baseUrlIfPresent().ifPresent(builder::baseUrl);
+        config.baseUrlIfPresent()
+                .map(AnthropicEndpointResolver::resolveBaseUrl)
+                .ifPresent(builder::baseUrl);
         return new LangChain4jLlmClient(builder.build());
     }
 
