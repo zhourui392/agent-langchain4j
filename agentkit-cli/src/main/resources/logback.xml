@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <property name="LOG_DIR" value="${user.home}/.agentkit/logs"/>
+    <property name="AK_LOG_LEVEL" value="${AK_LOG_LEVEL:-INFO}"/>
+
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DIR}/agentkit.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/agentkit.%d{yyyy-MM-dd}.log</fileNamePattern>
+            <maxHistory>7</maxHistory>
+            <totalSizeCap>200MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level [%X{session:-};t%X{turn:-};%X{toolUseId:-}] %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <logger name="com.anthropic.agentkit.application" level="${AK_LOG_LEVEL:-INFO}"/>
+    <logger name="com.anthropic.agentkit.infrastructure.tools" level="${AK_LOG_LEVEL:-INFO}"/>
+    <logger name="com.anthropic.agentkit.infrastructure.llm" level="${AK_LOG_LEVEL:-INFO}"/>
+    <logger name="com.anthropic.agentkit.infrastructure.diagnosis" level="${AK_LOG_LEVEL:-INFO}"/>
+    <logger name="dev.langchain4j" level="DEBUG"/>
+    <logger name="dev.ai4j" level="DEBUG"/>
+
+    <root level="INFO">
+        <appender-ref ref="FILE"/>
+    </root>
+</configuration>

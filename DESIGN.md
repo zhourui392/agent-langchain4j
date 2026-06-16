@@ -1,8 +1,6 @@
-# Claude Code on LangChain4j — 详细设计方案
+# AgentKit on LangChain4j — 详细设计方案
 
-> 目标：用 Java + LangChain4j 复刻 claude-code 的核心主流程（消息循环、工具调用、上下文管理、权限、子 Agent、流式输出），以 CLI 形态交付可运行的 MVP。
->
-> 参考实现：`D:\ai_worspace\claude-code\src\`（claude-code 泄露源码，TypeScript）。
+> 目标：用 Java + LangChain4j 实现 CLI Agent 的核心主流程（消息循环、工具调用、上下文管理、权限、子 Agent、流式输出），以 CLI 形态交付可运行的 MVP。
 >
 > 设计原则：DDD 四层架构、SOLID、TDD（测试先行）、组合优于继承、命名即文档。
 
@@ -14,15 +12,15 @@
 
 ### 1.1 必须实现（MVP P0）
 
-| 能力 | 来源文件 |
-|---|---|
-| 多轮 tool-use 主循环（assistant ↔ tool_result 交替直至模型停止） | `QueryEngine.ts` / `query.ts` |
-| Anthropic 流式响应（SSE，逐 token 输出） | `services/api/claude.ts` |
-| 内置工具：`Bash` / `FileRead` / `FileWrite` / `FileEdit` / `Glob` / `Grep` | `tools/` |
-| 工具权限拦截（allow / ask / deny） | `hooks/toolPermission/` |
-| 系统上下文注入（CLAUDE.md、cwd、git 状态、日期） | `context.ts` |
-| 对话记忆（追加/截断） | `query.ts` |
-| 中断（Ctrl-C / AbortController） | `utils/abortController.ts` |
+| 能力 |
+|---|
+| 多轮 tool-use 主循环（assistant ↔ tool_result 交替直至模型停止） |
+| Anthropic 流式响应（SSE，逐 token 输出） |
+| 内置工具：`Bash` / `FileRead` / `FileWrite` / `FileEdit` / `Glob` / `Grep` |
+| 工具权限拦截（allow / ask / deny） |
+| 系统上下文注入（AGENTS.md、cwd、git 状态、日期） |
+| 对话记忆（追加/截断） |
+| 中断（Ctrl-C / AbortController） |
 
 ### 1.2 计划实现（P1）
 
@@ -37,7 +35,7 @@
 - **多模态输入**（图片/截图粘贴）— P2 评估
 - Ink/React 终端 UI（用纯 JLine 替代）
 - IDE Bridge、Remote Session、Plugin
-- OAuth/Keychain（用 `CCLC_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` 环境变量）
+- OAuth/Keychain（用 `AK_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` 环境变量）
 
 ---
 
@@ -70,7 +68,7 @@
 │   tools/     BashTool / FileEditTool 等具体实现              │
 │   memory/    ChatMemoryStore 文件实现                        │
 │   mcp/       langchain4j-mcp 适配                            │
-│   context/   GitStatusProvider · ClaudeMdLoader              │
+│   context/   GitStatusProvider · AgentsMdProvider            │
 │   职责：技术实现细节；实现 Domain 层定义的端口                 │
 └────────────────────────────────────────────────────────────┘
 ```
@@ -112,8 +110,6 @@ User 输入
 返回最终 AiMessage 给 REPL，等待下一轮输入
 ```
 
-> 与 claude-code 的对应：步骤 1 = `query.ts:autoCompactIfNeeded`；步骤 3 = `QueryEngine.streamLoop`；步骤 6 = `services/tools/toolOrchestration.ts:runTools`。
-
 ---
 
 ## 4. 核心抽象（Domain 层接口）
@@ -147,7 +143,7 @@ public interface PermissionPolicy {
 
 ```java
 public interface ContextProvider {
-    String key();                          // "claude_md" / "git_status" / "cwd"
+    String key();                          // "agents_md" / "git_status" / "cwd"
     Optional<String> provide(Conversation conversation);
 }
 ```
@@ -182,7 +178,7 @@ public interface ChatMemoryStore {
 }
 ```
 
-> 文件实现写入 `~/.claude-code-j/sessions/<id>.jsonl`，对应 `memdir/`。
+> 文件实现写入 `~/.agentkit/sessions/<id>.jsonl`，对应 `memdir/`。
 
 ---
 
@@ -224,7 +220,7 @@ public final class ToolInvocation {
 
 ### 6.1 `AgentExecutor`
 
-> claude-code 中 `QueryEngine.streamLoop` 的等价物，是项目的"心脏"。
+> 主轮次循环，项目的"心脏"。
 
 ```java
 public final class AgentExecutor {
@@ -335,8 +331,8 @@ public final class BashTool implements Tool {
 
 - 单会话单文件，JSONL 格式（每行一条消息）。
 - 写入用 append 模式 + fsync，避免崩溃丢失。
-- 路径：`${user.home}/.claude-code-j/sessions/<sessionId>.jsonl`。
-- **恢复语义**：`/resume` 只重放消息历史，**不重新执行工具调用**。`tool_use` 与 `tool_result` 配对从文件原样加载到 `Conversation`，与 claude-code 行为一致。
+- 路径：`${user.home}/.agentkit/sessions/<sessionId>.jsonl`。
+- **恢复语义**：`/resume` 只重放消息历史，**不重新执行工具调用**。`tool_use` 与 `tool_result` 配对从文件原样加载到 `Conversation`。
 
 ---
 
@@ -344,7 +340,7 @@ public final class BashTool implements Tool {
 
 ### 8.1 渲染
 
-`OutputRenderer` 在 `onPartialText` 中将 token 写入 `System.out` 并 flush。不缓冲、不行包装，让用户看到逐字输出（与 claude-code 的 Ink 渲染等效，但无富文本）。
+`OutputRenderer` 在 `onPartialText` 中将 token 写入 `System.out` 并 flush。不缓冲、不行包装，让用户看到逐字输出（无富文本渲染）。
 
 ### 8.2 中断
 
@@ -386,10 +382,10 @@ public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
 | CLI | picocli + JLine | picocli 处理参数；JLine 处理 REPL 行编辑/历史 |
 | JSON | jackson-databind | 工具 schema、记忆持久化 |
 | 进程执行 | zt-exec | 比 `ProcessBuilder` 更稳，超时和流捕获完善 |
-| 文件搜索 | ripgrep（外部进程） | 与 claude-code 行为一致 |
+| 文件搜索 | ripgrep（外部进程） | 性能优先，缺失时回退 Java 正则 |
 | 测试 | JUnit 5 + AssertJ + Mockito | TDD 标配 |
 | 日志 | SLF4J + Logback | 标准 |
-| 配置 | 环境变量 + `~/.claude-code-j/config.json` | 简单 |
+| 配置 | 环境变量 + `~/.agentkit/config.json` | 简单 |
 
 显式不引入：Spring（过重）、Guice（不必要）、Lombok（团队偏好可议，默认不用以保持显式）。
 
@@ -398,26 +394,26 @@ public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
 ## 11. 项目结构
 
 ```
-claude-code-langchain4j/
+agentkit/
 ├── pom.xml
 ├── DESIGN.md                            ← 本文件
 ├── README.md
-├── cclc-kernel/                         ← 通用 Agent 底座，无 CLI / 诊断语义
-│   └── src/main/java/com/anthropic/cclc/
+├── agentkit-kernel/                         ← 通用 Agent 底座，无 CLI / 诊断语义
+│   └── src/main/java/com/anthropic/agentkit/
 │       ├── application/                 ← AgentExecutor、预算、权限、上下文压缩
 │       ├── domain/                      ← Conversation、Message、Tool、Permission、Port
 │       └── infrastructure/              ← LLM、stream-json、通用 tools、治理包装链
 │
-├── cclc-agent-diagnosis/                ← 诊断专用层，宿主依赖的 artifact
-│   └── src/main/java/com/anthropic/cclc/
+├── agentkit-agent-diagnosis/                ← 诊断专用层，宿主依赖的 artifact
+│   └── src/main/java/com/anthropic/agentkit/
 │       ├── interfaces/engine/           ← DiagnoseEngine、RunRequest、Builder
 │       ├── domain/diagnosis/            ← DiagnosisCase、Plan、Evidence、Report
 │       ├── application/diagnosis/       ← PlanGuardPolicy 等诊断编排策略
 │       └── infrastructure/diagnosis/    ← Planner、Reporter、StateCodec、ToolFactory
 │
-├── cclc-cli/                            ← 调试壳，不进入宿主 classpath
-│   └── src/main/java/com/anthropic/cclc/
-│       └── interfaces/cli/              ← CclcApplication、JLine REPL、渲染
+├── agentkit-cli/                            ← 调试壳，不进入宿主 classpath
+│   └── src/main/java/com/anthropic/agentkit/
+│       └── interfaces/cli/              ← AgentKitApplication、JLine REPL、渲染
 │
 └── docs/
     ├── archive/
@@ -504,27 +500,24 @@ claude-code-langchain4j/
 
 ---
 
-## 15. 与 claude-code 源码的对照速查
+## 15. 组件总览
 
-| claude-code 文件 | 本项目对应 |
+| 职责 | 本项目组件 |
 |---|---|
-| `src/main.tsx` | `CclcApplication` + `ReplLoop` |
-| `src/QueryEngine.ts` | `AgentExecutor` + `ConversationOrchestrator` |
-| `src/query.ts:queryLoop` | `AgentExecutor.run` 内部循环 |
-| `src/Tool.ts` | `domain/tool/Tool.java` |
-| `src/tools.ts`（注册表） | `ToolRegistry` |
-| `src/context.ts` | `SystemPromptComposer` + `ContextProvider` 实现 |
-| `src/services/compact/autoCompact.ts` | `cclc-kernel/application/context/ContextCompactionService` |
-| `src/hooks/toolPermission/` | `PermissionService` + `PermissionPolicy` |
-| `src/services/tools/toolOrchestration.ts` | `AgentExecutor.dispatchToolCalls` |
-| `src/services/api/claude.ts` | `LangChain4jLlmClient` |
-| `src/memdir/` | `FileChatMemoryStore` |
-| `src/tools/AgentTool/` | `cclc-kernel/infrastructure/tools/SubAgentTool` |
-| `src/tools/BashTool/` | `BashTool` + `ProcessRunner` |
-| `src/tools/FileEditTool/` | `FileEditTool` + `FileStateCache` |
-| Claude stream-json 输出 | `cclc-kernel/infrastructure/streamjson/ClaudeStreamJsonListener` / `ClaudeStreamJsonWriter` |
-| 诊断进程内门面 | `cclc-agent-diagnosis/interfaces/engine/DiagnoseEngine` / `RunRequest` |
-| CLI 调试入口 | `cclc-cli/interfaces/cli/CclcApplication` |
+| CLI 入口 + REPL | `AgentKitApplication` + `ReplLoop` |
+| 主循环执行 | `AgentExecutor` + `ConversationOrchestrator` |
+| 工具抽象 + 注册表 | `domain/tool/Tool.java` + `ToolRegistry` |
+| 系统上下文组装 | `SystemPromptComposer` + `ContextProvider` 实现 |
+| 上下文压缩 | `agentkit-kernel/application/context/ContextCompactionService` |
+| 权限拦截 | `PermissionService` + `PermissionPolicy` |
+| 工具分发 | `AgentExecutor.dispatchToolCalls` |
+| LLM 适配 | `LangChain4jLlmClient` |
+| 会话持久化 | `FileChatMemoryStore` |
+| 子 Agent | `agentkit-kernel/infrastructure/tools/SubAgentTool` |
+| Bash / 文件编辑 | `BashTool` + `ProcessRunner` / `FileEditTool` + `FileStateCache` |
+| stream-json 输出 | `agentkit-kernel/infrastructure/streamjson/ClaudeStreamJsonListener` / `ClaudeStreamJsonWriter` |
+| 诊断进程内门面 | `agentkit-agent-diagnosis/interfaces/engine/DiagnoseEngine` / `RunRequest` |
+| CLI 调试入口 | `agentkit-cli/interfaces/cli/AgentKitApplication` |
 
 ---
 
@@ -539,7 +532,7 @@ claude-code-langchain4j/
 
 ### 16.1 定位转变：进程内诊断引擎（2026-06-08）
 
-本项目从「claude-code CLI 复刻」转为 **agent-web 的进程内只读诊断引擎**。完整方案见 [`docs/archive/diagnose-engine-plan.md`](docs/archive/diagnose-engine-plan.md)，wire 契约见 [`docs/samples/README.md`](docs/samples/README.md)。
+本项目从 CLI 形态转为 **agent-web 的进程内只读诊断引擎**。完整方案见 [`docs/archive/diagnose-engine-plan.md`](docs/archive/diagnose-engine-plan.md)，wire 契约见 [`docs/samples/README.md`](docs/samples/README.md)。
 
 | 议题 | 决策 | 影响 |
 |---|---|---|
@@ -556,7 +549,7 @@ claude-code-langchain4j/
 
 | 议题 | 决策 | 影响 |
 |---|---|---|
-| 物理模块 | parent reactor 下设 `cclc-kernel`、`cclc-agent-diagnosis`、`cclc-cli` | 宿主只依赖诊断 artifact，kernel 传递带入，CLI/JLine 不进入宿主 classpath |
+| 物理模块 | parent reactor 下设 `agentkit-kernel`、`agentkit-agent-diagnosis`、`agentkit-cli` | 宿主只依赖诊断 artifact，kernel 传递带入，CLI/JLine 不进入宿主 classpath |
 | kernel 语义 | kernel 不感知专用方向，不出现 diagnosis 语义 | 第二个专用 Agent 可复用主循环、预算、stream-json、结构化输出、治理包装链 |
 | 通用件归位 | `ContextCompactionService`、`SubAgentTool`、`ClaudeStreamJsonListener/Writer` 移入 kernel | `interfaces.engine` 只保留诊断门面与事件契约对象 |
 | 诊断能力归位 | `AgentBudget`、`StructuredOutputTool`、`GovernedTool` 等机制下沉 kernel，诊断层只注册 schema、规则和后端 | 避免诊断设计复制通用能力 |
@@ -566,7 +559,7 @@ claude-code-langchain4j/
 | 议题 | 决策 | 影响 |
 |---|---|---|
 | 正式集成 | **进程内 Java API** 是唯一正式形态 | `DiagnoseEngineBuilder` 是宿主组装根；不做 CLI 子进程、Server、RPC 或插件扫描 |
-| CLI 定位 | `cclc-cli` 只作为 kernel 调试壳 | CLI 可单独运行 REPL，但不随诊断专用层发布 |
+| CLI 定位 | `agentkit-cli` 只作为 kernel 调试壳 | CLI 可单独运行 REPL，但不随诊断专用层发布 |
 | 对外稳定面 | 仅 `DiagnoseEngine`、`RunRequest`、stream-json 事件契约纳入兼容承诺 | 其余类按 internal 处理，优先保持边界清晰 |
 
 ### 16.4 引入 Skill 子系统（2026-06-13）
@@ -575,7 +568,7 @@ claude-code-langchain4j/
 
 | 议题 | 决策 | 影响 |
 |---|---|---|
-| Skill 形态 | 目录 + `SKILL.md`（YAML frontmatter），对齐 claude-code Agent Skills | 渐进暴露三级：目录注入 name+description，调用时返回正文，附属文件按需 Read |
+| Skill 形态 | 目录 + `SKILL.md`（YAML frontmatter），对齐通用 Agent Skills 约定 | 渐进暴露三级：目录注入 name+description，调用时返回正文，附属文件按需 Read |
 | 归属模块 | kernel 通用件（`domain.skill` + `infrastructure.skill`），诊断层和 CLI 仅装配 | 第二个专用 Agent 可直接复用；kernel 不出现 diagnosis 语义 |
 | 能力边界 | **知识型 Skill**，不含可执行脚本 | 与只读诊断引擎姿态一致；Bash 不因 Skill 自动开放 |
 | PromptPack 去留 | 保留，二者分工：常驻必读走 PromptPack，按需取用走 Skill | 存量 SOP 渐进迁移，不做一次性切换 |
@@ -599,9 +592,9 @@ claude-code-langchain4j/
 
 | 议题 | 决策 | 影响 |
 |---|---|---|
-| provider 选择 | `CCLC_PROVIDER` / config `provider` 支持 `OPENAI`、`ANTHROPIC`，默认 `OPENAI` | 本地默认走 OpenAI-compatible endpoint；旧 Anthropic 用户需显式 `CCLC_PROVIDER=anthropic` |
-| 凭据别名 | API key 依次读取 `CCLC_API_KEY`、`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`；baseUrl 依次读取 `CCLC_BASE_URL`、`OPENAI_BASE_URL`、`ANTHROPIC_BASE_URL` | 兼容旧环境变量，同时提供 provider-neutral 配置 |
-| 默认模型 | OpenAI 默认 `gpt-5.5`；Anthropic 默认 `claude-sonnet-4-6` | `CCLC_MODEL` 仍可覆盖 |
+| provider 选择 | `AK_PROVIDER` / config `provider` 支持 `OPENAI`、`ANTHROPIC`，默认 `OPENAI` | 本地默认走 OpenAI-compatible endpoint；旧 Anthropic 用户需显式 `AK_PROVIDER=anthropic` |
+| 凭据别名 | API key 依次读取 `AK_API_KEY`、`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`；baseUrl 依次读取 `AK_BASE_URL`、`OPENAI_BASE_URL`、`ANTHROPIC_BASE_URL` | 兼容旧环境变量，同时提供 provider-neutral 配置 |
+| 默认模型 | OpenAI 默认 `gpt-5.5`；Anthropic 默认 `claude-sonnet-4-6` | `AK_MODEL` 仍可覆盖 |
 | 实现边界 | `LangChain4jLlmClient` 继续依赖通用 `StreamingChatModel`；provider 差异只在工厂层 | 主循环、消息映射、工具 schema、权限链不改 |
 | prompt cache | Anthropic 工厂保留 `CacheBreakpointStrategy`；OpenAI 工厂不设置 prompt-cache marker | OpenAI 路径 cache token 统计保持 0，不估算 |
 
@@ -609,6 +602,6 @@ claude-code-langchain4j/
 
 ## 17. 下一步
 
-1. agent-web 切换依赖 `cclc-agent-diagnosis`，通过 `DiagnoseEngineBuilder` 组装。
+1. agent-web 切换依赖 `agentkit-agent-diagnosis`，通过 `DiagnoseEngineBuilder` 组装。
 2. 在宿主侧验证 `AgentType.NATIVE`、stop、历史回放、状态快照往返。
 3. 根据真实调用链补齐生产 allowlist、审计 sink 与日志 API 配置。

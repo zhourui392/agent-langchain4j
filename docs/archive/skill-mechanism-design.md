@@ -79,7 +79,7 @@
 ### 4.1 模块归位
 
 ```
-cclc-kernel
+agentkit-kernel
 ├── domain/skill/                    ← 纯领域，零外部依赖
 │   ├── Skill.java                   （值对象：name/description/body/baseDir）
 │   ├── SkillCatalog.java            （聚合：注册、查找、目录渲染，不变量收口）
@@ -91,12 +91,12 @@ cclc-kernel
 ├── infrastructure/tools/
 │   └── SkillTool.java               （L2：name="Skill"，返回正文）
 
-cclc-agent-diagnosis
+agentkit-agent-diagnosis
 └── interfaces/engine/
     └── DiagnoseEngineBuilder.skills(Path) （装配入口，可选）
 ```
 
-依赖方向不变：`domain.skill` 不 import 任何外层；`SkillTool`、`DirectorySkillSource` 依赖 domain；装配在 builder / `CclcApplication.main` 显式完成。无 classpath 扫描、无反射——目录文件扫描沿用 `PromptPackLoader` 先例。
+依赖方向不变：`domain.skill` 不 import 任何外层；`SkillTool`、`DirectorySkillSource` 依赖 domain；装配在 builder / `AgentKitApplication.main` 显式完成。无 classpath 扫描、无反射——目录文件扫描沿用 `PromptPackLoader` 先例。
 
 ### 4.2 运行时序（一次 Skill 取用）
 
@@ -299,7 +299,7 @@ DiagnoseEngineBuilder.create()
 
 ### 8.3 CLI 装配
 
-`CclcApplication.main` 同样以显式 wiring 接入，读取 `CCLC_SKILLS_DIR` 环境变量（缺省不启用）。CLI 仅调试用，`/skill-name` 斜杠触发不进 MVP。
+`AgentKitApplication.main` 同样以显式 wiring 接入，读取 `AK_SKILLS_DIR` 环境变量（缺省不启用）。CLI 仅调试用，`/skill-name` 斜杠触发不进 MVP。
 
 ---
 
@@ -359,7 +359,7 @@ ArchUnit：`LayeredArchitectureTest` 无需新增规则，`domain.skill` 自动�
 | SK-4 [TDD] | `DirectorySkillSource`（扫描 + 路径逃逸防护 + fail-fast） | SK-1, SK-3 |
 | SK-5 [TDD] | `SkillCatalogContextProvider` | SK-2 |
 | SK-6 [TDD] | `SkillTool` | SK-2 |
-| SK-7 [TDD] | `DiagnoseEngineBuilder.skills(Path)` 装配 + `CclcApplication` 环境变量接入 | SK-4, SK-5, SK-6 |
+| SK-7 [TDD] | `DiagnoseEngineBuilder.skills(Path)` 装配 + `AgentKitApplication` 环境变量接入 | SK-4, SK-5, SK-6 |
 | SK-8 | 端到端：StubLlmClient 脚本走通「目录→调用→展开→续轮」；ArchUnit 全绿 | SK-7 |
 | SK-9 | 文档收尾：README「不在范围内」更新、capability-design §5.1 标注决策已被 §16.4 推翻、Skill 编写指南（docs/skill-authoring.md） | SK-8 |
 

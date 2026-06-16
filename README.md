@@ -1,15 +1,15 @@
-# Claude Code on LangChain4j
+# AgentKit on LangChain4j
 
 [![CI](https://github.com/zhourui392/agent-langchain4j/actions/workflows/ci.yml/badge.svg)](https://github.com/zhourui392/agent-langchain4j/actions/workflows/ci.yml)
 
-Java 21 + LangChain4j 1.8 复刻 [claude-code](https://github.com/anthropics/claude-code) 的 CLI 主循环：消息轮转、工具调用、权限、流式输出、上下文注入、会话持久化。
+Java 21 + LangChain4j 1.8 实现的 CLI Agent 主循环：消息轮转、工具调用、权限、流式输出、上下文注入、会话持久化。
 
-参考实现是 TypeScript 版的 claude-code；本项目用 DDD 四层 + 端口/适配器把 Anthropic 串成 Java 形态，ArchUnit 守住依赖方向。
+用 DDD 四层 + 端口/适配器把 LLM provider 串成 Java 形态，ArchUnit 守住依赖方向。
 
 - 设计：[DESIGN.md](DESIGN.md)
 - 分层设计归档：[docs/archive/agent-platform-layering-design.md](docs/archive/agent-platform-layering-design.md)
 - 任务（39 项 / S0–S8 + MVP-Gate）：[TASKLIST.md](TASKLIST.md)
-- 协作约定：[CLAUDE.md](CLAUDE.md)
+- 协作约定：[AGENTS.md](AGENTS.md)
 
 ## 已具备的能力
 
@@ -17,12 +17,12 @@ Java 21 + LangChain4j 1.8 复刻 [claude-code](https://github.com/anthropics/cla
 |---|---|
 | Agent 主循环 | `AgentExecutor`：流式 LLM → tool_use → 并发执行（虚拟线程）→ tool_result 按原顺序回灌 → 直到模型无 tool_use 终止 |
 | 工具 | `Bash` / `Read` / `Write` / `Edit` / `Glob` / `Grep`（ripgrep 自动探测，回退到 Java 正则）|
-| 权限 | 4 模式策略（DEFAULT / PLAN / BYPASS / AUTO）+ 交互式 prompt + 会话级 ALLOW_ALWAYS 缓存。**默认 BYPASS（全部自动放行）**，通过 `CCLC_PERMISSION_MODE` 切回 ASK |
-| 上下文 | CLAUDE.md（含父级合并）/ cwd / git status / 日期 |
-| Prompt cache | 系统指令、CLAUDE.md、工具描述构成稳定前缀；动态段后插入 ephemeral 断点 |
+| 权限 | 4 模式策略（DEFAULT / PLAN / BYPASS / AUTO）+ 交互式 prompt + 会话级 ALLOW_ALWAYS 缓存。**默认 BYPASS（全部自动放行）**，通过 `AK_PERMISSION_MODE` 切回 ASK |
+| 上下文 | AGENTS.md（含父级合并）/ cwd / git status / 日期 |
+| Prompt cache | 系统指令、AGENTS.md、工具描述构成稳定前缀；动态段后插入 ephemeral 断点 |
 | Skill 机制 | `skills-root/<name>/SKILL.md` 按需展开；目录注入稳定前缀，正文通过只读 `Skill` 工具返回 |
 | 流式输出 | 逐 token 渲染，SIGINT 二段式（取消 turn → 退出进程）|
-| 持久化 | JSONL 写入 `~/.claude-code-j/sessions/<id>.jsonl`；`/resume <id>` 加载历史不重跑工具 |
+| 持久化 | JSONL 写入 `~/.agentkit/sessions/<id>.jsonl`；`/resume <id>` 加载历史不重跑工具 |
 | 工具 schema 上线 | `ToolSpec → LC4J JsonObjectSchema → Anthropic input_schema` 全链路打通 |
 
 ## 不在范围内
@@ -40,14 +40,14 @@ Spring / Guice / Lombok、Ink 风格 TUI、多模态输入、IDE / Plugin 子系
 两种方式，env 覆盖文件：
 
 1. 环境变量
-   - `CCLC_PROVIDER`（可选：`OPENAI` / `ANTHROPIC`，默认 `OPENAI`）
-   - `CCLC_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`（按此顺序取第一个非空）
-   - `CCLC_MODEL`（OpenAI 默认 `gpt-5.5`；Anthropic 默认 `claude-sonnet-4-6`）
-   - `CCLC_MAX_TOKENS`
-   - `CCLC_BASE_URL` / `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`（按此顺序取第一个非空；Anthropic provider 可填服务根地址，系统内部归一化到 `/v1/messages`）
-   - `CCLC_PERMISSION_MODE`（DEFAULT / PLAN / BYPASS / AUTO，默认 `BYPASS`）
-   - `CCLC_SKILLS_DIR`（可选，指向 `skills-root`，加载 `<name>/SKILL.md` 知识型 Skill）
-2. `~/.claude-code-j/config.json`
+   - `AK_PROVIDER`（可选：`OPENAI` / `ANTHROPIC`，默认 `OPENAI`）
+   - `AK_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`（按此顺序取第一个非空）
+   - `AK_MODEL`（OpenAI 默认 `gpt-5.5`；Anthropic 默认 `claude-sonnet-4-6`）
+   - `AK_MAX_TOKENS`
+   - `AK_BASE_URL` / `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`（按此顺序取第一个非空；Anthropic provider 可填服务根地址，系统内部归一化到 `/v1/messages`）
+   - `AK_PERMISSION_MODE`（DEFAULT / PLAN / BYPASS / AUTO，默认 `BYPASS`）
+   - `AK_SKILLS_DIR`（可选，指向 `skills-root`，加载 `<name>/SKILL.md` 知识型 Skill）
+2. `~/.agentkit/config.json`
    ```json
    {
      "provider": "OPENAI",
@@ -75,15 +75,15 @@ Skill 编写契约见 [docs/skill-authoring.md](docs/skill-authoring.md)。
 ```powershell
 mvn clean verify                                                               # 编译 + 单测 + Failsafe IT + JaCoCo
 mvn test                                                                       # 全模块单测
-mvn -pl cclc-kernel -Dtest=AgentExecutorTest test                              # 单模块单类
-mvn -pl cclc-kernel -Dtest=ConversationTest#appendsMessagesInOrder test        # 单方法
+mvn -pl agentkit-kernel -Dtest=AgentExecutorTest test                              # 单模块单类
+mvn -pl agentkit-kernel -Dtest=ConversationTest#appendsMessagesInOrder test        # 单方法
 mvn -Psmoke "-Dsurefire.skip=true" verify                                      # 跑 *SmokeIT.java（需 API key）
-mvn -q -pl cclc-cli -am test-compile exec:java                                 # 启动 REPL
-mvn -q -pl cclc-cli -am test-compile exec:java "-Dexec.args=--version"
+mvn -q -pl agentkit-cli -am test-compile exec:java                                 # 启动 REPL
+mvn -q -pl agentkit-cli -am test-compile exec:java "-Dexec.args=--version"
 .\run.bat "-Dexec.args=--version"                                              # Windows 快捷启动
 ```
 
-JaCoCo 报告：`cclc-*/target/site/jacoco/index.html`。
+JaCoCo 报告：`agentkit-*/target/site/jacoco/index.html`。
 
 ## REPL 用法
 
@@ -102,19 +102,19 @@ JaCoCo 报告：`cclc-*/target/site/jacoco/index.html`。
 ## 目录速查
 
 ```
-cclc-kernel/
+agentkit-kernel/
   application         AgentExecutor、PermissionService、SystemPromptComposer、SessionResumer
   domain              Conversation、ChatMessage、Tool、PermissionPolicy、端口
   infrastructure      LLM、stream-json、memory、context、permission、通用 tools
 
-cclc-agent-diagnosis/
+agentkit-agent-diagnosis/
   domain/diagnosis    DiagnosisCase、DiagnosisPlan、Evidence、EvidenceLedger
   application/diagnosis
   infrastructure      诊断工具、治理包装、planner/reporter/state codec
   interfaces/engine   DiagnoseEngine、RunRequest、DiagnoseEngineBuilder
 
-cclc-cli/
+agentkit-cli/
   interfaces/cli      JLine REPL、斜杠命令、SIGINT、输出渲染
 ```
 
-依赖边界：`cclc-agent-diagnosis → cclc-kernel`，`cclc-cli → cclc-kernel`；kernel 不感知诊断或 CLI，CLI 不进入宿主 classpath。
+依赖边界：`agentkit-agent-diagnosis → agentkit-kernel`，`agentkit-cli → agentkit-kernel`；kernel 不感知诊断或 CLI，CLI 不进入宿主 classpath。

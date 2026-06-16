@@ -1,4 +1,4 @@
-# Claude Code on LangChain4j — 任务清单
+# AgentKit on LangChain4j — 任务清单
 
 > 本文档由 `DESIGN.md` 拆解而来，共 **39 个任务**，覆盖 9 个阶段。
 >
@@ -52,9 +52,9 @@ S0 (1→2→3)
 **步骤**:
 - 创建 `pom.xml`：JDK 21、UTF-8、jacoco、surefire
 - 依赖：langchain4j-anthropic、langchain4j-mcp、picocli、jline、jackson-databind、zt-exec、slf4j+logback、junit5、assertj、mockito
-- `CclcApplication.main` 空壳，打印版本号
+- `AgentKitApplication.main` 空壳，打印版本号
 
-**DoD**: `mvn clean verify` 通过；`mvn -q -pl cclc-cli -am test-compile exec:java "-Dexec.args=--version"` 输出版本号。
+**DoD**: `mvn clean verify` 通过；`mvn -q -pl agentkit-cli -am test-compile exec:java "-Dexec.args=--version"` 输出版本号。
 
 ---
 
@@ -232,7 +232,7 @@ S0 (1→2→3)
 
 #### #14 [S3-Infra] 配置加载（env + JSON 文件）（blockedBy: 3）
 
-**Goal**: 从 `ANTHROPIC_API_KEY` 和 `~/.claude-code-j/config.json` 读取配置。
+**Goal**: 从 `ANTHROPIC_API_KEY` 和 `~/.agentkit/config.json` 读取配置。
 
 **步骤**:
 - `AppConfig` record：apiKey、model、maxTokens
@@ -470,8 +470,8 @@ S0 (1→2→3)
 #### #29 [S6-TDD] ContextProvider 组合与缓存 （blockedBy: 3）
 
 **Red**: `ContextProviderTest`（每 provider 独立 + 组合）
-- `ClaudeMdProviderReadsFromCwd`
-- `ClaudeMdProviderMergesParentDirectories`
+- `AgentsMdProviderReadsFromCwd`
+- `AgentsMdProviderMergesParentDirectories`
 - `GitStatusProviderReturnsEmptyForNonGitDir`
 - `CwdProviderReturnsAbsolutePath`
 - `DateProviderReturnsTodayIso`
@@ -504,7 +504,7 @@ S0 (1→2→3)
 **Goal**: 可交互的 REPL。
 
 **步骤**:
-- `ReplLoop` 用 JLine `LineReader`，启用历史持久化到 `~/.claude-code-j/history`
+- `ReplLoop` 用 JLine `LineReader`，启用历史持久化到 `~/.agentkit/history`
 - 多行输入（反斜杠续行 或 ``` 围栏）
 - 空输入忽略，`exit`/`quit` 终止
 
@@ -612,7 +612,7 @@ S0 (1→2→3)
 
 **步骤**:
 - `SessionId.fresh()` 用 UUIDv7（时间有序）
-- 默认路径 `~/.claude-code-j/sessions/<id>.jsonl`
+- 默认路径 `~/.agentkit/sessions/<id>.jsonl`
 - 可配置 override
 
 **验收**: `SessionIdTest` 时序唯一性；路径解析跨平台正确。
