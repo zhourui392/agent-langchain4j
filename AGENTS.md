@@ -103,3 +103,20 @@ interfaces/cli  →  application  →  domain  ←  infrastructure
 - **L1**：单用户多项目，加项目级 worktree 命名空间 + 项目级 secret 作用域，基本仍单进程。
 - **L2（拐点）**：多用户，必须上容器沙箱 + 控制面/执行面拆分 + 数据库状态 + 鉴权。这是重写外壳，不是加功能；但虚线以下（`Role`/终结工具/worktree/`Pipeline`/`AgentExecutor`）原样复用。
 - **现在不要做**：容器/沙箱、Spring/DI、调度器/队列、为多租户提前抽数据库。守住五条缝即可把 L2 的门开着，提前做是纯负担。
+
+## kernel 为基座 · agent 逐个扩展（扩展方向）
+
+> 扩展方向原则。`agentkit-kernel` 是基座（agent 运行时 + SPI），每个 agent 是 kernel 之上的一个**包**。`agentkit-agent-diagnosis` 是第一个 agent 包；"Devin 式多角色协作开发" 不是独立产品，而是**另一个平级的 agent 包**（会编排子 Agent 的 coding agent），复用同一套 kernel。
+
+### 职责边界
+- **kernel 提供（领域无关、稳定）**：`AgentExecutor` 回合循环、`ParallelToolDispatcher`；扩展点 SPI —— `Tool`、`SubAgentTool`（起隔离子 Agent）、`StructuredOutputTool`（终结工具/结构化交接）、`ContextProvider`、`PermissionPolicy`；`AgentBudget`（配额）、`governance/`（审计/脱敏）。
+- **每个 agent 包提供（领域特定）**：领域工具（`DubboInvokeTool`/`EsReadTool`…）、终结工具 schema、领域 VO（交接载体，如 `DiagnosisPlan`，未来 `Patch`/`ReviewVerdict`）、payload→VO 映射、**自己的 orchestrator**。
+- **编排不下沉 kernel**：诊断循环（假设→取证→更新计划）与写码循环（拆任务→改→评审→打回）是不同领域工作流 = 业务规则，按分层纪律留在各包 application 层。kernel 只给积木（`SubAgentTool`/`StructuredOutputTool`），不给工作流——内置某种编排会被某个领域的形状污染。
+
+### 依赖纪律（单向）
+- agent 包 **只能单向依赖 kernel，kernel 绝不反向依赖任何 agent 包**。Maven 模块边界 + ArchUnit `kernelHasNoDiagnosisDependency` 已强制；新加 coding 包同此规则。
+- 领域概念不准漏进 kernel：`Evidence`/`Hypothesis`/`DiagnosisPlan` 留诊断包，`Patch`/`ReviewVerdict` 留 coding 包。注意：`SubAgentTool` 的 javadoc 仍有诊断味（"chase one hypothesis"）——代码本身通用（只收 `prompt`），注释应改领域中立。
+
+### kernel 待补的两块（让"加 agent"变薄）
+1. **`StructuredAgent`（应抽到 kernel）**：把"受约束跑一轮 → 产出结构化 payload"的样板收掉。现在每个角色（`StructuredDiagnosisPlanner`）都手搓"建终结工具 → 塞 registry → `new AgentExecutor().run(prompt)` → 读 sink"四步。kernel 返回**通用 payload（不认识领域 VO）**，payload→VO 映射留在包里。其构造参数 `(systemPrompt, domainTools, terminalToolSpec)` 即"角色"的物化。落点 `infrastructure/agent/`（与 `SubAgentTool` 同理由：要同时用 application 的 `AgentExecutor` 与 infra 的 `StructuredOutputTool`，只能在 infra）。TDD 草图见 `docs/structured-agent-tdd-draft.md`。
+2. **`AgentManifest`（第二个 agent 真要插入时再上）**：agent 自描述（id / description / entryPoint / requiredConfigKeys），让运行时/CLI 发现与派发，取代 `AgentKitApplication.main` 手工 wiring。先不做，等需要。
