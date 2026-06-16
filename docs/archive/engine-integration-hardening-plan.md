@@ -9,7 +9,7 @@
 
 ## 0. 背景与现状
 
-E0–E8 交付了引擎本体：stream-json 序列化（E1）、无状态门面（E2）、只读权限（E3）、六个只读诊断工具（E5）、截断 + auto-compact（E6）、SubAgentTool（E7）、usage 透出（E8 部分）。agent-web 侧已有 `native-diagnose` Maven profile、`NativeDiagnoseGateway` 端口与 `CclcNativeDiagnoseGateway` 适配器，单轮诊断可跑通。
+E0–E8 交付了引擎本体：stream-json 序列化（E1）、无状态门面（E2）、只读权限（E3）、六个只读诊断工具（E5）、截断 + auto-compact（E6）、SubAgentTool（E7）、usage 透出（E8 部分）。agent-web 侧已有 `native-diagnose` Maven profile、`NativeDiagnoseGateway` 端口与 `AgentKitNativeDiagnoseGateway` 适配器，单轮诊断可跑通。
 
 对照两侧代码盘点出的缺口（按影响排序）：
 
@@ -107,7 +107,7 @@ public final class StreamJsonHistoryParser {
 }
 ```
 
-放 `cclc-agent-diagnosis` 的 `interfaces/engine`（与 `ConversationRebuilder` 互逆，相邻放置）。坏行策略：单行解析失败跳过并 WARN，不让历史污染毁掉整轮诊断；tool_use/tool_result 配对断裂时丢弃孤儿侧，保 `ToolUseInvariantChecker` 不破。
+放 `agentkit-agent-diagnosis` 的 `interfaces/engine`（与 `ConversationRebuilder` 互逆，相邻放置）。坏行策略：单行解析失败跳过并 WARN，不让历史污染毁掉整轮诊断；tool_use/tool_result 配对断裂时丢弃孤儿侧，保 `ToolUseInvariantChecker` 不破。
 
 ### D-8 后端工厂：配置 record 进，`DiagnosisToolBackends` 出
 
@@ -137,7 +137,7 @@ public final class DiagnosisToolBackendsFactory {
 
 ### D-11 日志：引擎是服务端组件，按服务端标准打日志
 
-`cclc-agent-diagnosis` 加 SLF4J（api 已是传递依赖）。固定日志点：
+`agentkit-agent-diagnosis` 加 SLF4J（api 已是传递依赖）。固定日志点：
 
 | 时机 | 级别 | 内容 |
 |---|---|---|
@@ -311,7 +311,7 @@ public final class DiagnosisToolBackendsFactory {
 
 | 项 | 改动点 | 依赖引擎能力 |
 |---|---|---|
-| 传入 history + snapshot | `CclcNativeDiagnoseGateway.toRunRequest` 补两个 builder 调用；任务续跑前用 `StreamJsonHistoryParser` 反解已存流 | F1-3 |
+| 传入 history + snapshot | `AgentKitNativeDiagnoseGateway.toRunRequest` 补两个 builder 调用；任务续跑前用 `StreamJsonHistoryParser` 反解已存流 | F1-3 |
 | 落库 RunSummary | `NativeDiagnoseGateway` 端口签名升级；`DiagnoseTask` 增 usage / exit reason 字段 | F1-2 |
 | 工具后端配置 | `NativeDiagnoseConfig` 绑 `agent.native-diagnose.backends.*` → `DiagnosisBackendConfig` | F2-1 |
 | continueAsChat 回 native | `DiagnoseAppServiceImpl.continueAsChat` 按来源 agentType 路由 | F1-3 |

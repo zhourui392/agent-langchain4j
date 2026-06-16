@@ -1,6 +1,6 @@
 # Agent 底座与专用层分层设计方案
 
-> 面向 `claude-code-langchain4j` 从单体工程演进为"通用 Agent 底座 + 专用 Agent"双层产品的架构设计。专用 Agent 以进程内 jar 方式被宿主服务（首个宿主：agent-web）集成。
+> 面向 `agentkit` 从单体工程演进为"通用 Agent 底座 + 专用 Agent"双层产品的架构设计。专用 Agent 以进程内 jar 方式被宿主服务（首个宿主：agent-web）集成。
 >
 > 配套文档：`diagnosis-agent-capability-design.md`（诊断 Agent 能力设计，本文是其分层前提）。
 >
@@ -11,7 +11,7 @@
 
 ## 1. 背景与动机
 
-Claude Code 越来越臃肿，包含大量专门方向用不到的功能（文件编辑、代码生成、IDE 集成、富终端 UI）。本项目的定位不是复刻它，而是：
+全功能编码 CLI 往往越来越臃肿，包含大量专门方向用不到的功能（文件编辑、代码生成、IDE 集成、富终端 UI）。本项目不走全功能路线，而是：
 
 1. 提供一个**基础 Agent 底座**（kernel）：通用 LLM + tool-use 主循环、上下文管理、权限、预算、流式输出。
 2. 在底座上构建**专用方向 Agent**：首个是供 agent-web 使用的诊断 Agent，未来可能有其他运维向 Agent。
@@ -24,7 +24,7 @@ Claude Code 越来越臃肿，包含大量专门方向用不到的功能（文�
 | 单 Maven 模块，CLI 依赖（JLine）与引擎代码同 jar | agent-web 的 classpath 被迫携带 REPL / 终端依赖 |
 | 通用件错位在 `interfaces.engine`（`ContextCompactionService`、`SubAgentTool`、`ClaudeStreamJsonListener`） | 通用能力与诊断门面纠缠，无法被第二个专用 Agent 复用 |
 | 诊断能力设计把若干通用能力设计为诊断专用（预算、结构化输出、治理包装链、扩展事件） | 第二个专用 Agent 出现时只能复制粘贴 |
-| 组装根只有 `CclcApplication.main`（CLI 视角） | 专用 Agent 没有自己的组装入口，宿主无法干净接入 |
+| 组装根只有 `AgentKitApplication.main`（CLI 视角） | 专用 Agent 没有自己的组装入口，宿主无法干净接入 |
 
 ---
 
@@ -43,32 +43,32 @@ Claude Code 越来越臃肿，包含大量专门方向用不到的功能（文�
 - 不做 Server / RPC 化，进程内集成是唯一正式形态。
 - 不做 SPI / 插件热加载 / 反射扫描——专用 Agent 的组装显式手写（延续无 Spring / Guice 约定）。
 - 不做多 LLM provider 抽象（维持 Anthropic only）。
-- 本阶段不拆独立工具包模块（`cclc-tools-ops`），出现第二个运维向 Agent 时再评估。
+- 本阶段不拆独立工具包模块（`agentkit-tools-ops`），出现第二个运维向 Agent 时再评估。
 
 ---
 
 ## 3. 目标模块结构
 
 ```text
-claude-code-langchain4j (parent pom)
-├── cclc-kernel             基础层：通用 Agent 底座
+agentkit (parent pom)
+├── agentkit-kernel             基础层：通用 Agent 底座
 │     发布物，无 CLI 依赖，无专用语义
 │
-├── cclc-agent-diagnosis    专用层：诊断 Agent
-│     依赖 cclc-kernel
+├── agentkit-agent-diagnosis    专用层：诊断 Agent
+│     依赖 agentkit-kernel
 │     agent-web 只依赖这一个 artifact
 │
-└── cclc-cli                调试壳：JLine REPL
-      依赖 cclc-kernel（调试诊断 Agent 时可加依赖 cclc-agent-diagnosis）
+└── agentkit-cli                调试壳：JLine REPL
+      依赖 agentkit-kernel（调试诊断 Agent 时可加依赖 agentkit-agent-diagnosis）
       不对外发布（不进入宿主 classpath）
 ```
 
 依赖方向约束：
 
-- `cclc-kernel` 不依赖任何兄弟模块。
-- `cclc-agent-diagnosis` 只依赖 `cclc-kernel`。
-- `cclc-cli` 不被任何模块依赖。
-- 未来新增专用 Agent = 新增 `cclc-agent-xxx` 模块，平行于 diagnosis，互不依赖。
+- `agentkit-kernel` 不依赖任何兄弟模块。
+- `agentkit-agent-diagnosis` 只依赖 `agentkit-kernel`。
+- `agentkit-cli` 不被任何模块依赖。
+- 未来新增专用 Agent = 新增 `agentkit-agent-xxx` 模块，平行于 diagnosis，互不依赖。
 
 ---
 
@@ -92,7 +92,7 @@ claude-code-langchain4j (parent pom)
 | `CancellationToken` / 会话停止注册 | 现有 | 不变 |
 | `SystemPromptComposer` | 现有 | kernel 提供组合机制，专用层提供内容（PromptPack） |
 
-### 4.2 专用层（cclc-agent-diagnosis）
+### 4.2 专用层（agentkit-agent-diagnosis）
 
 | 能力 | 说明 |
 |---|---|
@@ -137,7 +137,7 @@ public interface ExtensionEventEmitter {
 不做大规模包重命名，以现有四层为 kernel 默认，专用代码全部落在 `*.diagnosis` 子包：
 
 ```text
-com.anthropic.cclc/
+com.anthropic.agentkit/
   domain/                  kernel
   domain/diagnosis/        专用层
   application/             kernel
@@ -175,9 +175,9 @@ noClasses().that().resideOutsideOfPackage("..interfaces.cli..")
 
 | 过渡期包 | 目标模块 |
 |---|---|
-| `domain` / `application` / `infrastructure`（非 diagnosis） | `cclc-kernel` |
-| `*.diagnosis` + `interfaces/engine` | `cclc-agent-diagnosis` |
-| `interfaces/cli` + `CclcApplication` | `cclc-cli` |
+| `domain` / `application` / `infrastructure`（非 diagnosis） | `agentkit-kernel` |
+| `*.diagnosis` + `interfaces/engine` | `agentkit-agent-diagnosis` |
+| `interfaces/cli` + `AgentKitApplication` | `agentkit-cli` |
 
 ---
 
@@ -198,7 +198,7 @@ DiagnoseEngine engine = DiagnoseEngineBuilder.create()
         .build();
 ```
 
-CLI 维护自己的组装（`CclcApplication.main`），与专用 Agent 组装互不影响。
+CLI 维护自己的组装（`AgentKitApplication.main`），与专用 Agent 组装互不影响。
 
 ### 6.2 对外稳定面（仅此三样，semver 管理）
 
@@ -233,7 +233,7 @@ CLI 维护自己的组装（`CclcApplication.main`），与专用 Agent 组装�
 | Step 1 | ArchUnit 规则上线 + 错位通用件搬移（5.1 三项），同模块内完成 | `mvn verify` 绿，规则违规红灯 |
 | Step 2 | 诊断能力 Phase 1–2（capability 文档）按归位后边界实现：`AgentBudget`、`StructuredOutputTool`、治理链均落 kernel 侧包 | capability 文档各 Phase 验收 |
 | Step 3 | API 稳定后拆 Maven 三模块（纯机械搬移） | 三模块独立构建，依赖方向符合第 3 节 |
-| Step 4 | agent-web 切换依赖 `cclc-agent-diagnosis`，经 `DiagnoseEngineBuilder` 组装 | 端到端通过，宿主 classpath 无 JLine |
+| Step 4 | agent-web 切换依赖 `agentkit-agent-diagnosis`，经 `DiagnoseEngineBuilder` 组装 | 端到端通过，宿主 classpath 无 JLine |
 
 Step 1 必须先于诊断 Phase 1 开发，否则新代码继续在错误边界上堆积。
 
@@ -274,4 +274,4 @@ Step 1 必须先于诊断 Phase 1 开发，否则新代码继续在错误边界�
 
 ## 10. 结论
 
-双层定位不要求推翻现有设计，要求三件事：把通用能力从诊断专用设计中下沉到 kernel、用 ArchUnit 先行固化边界、API 稳定后完成物理模块拆分。完成后，"新增一个专门方向的 Agent"的成本收敛为：新建 `cclc-agent-xxx` 模块 + 领域模型 + 工具注册 + PromptPack + 组装根，kernel 零改动。
+双层定位不要求推翻现有设计，要求三件事：把通用能力从诊断专用设计中下沉到 kernel、用 ArchUnit 先行固化边界、API 稳定后完成物理模块拆分。完成后，"新增一个专门方向的 Agent"的成本收敛为：新建 `agentkit-agent-xxx` 模块 + 领域模型 + 工具注册 + PromptPack + 组装根，kernel 零改动。

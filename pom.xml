@@ -6,17 +6,17 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.anthropic</groupId>
-    <artifactId>claude-code-langchain4j</artifactId>
+    <artifactId>agentkit</artifactId>
     <version>0.2.0</version>
     <packaging>pom</packaging>
 
-    <name>Claude Code on LangChain4j</name>
-    <description>Java reimplementation of claude-code core loop on top of LangChain4j</description>
+    <name>AgentKit on LangChain4j</name>
+    <description>Java CLI agent core loop built on LangChain4j</description>
 
     <modules>
-        <module>cclc-kernel</module>
-        <module>cclc-agent-diagnosis</module>
-        <module>cclc-cli</module>
+        <module>agentkit-kernel</module>
+        <module>agentkit-agent-diagnosis</module>
+        <module>agentkit-cli</module>
     </modules>
 
     <properties>
@@ -180,7 +180,7 @@
                     <version>${exec-maven-plugin.version}</version>
                     <configuration>
                         <skip>true</skip>
-                        <mainClass>com.anthropic.cclc.interfaces.cli.CclcApplication</mainClass>
+                        <mainClass>com.anthropic.agentkit.interfaces.cli.AgentKitApplication</mainClass>
                     </configuration>
                 </plugin>
             </plugins>

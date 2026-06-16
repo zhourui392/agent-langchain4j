@@ -1,6 +1,6 @@
 # 诊断 Agent 通用能力设计方案
 
-> 面向 `claude-code-langchain4j` 从“进程内诊断引擎”演进为“可靠线上问题诊断 Agent”的能力设计。
+> 面向 `agentkit` 从“进程内诊断引擎”演进为“可靠线上问题诊断 Agent”的能力设计。
 >
 > @author zhourui(V33215020)
 > @since 2026-06-11
@@ -40,7 +40,7 @@
 
 ### 2.2 非目标
 
-- 不复刻 Claude Code 的文件修改、代码生成、提交等开发工作流。
+- 不做文件修改、代码生成、提交等开发工作流。
 - 不把 Bash 作为默认诊断能力开放。
 - 不在本项目内实现 Web、SSE、鉴权、会话落库。
 - 不把所有业务诊断流程硬编码进 Java。
@@ -112,7 +112,7 @@ ToolRegistry
   |-- DubboInvokeTool
 ```
 
-`AgentExecutor` 继续作为 kernel 通用 LLM + tool-use 循环，不承载诊断业务规则。诊断语义收在 `cclc-agent-diagnosis`，以 `interfaces/engine` 门面调用方式包住 kernel 执行器；CLI 只在 `cclc-cli` 作为调试入口存在，不进入宿主 classpath。
+`AgentExecutor` 继续作为 kernel 通用 LLM + tool-use 循环，不承载诊断业务规则。诊断语义收在 `agentkit-agent-diagnosis`，以 `interfaces/engine` 门面调用方式包住 kernel 执行器；CLI 只在 `agentkit-cli` 作为调试入口存在，不进入宿主 classpath。
 
 ---
 
@@ -693,7 +693,7 @@ Raw Tool
 ### 12.1 新增包建议
 
 ```text
-cclc-kernel/
+agentkit-kernel/
   application/
     AgentExecutor
     AgentBudgetGuard
@@ -709,7 +709,7 @@ cclc-kernel/
       GovernedTool
       ToolGovernance
 
-cclc-agent-diagnosis/
+agentkit-agent-diagnosis/
   interfaces/engine/
     DiagnoseEngine
     DefaultDiagnoseEngine
@@ -742,9 +742,9 @@ cclc-agent-diagnosis/
     StructuredDiagnosisReporter
     DiagnosisStateCodec       // 快照序列化，schemaVersion 管理
 
-cclc-cli/
+agentkit-cli/
   interfaces/cli/
-    CclcApplication
+    AgentKitApplication
     JLine REPL
 ```
 
@@ -754,7 +754,7 @@ cclc-cli/
 - `application/diagnosis` 只依赖 domain 和 port。
 - `interfaces/engine` 编排 application。
 - `infrastructure` 实现工具、脱敏、审计输出。
-- `cclc-agent-diagnosis` 只依赖 `cclc-kernel`，不得依赖 `cclc-cli` / JLine。
+- `agentkit-agent-diagnosis` 只依赖 `agentkit-kernel`，不得依赖 `agentkit-cli` / JLine。
 
 `EvidenceLedger` 和报告校验放 domain 而不是 application：“`MODEL_INFERENCE` 不能单独支撑根因”是不变量，不是编排，留在 application 就是 App 层业务逻辑泄漏。
 
@@ -1032,7 +1032,7 @@ P2：
 问题定义 -> 诊断计划 -> 假设验证 -> 证据账本 -> 结构化报告
 ```
 
-Claude Code 的 `Plan` 和 `Task` 能力值得对标，但不能原样照搬。诊断场景需要的是：
+通用编码 Agent 的 `Plan` 和 `Task` 能力值得对标，但不能原样照搬。诊断场景需要的是：
 
 - `Plan` = 诊断计划、假设、检查步骤。
 - `Task` = 受控子诊断，验证单个假设。

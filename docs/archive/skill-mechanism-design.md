@@ -27,7 +27,7 @@
 
 | 议题 | 决策 | 影响 |
 |---|---|---|
-| Skill 形态 | 目录 + SKILL.md（YAML frontmatter），对齐 claude-code Agent Skills | 渐进披露三级：目录注入 name+description，调用时返回正文，附属文件按需 Read |
+| Skill 形态 | 目录 + SKILL.md（YAML frontmatter），对齐 Agent Skills 通用约定 | 渐进披露三级：目录注入 name+description，调用时返回正文，附属文件按需 Read |
 | 归属模块 | kernel 通用件（domain.skill + infrastructure.skill），诊断层仅装配 | 第二个专用 Agent 直接复用；kernel 不出现 diagnosis 语义 |
 | 能力边界 | **知识型 Skill**，不含可执行脚本 | 与只读诊断引擎姿态一致；Bash 不注册，脚本型 Skill 列入 P2 |
 | PromptPack 去留 | 保留，二者分工：常驻必读走 PromptPack，按需取用走 Skill | 存量 SOP 渐进迁移，不做一次性切换 |
@@ -55,11 +55,11 @@
 
 ---
 
-## 3. 参照：claude-code 的 Skill 机制要点
+## 3. 参照：Agent Skills 通用机制要点
 
-设计对齐 claude-code（TypeScript 参考实现）的 Agent Skills，取其三个不变量：
+设计对齐 Agent Skills 通用约定，取其三个不变量：
 
-| 机制 | claude-code 行为 | 本项目映射 |
+| 机制 | 通用 Skill 行为 | 本项目映射 |
 |---|---|---|
 | **Skill 形态** | 目录 `<name>/SKILL.md` + 附属文件；frontmatter 含 `name`/`description`/`allowed-tools` 等 | 同构，MVP frontmatter 只取 `name`/`description`，其余字段解析但忽略（向前兼容） |
 | **渐进披露 L1** | 启动时仅 name+description 注入上下文（每条几十 token） | `SkillCatalogContextProvider`（static）注入 stable prefix |
@@ -67,9 +67,9 @@
 | **渐进披露 L3** | 正文引用的附属文件由模型用 Read 工具按需读取 | 复用既有 `FileReadTool`，Skill 根目录须在可读范围内 |
 | **触发方式** | 模型按 description 自主匹配 + 用户 `/name` 显式触发 | MVP 仅模型自主匹配；`/name` 走 P1 |
 
-与 claude-code 的有意分歧：
+与通用 Skill 机制的有意分歧：
 
-1. **不支持脚本执行**。claude-code 的 Skill 可携带脚本经 Bash 运行；本引擎是只读诊断姿态（§16.1 决策），`BashTool` 不注册，Skill 限定为知识载体。这与 capability-design §5「Skill 承载知识流程、Tool 承载执行能力」的边界一致。
+1. **不支持脚本执行**。通用 Skill 机制可携带脚本经 Bash 运行；本引擎是只读诊断姿态（§16.1 决策），`BashTool` 不注册，Skill 限定为知识载体。这与 capability-design §5「Skill 承载知识流程、Tool 承载执行能力」的边界一致。
 2. **无多级发现目录**（user/project/plugin 三级合并）。引擎为进程内 jar，宿主在装配期给定单一 Skill 根目录即可，冲突合并规则随之省略。
 
 ---
@@ -79,7 +79,7 @@
 ### 4.1 模块归位
 
 ```
-cclc-kernel
+agentkit-kernel
 ├── domain/skill/                    ← 纯领域，零外部依赖
 │   ├── Skill.java                   （值对象：name/description/body/baseDir）
 │   ├── SkillCatalog.java            （聚合：注册、查找、目录渲染，不变量收口）
@@ -91,12 +91,12 @@ cclc-kernel
 ├── infrastructure/tools/
 │   └── SkillTool.java               （L2：name="Skill"，返回正文）
 
-cclc-agent-diagnosis
+agentkit-agent-diagnosis
 └── interfaces/engine/
     └── DiagnoseEngineBuilder.skills(Path) （装配入口，可选）
 ```
 
-依赖方向不变：`domain.skill` 不 import 任何外层；`SkillTool`、`DirectorySkillSource` 依赖 domain；装配在 builder / `CclcApplication.main` 显式完成。无 classpath 扫描、无反射——目录文件扫描沿用 `PromptPackLoader` 先例。
+依赖方向不变：`domain.skill` 不 import 任何外层；`SkillTool`、`DirectorySkillSource` 依赖 domain；装配在 builder / `AgentKitApplication.main` 显式完成。无 classpath 扫描、无反射——目录文件扫描沿用 `PromptPackLoader` 先例。
 
 ### 4.2 运行时序（一次 Skill 取用）
 
@@ -257,7 +257,7 @@ public final class SkillTool implements Tool {
 
 要点：
 
-- **以 tool_result 展开而非改写 system prompt**：对话流追加不影响已缓存前缀；这也是 claude-code 的展开方式。
+- **以 tool_result 展开而非改写 system prompt**：对话流追加不影响已缓存前缀。
 - `isReadOnly()==true` → `ReadOnlyPermissionPolicy` 直接 ALLOW，诊断引擎无需新增权限分支。
 - 与其他工具同样经 `GovernedTool` 包装（超时、脱敏、审计），Skill 正文若含敏感样例同样过 redaction。
 - 未命中返回 `ToolResult.error` 并列出可用名称，让模型自纠错，不抛异常中断 run。
@@ -299,7 +299,7 @@ DiagnoseEngineBuilder.create()
 
 ### 8.3 CLI 装配
 
-`CclcApplication.main` 同样以显式 wiring 接入，读取 `CCLC_SKILLS_DIR` 环境变量（缺省不启用）。CLI 仅调试用，`/skill-name` 斜杠触发不进 MVP。
+`AgentKitApplication.main` 同样以显式 wiring 接入，读取 `AK_SKILLS_DIR` 环境变量（缺省不启用）。CLI 仅调试用，`/skill-name` 斜杠触发不进 MVP。
 
 ---
 
@@ -359,7 +359,7 @@ ArchUnit：`LayeredArchitectureTest` 无需新增规则，`domain.skill` 自动�
 | SK-4 [TDD] | `DirectorySkillSource`（扫描 + 路径逃逸防护 + fail-fast） | SK-1, SK-3 |
 | SK-5 [TDD] | `SkillCatalogContextProvider` | SK-2 |
 | SK-6 [TDD] | `SkillTool` | SK-2 |
-| SK-7 [TDD] | `DiagnoseEngineBuilder.skills(Path)` 装配 + `CclcApplication` 环境变量接入 | SK-4, SK-5, SK-6 |
+| SK-7 [TDD] | `DiagnoseEngineBuilder.skills(Path)` 装配 + `AgentKitApplication` 环境变量接入 | SK-4, SK-5, SK-6 |
 | SK-8 | 端到端：StubLlmClient 脚本走通「目录→调用→展开→续轮」；ArchUnit 全绿 | SK-7 |
 | SK-9 | 文档收尾：README「不在范围内」更新、capability-design §5.1 标注决策已被 §16.4 推翻、Skill 编写指南（docs/skill-authoring.md） | SK-8 |
 
@@ -371,7 +371,7 @@ ArchUnit：`LayeredArchitectureTest` 无需新增规则，`domain.skill` 自动�
 
 | 权衡点 | 取舍 | 理由 |
 |---|---|---|
-| 展开方式：tool_result vs 注入 system prompt | tool_result | 保 prompt cache；claude-code 同构；注入 prefix 会让每次展开都 cache miss |
+| 展开方式：tool_result vs 注入 system prompt | tool_result | 保 prompt cache；注入 prefix 会让每次展开都 cache miss |
 | 校验位置：loader vs 领域 | 领域不变量 | loader 只管 IO；合法性是领域规则，避免 infra 代劳 |
 | 非法 Skill：跳过 vs fail-fast | fail-fast | 静默跳过 = 宿主误以为生效，诊断知识缺失比启动失败更难排查 |
 | YAML 解析：手写 vs jackson-yaml | jackson-yaml | 多行折叠/转义细节多，手写违反禁止重造轮子；同版本族零额外治理成本 |

@@ -1,6 +1,6 @@
 # 诊断引擎化实施方案（Diagnose Engine Plan）
 
-> 把本项目从「claude-code CLI 复刻」转向「agent-web 的进程内诊断 Agent 引擎」。
+> 把本项目从 CLI 形态转向「agent-web 的进程内诊断 Agent 引擎」。
 >
 > @author zhourui(V33215020)
 > @since 2026-06-08
@@ -9,7 +9,7 @@
 
 ## 0. 背景与定位转变
 
-本项目（`claude-code-langchain4j`）原目标是复刻 claude-code 的 CLI 主循环。现重新定位为 **agent-web 的进程内 agent 引擎**。
+本项目（`agentkit`）原目标是实现一个 CLI Agent 主循环。现重新定位为 **agent-web 的进程内 agent 引擎**。
 
 `agent-web`（`D:\ai_worspace\agent-web`，Spring Boot 3.3.13 / JDK 21）是最终使用者，它已经具备 Web UI、SSE、会话持久化（SQLite 三级）、鉴权、诊断编排、RAG 召回、issue-log 等完整能力。它现在驱动 AI 的方式是 **spawn 外部 CLI 子进程**（`claude` / `codex` / `cursor`），经 `CliDialect` 策略路由、`AgentGateway` 端口统一。
 
@@ -69,7 +69,7 @@
 └────────┼─────────────────────────────────────────────────────────────────────┘
          │  进程内调用（同 JVM，纯 Java 签名）
          ▼
-┌─────────────────────── claude-code-langchain4j (引擎 jar) ─────────────────────┐
+┌─────────────────────── agentkit (引擎 jar) ─────────────────────┐
 │  DiagnoseEngine.runStream(workingDir, msg, sessionId, history,                  │
 │                           onChunk, onExit, cancel)                              │
 │        │  1. 按 history + msg 重建 Conversation（无状态）                         │
