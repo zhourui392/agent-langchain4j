@@ -600,6 +600,23 @@ agentkit/
 
 ---
 
+### 16.7 coding agent 多角色流水线落地（2026-06-20）
+
+正式采纳 AGENTS.md「多角色协作演进原则」，`agentkit-agent-coding` 落地第一个 coding agent 包：单趟（single-pass）`plan → patch → review` 流水线，复用 kernel `StructuredAgent` / `StructuredOutputTool`。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| 角色物化 | 每个角色 = `StructuredAgent` + 角色配置（systemPrompt、终结工具 spec、domainTools），不走子类 | `StructuredCodingPlanner` / `StructuredCodingPatcher` / `StructuredCodingReviewer` 三个 final 类，各自只持角色配置 + payload→VO 映射 |
+| 能力硬边界 | 写能力钉在构造签名上：Coder 注入 `List<Tool>`（读写），Reviewer 构造不接收任何工具 | 边界由类型强制，不靠 prompt 自觉；Reviewer 拿不到写工具 |
+| 交接载体 | 终结工具 schema 即交接 VO：`update_plan→CodingPlan`、`submit_patch→Patch`、`submit_review→ReviewVerdict` | 零文本解析；payload→VO 映射留 agent 包 infra，kernel 只回通用 `Map` |
+| 编排归属 | `CodingPipeline` 在 agent 包 application 层，纯顺序委托驱动 `CodingTask` 聚合根 | 状态迁移守卫 + verdict→status 全在聚合根，pipeline 无业务分支 |
+| 重试/转人工 | 单趟作用域：任何非 ACCEPT 的 verdict 即终止（REJECTED）；重试循环与 NEEDS_HUMAN 非终结留聚合根的未来增量 | pipeline 不写 `if (retryCount < n)` |
+| Reviewer 兜底 | `decision` 非 schema 必填，缺省由映射兜底 `NEEDS_HUMAN` | 判定不清晰时升级人工而非崩溃 |
+
+**暂不做**：`AgentManifest` / CLI 派发（等第二个 agent 真要插入）、`ExecutionContext` cwd 透传进角色端口（当前与 diagnosis 一致用 `Path.of(".")`，L0 即 worktree）、容器沙箱（L2 拐点）。
+
+---
+
 ## 17. 下一步
 
 1. agent-web 切换依赖 `agentkit-agent-diagnosis`，通过 `DiagnoseEngineBuilder` 组装。
