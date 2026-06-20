@@ -16,6 +16,7 @@
     <modules>
         <module>agentkit-kernel</module>
         <module>agentkit-agent-diagnosis</module>
+        <module>agentkit-agent-coding</module>
         <module>agentkit-cli</module>
     </modules>
 
