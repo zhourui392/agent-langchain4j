@@ -46,10 +46,11 @@ class LayeredArchitectureTest {
             .should().dependOnClassesThat().resideInAPackage("..interfaces..");
 
     @ArchTest
-    static final ArchRule kernelHasNoDiagnosisDependency = noClasses()
-            .that().resideOutsideOfPackage("..diagnosis..")
-            .and().resideOutsideOfPackage("..interfaces..")
-            .should().dependOnClassesThat().resideInAPackage("..diagnosis..");
+    static final ArchRule kernelHasNoAgentModuleDependency = noClasses()
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "..domain.diagnosis..", "..application.diagnosis..",
+                    "..infrastructure.diagnosis..", "..domain.coding..",
+                    "..application.coding..", "..infrastructure.coding..");
 
     @ArchTest
     static final ArchRule cliIsNotReferencedOutsideCliShell = noClasses()

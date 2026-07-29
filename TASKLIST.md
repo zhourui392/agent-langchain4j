@@ -863,7 +863,7 @@ S0 (1→2→3)
 
 ### #54 [S10-Platform-Infra-TDD] AgentManifest + coding 正式入口 （blockedBy: 42, 47）
 
-**状态**：待开始。
+**状态**：进行中（Red；2026-07-29）。
 
 **Red**：duplicate agent id 启动失败；缺 required config 在运行前失败；manifest capability 与实际 AgentSpec/tool boundary 一致；模块依赖单向。
 

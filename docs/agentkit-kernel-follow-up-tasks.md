@@ -593,6 +593,8 @@ sealed interface RunSuspension {
 
 ### #54 [Platform-Infra/TDD, P3] `AgentManifest` + coding 正式入口
 
+**状态**：进行中（Red；2026-07-29）。失败测试已定义 manifest 不可变 typed boundary、重复 ID、运行前 required-config 校验、diagnosis/coding capability 对齐，以及 coding 的稳定 engine/builder 入口。
+
 **Goal**
 
 当多个 agent 需要被同一宿主发现和派发时，用自描述 manifest 取代组合根对具体模块的硬编码，并为 coding agent 提供正式 engine/builder 入口。
