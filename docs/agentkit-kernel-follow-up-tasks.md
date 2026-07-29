@@ -1,6 +1,6 @@
 # AgentKit Kernel：非高优先级与后续 Agent Runtime 任务
 
-> 状态：`#47–#49` 已完成，`#50–#55` 按 S10 顺序继续交付；`#56` 保持条件触发候选
+> 状态：`#47–#49` 已完成，`#50` 进行中（Red），`#51–#55` 按 S10 顺序继续交付；`#56` 保持条件触发候选
 >
 > 审计日期：2026-07-29
 >
@@ -285,6 +285,8 @@ pre-hook 返回 typed decision，如 `Continue`、`Deny(reason)`、`ReplaceConte
 
 ### #50 [Kernel-TDD, P2] Background `TaskHandle` + output artifact store
 
+**状态**：进行中（Red）；先固定 task scope、单调 cursor、即时 settle、process-tree cancellation 与 artifact ownership 合同。
+
 **Goal**
 
 让长时间 Bash/外部工具可以后台运行、增量读取、监控和停止；大输出保存在受控 artifact store，模型上下文只接收 preview/reference。
@@ -308,6 +310,16 @@ interface TaskHandle {
 ```
 
 状态至少 `STARTING/RUNNING/COMPLETED/FAILED/CANCELLED/TIMED_OUT`。TaskId 必须绑定 RunId/WorkspaceId；另一个 workspace 不能读取或停止它。
+
+**实施前领域建模审计**
+
+- commands：`start background task`、`read since cursor`、`inspect status`、`stop task`、`close run/all tasks`、`write/read/expire artifact`；events/facts：task accepted、output appended、task completed/failed/cancelled/timed-out、artifact stored/expired。启动命令成功即代表原 tool-use 已 settle，不等待后台完成。
+- ubiquitous language：`TaskId` 是任务身份；`TaskScope` 是 `(RunId, WorkspaceId)` ownership；`TaskHandle` 是单个任务聚合的行为边界；`OutputCursor` 是 append-only 输出位置；`TaskSnapshot` 是状态投影；`ArtifactReference` 是受控引用而非文件路径。
+- 聚合/一致性边界：单个 `TaskHandle` 独占 state、completion 与输出 cursor；`BackgroundTaskService` 只注册 scope→handle 并校验 ownership；artifact 写入是 completion 后的独立外部状态操作，只有写入成功后 snapshot 才能发布 reference。
+- 核心不变量：任务状态只从 STARTING/RUNNING 进入一个 terminal state；cursor 单调且相同 cursor 重读稳定；另一个 run/workspace 看不到也不能停止任务；cancel 必须回收 root 与 descendants；后台 completion 不能再次 append 原 invocation；artifact 写前脱敏，并受 size/TTL/scope 约束。
+- 变化点：process 启动/回收收敛到 `BackgroundTaskLauncher`；preview/reference 收敛到 `BackgroundTaskPolicy`；持久介质收敛到 `ArtifactStore`；内容治理收敛到 `ArtifactContentPolicy`；run-stop 回收复用 typed interceptor，不向 `AgentExecutor` 写 process 分支。
+- 反模式警戒：不让原始 tool-use 跨用户回合 pending；不把 `Process`/PID 放进 domain；不以可猜文件路径充当 artifact URI；不使用进程 CWD；不让另一个 scope 通过 TaskId 探测任务存在；不实现队列、scheduler 或跨机器 worker。
+- 实施前评分 **6/15**：聚合边界 1、变化收敛 2、不变量守护 1、行为一致 1、下一轮演进 1。已有同步 `ProcessRunner`、cancellation 与 output metadata 可复用，但尚无任务聚合、scope registry、cursor 或 artifact port；Refactor 后目标至少 14/15。
 
 **Red**
 
