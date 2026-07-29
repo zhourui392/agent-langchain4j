@@ -2,6 +2,7 @@ package com.anthropic.agentkit.application.context;
 
 import com.anthropic.agentkit.domain.agent.AgentBudgetExceededException;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
+import com.anthropic.agentkit.domain.agent.ModelIdentity;
 import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.CompactionBoundary;
@@ -124,7 +125,9 @@ public final class ContextCompactionService implements ContextPolicy {
     private SummaryResult summarize(
             List<ChatMessage> older, AgentRunContext context) {
         ChatRequest request = summaryRequest(older);
-        CompactionStreamHandler handler = new CompactionStreamHandler(context);
+        ModelIdentity model = llm.modelIdentity();
+        context.budgetState().reserveLlmCall(context.budget(), model);
+        CompactionStreamHandler handler = new CompactionStreamHandler(context, model);
         LlmCall call;
         try {
             call = llm.streamChat(request, handler);
@@ -249,9 +252,12 @@ public final class ContextCompactionService implements ContextPolicy {
 
     private static final class CompactionStreamHandler implements LlmClient.StreamHandler {
         private final AgentRunContext context;
+        private final ModelIdentity model;
 
-        private CompactionStreamHandler(AgentRunContext context) {
+        private CompactionStreamHandler(
+                AgentRunContext context, ModelIdentity model) {
             this.context = context;
+            this.model = model;
         }
 
         @Override
@@ -263,7 +269,8 @@ public final class ContextCompactionService implements ContextPolicy {
 
         @Override
         public void onUsage(int inputTokens, int outputTokens, int cacheReadInputTokens) {
-            context.budgetState().recordUsage(inputTokens, outputTokens, cacheReadInputTokens);
+            context.budgetState().recordUsage(
+                    model, inputTokens, outputTokens, cacheReadInputTokens);
             context.budgetState().ensureWithin(context.budget());
         }
     }

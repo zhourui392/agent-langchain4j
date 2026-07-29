@@ -17,6 +17,9 @@ import com.anthropic.agentkit.application.tool.ToolOutputPolicy;
 import com.anthropic.agentkit.domain.agent.AgentBudgetExceededException;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.agent.AgentRunResult;
+import com.anthropic.agentkit.domain.agent.ModelIdentity;
+import com.anthropic.agentkit.domain.agent.ModelPolicy;
+import com.anthropic.agentkit.domain.agent.ModelTier;
 import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.CompactionBoundary;
@@ -27,7 +30,10 @@ import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.port.ChatRequest;
 import com.anthropic.agentkit.domain.port.LlmCall;
 import com.anthropic.agentkit.domain.port.LlmClient;
+import com.anthropic.agentkit.domain.port.LlmClientSelector;
 import com.anthropic.agentkit.domain.port.LlmClient.StreamHandler;
+import com.anthropic.agentkit.domain.port.ProviderFailureException;
+import com.anthropic.agentkit.domain.port.RetrySleeper;
 import com.anthropic.agentkit.domain.port.RunEventPersistenceException;
 import com.anthropic.agentkit.domain.port.RunEventStore;
 import com.anthropic.agentkit.domain.port.RunSuspensionStore;
@@ -56,6 +62,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.ThreadLocalRandom;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -65,7 +72,9 @@ public final class AgentExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(AgentExecutor.class);
 
-    private final LlmClient llm;
+    private final LlmClientSelector models;
+    private final ModelPolicy modelPolicy;
+    private final RetrySleeper retrySleeper;
     private final ToolRegistry tools;
     private final PermissionService permissions;
     private final ContextPolicy contextPolicy;
@@ -127,7 +136,31 @@ public final class AgentExecutor {
             ContextPolicy contextPolicy, ToolOutputPolicy toolOutputPolicy,
             RunEventStore eventStore, AgentInterceptors interceptors,
             RunSuspensionStore suspensionStore) {
-        this.llm = Objects.requireNonNull(llm, "llm");
+        this(LlmClientSelector.fixed(Objects.requireNonNull(llm, "llm")),
+                ModelPolicy.defaults(ModelTier.DEFAULT), RetrySleeper.system(),
+                tools, permissions, contextPolicy, toolOutputPolicy,
+                eventStore, interceptors, suspensionStore);
+    }
+
+    public AgentExecutor(
+            LlmClientSelector models, ModelPolicy modelPolicy,
+            RetrySleeper retrySleeper, ToolRegistry tools,
+            PermissionService permissions) {
+        this(models, modelPolicy, retrySleeper, tools, permissions,
+                ContextPolicy.standard(primaryClient(models, modelPolicy)),
+                ToolOutputPolicy.defaultLimited(), RunEventStore.none(),
+                AgentInterceptors.none(), RunSuspensionStore.none());
+    }
+
+    public AgentExecutor(
+            LlmClientSelector models, ModelPolicy modelPolicy,
+            RetrySleeper retrySleeper, ToolRegistry tools,
+            PermissionService permissions, ContextPolicy contextPolicy,
+            ToolOutputPolicy toolOutputPolicy, RunEventStore eventStore,
+            AgentInterceptors interceptors, RunSuspensionStore suspensionStore) {
+        this.models = Objects.requireNonNull(models, "models");
+        this.modelPolicy = Objects.requireNonNull(modelPolicy, "modelPolicy");
+        this.retrySleeper = Objects.requireNonNull(retrySleeper, "retrySleeper");
         this.tools = Objects.requireNonNull(tools, "tools");
         this.permissions = Objects.requireNonNull(permissions, "permissions");
         this.contextPolicy = Objects.requireNonNull(contextPolicy, "contextPolicy");
@@ -135,6 +168,14 @@ public final class AgentExecutor {
         this.eventStore = Objects.requireNonNull(eventStore, "eventStore");
         this.interceptors = Objects.requireNonNull(interceptors, "interceptors");
         this.suspensionStore = Objects.requireNonNull(suspensionStore, "suspensionStore");
+    }
+
+    private static LlmClient primaryClient(
+            LlmClientSelector models, ModelPolicy policy) {
+        Objects.requireNonNull(models, "models");
+        Objects.requireNonNull(policy, "policy");
+        return Objects.requireNonNull(
+                models.select(policy.primaryTier()), "selected primary LLM client");
     }
 
     public CompletableFuture<AgentRunResult> run(Conversation conversation, AgentRunContext context) {
@@ -620,15 +661,78 @@ public final class AgentExecutor {
                     plan.stopReason().orElseThrow(), plan.errorDetail().orElseThrow());
         }
         ChatRequest request = plan.request().orElseThrow();
+        return requestWithModelPolicy(
+                request, context, listener, budgetGuard, recorder);
+    }
+
+    private LlmTurnOutcome requestWithModelPolicy(
+            ChatRequest request, AgentRunContext context,
+            AgentEventListener listener, AgentBudgetGuard budgetGuard,
+            RunEventRecorder recorder) {
+        int attempt = 1;
+        while (true) {
+            LlmClient client = selectedClient(attempt);
+            ModelIdentity model = client.modelIdentity();
+            budgetGuard.reserveLlmCall(model);
+            LlmTurnOutcome outcome = requestModel(
+                    client, model, request, context, listener, budgetGuard, recorder);
+            if (!shouldRetry(attempt, outcome)) {
+                return outcome;
+            }
+            LlmTurnOutcome waitFailure = waitBeforeRetry(
+                    attempt, outcome.failure().orElseThrow(), context);
+            if (waitFailure != null) {
+                return waitFailure;
+            }
+            attempt++;
+        }
+    }
+
+    private LlmClient selectedClient(int attempt) {
+        ModelTier tier = modelPolicy.tierForAttempt(attempt);
+        return Objects.requireNonNull(
+                models.select(tier), "selected LLM client for tier " + tier);
+    }
+
+    private boolean shouldRetry(int attempt, LlmTurnOutcome outcome) {
+        return outcome.failure()
+                .filter(failure -> modelPolicy.retryPolicy()
+                        .permitsRetry(attempt, failure))
+                .isPresent();
+    }
+
+    private LlmTurnOutcome waitBeforeRetry(
+            int failedAttempt, Throwable failure, AgentRunContext context) {
+        ProviderFailureException provider = (ProviderFailureException) failure;
+        java.time.Duration delay = modelPolicy.retryPolicy().delayAfter(
+                failedAttempt, provider, ThreadLocalRandom.current()::nextDouble);
+        if (delay.compareTo(context.limits().deadline().remaining()) >= 0) {
+            return LlmTurnOutcome.stopped(StopReason.TIMED_OUT);
+        }
+        try {
+            retrySleeper.sleep(delay);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return LlmTurnOutcome.stopped(StopReason.CANCELLED);
+        }
+        return boundedStop(context).map(LlmTurnOutcome::stopped).orElse(null);
+    }
+
+    private LlmTurnOutcome requestModel(
+            LlmClient client, ModelIdentity model, ChatRequest request,
+            AgentRunContext context, AgentEventListener listener,
+            AgentBudgetGuard budgetGuard, RunEventRecorder recorder) {
         long startNs = System.nanoTime();
-        log.info("llm request started: messages={}, tools={}",
+        log.info("llm request started: provider={}, model={}, messages={}, tools={}",
+                model.provider(), model.model(),
                 request.messages().size(), request.tools().size());
         recorder.llmCallStarted(request.messages().size());
         listener.onLlmRequestStart();
-        RunStreamHandler handler = new RunStreamHandler(context, listener, budgetGuard);
+        RunStreamHandler handler = new RunStreamHandler(
+                context, listener, budgetGuard, model);
         LlmCall call;
         try {
-            call = llm.streamChat(request, handler);
+            call = client.streamChat(request, handler);
         } catch (RuntimeException failure) {
             handler.close();
             log.error("llm request failed before call handle was returned", failure);
@@ -956,15 +1060,17 @@ public final class AgentExecutor {
         private final AgentRunContext context;
         private final AgentEventListener listener;
         private final AgentBudgetGuard budget;
+        private final ModelIdentity model;
         private final AtomicBoolean open = new AtomicBoolean(true);
         private int fragments;
         private int characters;
 
         private RunStreamHandler(AgentRunContext context, AgentEventListener listener,
-                                 AgentBudgetGuard budget) {
+                                 AgentBudgetGuard budget, ModelIdentity model) {
             this.context = context;
             this.listener = listener;
             this.budget = budget;
+            this.model = model;
         }
 
         @Override
@@ -987,7 +1093,7 @@ public final class AgentExecutor {
             if (!open.get()) {
                 return;
             }
-            budget.recordUsage(input, output, cacheRead);
+            budget.recordUsage(model, input, output, cacheRead);
             listener.onUsage(input, output, cacheRead);
         }
 

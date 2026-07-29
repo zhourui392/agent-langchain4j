@@ -4,6 +4,7 @@ import com.anthropic.agentkit.domain.agent.AgentBudget;
 import com.anthropic.agentkit.domain.agent.AgentBudgetState;
 import com.anthropic.agentkit.domain.agent.AgentUsage;
 import com.anthropic.agentkit.domain.agent.BudgetConsumption;
+import com.anthropic.agentkit.domain.agent.ModelIdentity;
 
 import java.util.Objects;
 
@@ -27,6 +28,10 @@ final class AgentBudgetGuard {
         state.reserveTurn(budget);
     }
 
+    void reserveLlmCall(ModelIdentity model) {
+        state.reserveLlmCall(budget, model);
+    }
+
     void reserveToolCalls(int requestedToolCalls) {
         state.reserveToolCalls(budget, requestedToolCalls);
     }
@@ -37,6 +42,11 @@ final class AgentBudgetGuard {
 
     void recordUsage(int input, int output, int cacheReadInput) {
         state.recordUsage(input, output, cacheReadInput);
+    }
+
+    void recordUsage(
+            ModelIdentity model, int input, int output, int cacheReadInput) {
+        state.recordUsage(model, input, output, cacheReadInput);
     }
 
     void recordOutputCharacters(int characters) {

@@ -2,6 +2,8 @@ package com.anthropic.agentkit.infrastructure.memory;
 
 import com.anthropic.agentkit.domain.agent.AgentUsage;
 import com.anthropic.agentkit.domain.agent.BudgetConsumption;
+import com.anthropic.agentkit.domain.agent.ModelIdentity;
+import com.anthropic.agentkit.domain.agent.ModelUsage;
 import com.anthropic.agentkit.domain.agent.RunId;
 import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.agent.WorkspaceId;
@@ -336,6 +338,8 @@ final class RunEventJsonCodec {
         node.put("inputTokens", usage.inputTokens());
         node.put("outputTokens", usage.outputTokens());
         node.put("cacheReadInputTokens", usage.cacheReadInputTokens());
+        ArrayNode models = node.putArray("models");
+        usage.modelUsage().forEach(model -> models.add(modelUsageNode(model)));
         return node;
     }
 
@@ -343,7 +347,39 @@ final class RunEventJsonCodec {
         return new AgentUsage(
                 requiredLong(node, "inputTokens"),
                 requiredLong(node, "outputTokens"),
-                requiredLong(node, "cacheReadInputTokens"));
+                requiredLong(node, "cacheReadInputTokens"),
+                readModelUsage(node.get("models")));
+    }
+
+    private static ObjectNode modelUsageNode(ModelUsage usage) {
+        ObjectNode node = JSON.createObjectNode();
+        node.put("provider", usage.model().provider());
+        node.put("model", usage.model().model());
+        node.put("attempts", usage.attempts());
+        node.put("inputTokens", usage.inputTokens());
+        node.put("outputTokens", usage.outputTokens());
+        node.put("cacheReadInputTokens", usage.cacheReadInputTokens());
+        return node;
+    }
+
+    private static List<ModelUsage> readModelUsage(JsonNode models) throws IOException {
+        if (models == null || models.isNull()) {
+            return List.of();
+        }
+        if (!models.isArray()) {
+            throw new IOException("run event usage models must be an array");
+        }
+        List<ModelUsage> usage = new ArrayList<>();
+        for (JsonNode model : models) {
+            usage.add(new ModelUsage(
+                    new ModelIdentity(requiredText(model, "provider"),
+                            requiredText(model, "model")),
+                    requiredInt(model, "attempts"),
+                    requiredLong(model, "inputTokens"),
+                    requiredLong(model, "outputTokens"),
+                    requiredLong(model, "cacheReadInputTokens")));
+        }
+        return List.copyOf(usage);
     }
 
     private static ObjectNode consumptionNode(BudgetConsumption consumption) {
@@ -353,6 +389,7 @@ final class RunEventJsonCodec {
         node.put("inputTokens", consumption.inputTokens());
         node.put("outputTokens", consumption.outputTokens());
         node.put("outputCharacters", consumption.outputCharacters());
+        node.put("llmCalls", consumption.llmCalls());
         return node;
     }
 
@@ -362,7 +399,13 @@ final class RunEventJsonCodec {
                 requiredInt(node, "toolCalls"),
                 requiredLong(node, "inputTokens"),
                 requiredLong(node, "outputTokens"),
-                requiredLong(node, "outputCharacters"));
+                requiredLong(node, "outputCharacters"),
+                optionalInt(node, "llmCalls"));
+    }
+
+    private static int optionalInt(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value == null || value.isNull() ? 0 : value.asInt();
     }
 
     private static Optional<Map<String, Object>> readPayload(JsonNode node) {

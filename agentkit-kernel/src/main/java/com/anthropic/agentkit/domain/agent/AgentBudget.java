@@ -11,10 +11,18 @@ public record AgentBudget(
         int maxToolCalls,
         long maxInputTokens,
         long maxOutputTokens,
-        long maxOutputCharacters) {
+        long maxOutputCharacters,
+        int maxLlmCalls) {
+
+    public AgentBudget(int maxTurns, int maxToolCalls, long maxInputTokens,
+                       long maxOutputTokens, long maxOutputCharacters) {
+        this(maxTurns, maxToolCalls, maxInputTokens, maxOutputTokens,
+                maxOutputCharacters, Integer.MAX_VALUE);
+    }
 
     public AgentBudget(int maxTurns, int maxToolCalls, long maxInputTokens) {
-        this(maxTurns, maxToolCalls, maxInputTokens, Long.MAX_VALUE, Long.MAX_VALUE);
+        this(maxTurns, maxToolCalls, maxInputTokens, Long.MAX_VALUE,
+                Long.MAX_VALUE, Integer.MAX_VALUE);
     }
 
     public AgentBudget {
@@ -33,6 +41,9 @@ public record AgentBudget(
         if (maxOutputCharacters < 0) {
             throw new IllegalArgumentException("maxOutputCharacters must be >= 0");
         }
+        if (maxLlmCalls < 0) {
+            throw new IllegalArgumentException("maxLlmCalls must be >= 0");
+        }
     }
 
     public static AgentBudget of(int maxTurns, int maxToolCalls, long maxInputTokens) {
@@ -42,12 +53,12 @@ public record AgentBudget(
     public static AgentBudget of(int maxTurns, int maxToolCalls, long maxInputTokens,
                                  long maxOutputTokens, long maxOutputCharacters) {
         return new AgentBudget(maxTurns, maxToolCalls, maxInputTokens,
-                maxOutputTokens, maxOutputCharacters);
+                maxOutputTokens, maxOutputCharacters, Integer.MAX_VALUE);
     }
 
     public static AgentBudget unlimited() {
         return new AgentBudget(Integer.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
-                Long.MAX_VALUE, Long.MAX_VALUE);
+                Long.MAX_VALUE, Long.MAX_VALUE, Integer.MAX_VALUE);
     }
 
     public boolean exceedsTurns(int turns) {
@@ -70,12 +81,22 @@ public record AgentBudget(
         return outputCharacters > maxOutputCharacters;
     }
 
+    public boolean exceedsLlmCalls(int llmCalls) {
+        return llmCalls > maxLlmCalls;
+    }
+
+    public AgentBudget withMaxLlmCalls(int limit) {
+        return new AgentBudget(maxTurns, maxToolCalls, maxInputTokens,
+                maxOutputTokens, maxOutputCharacters, limit);
+    }
+
     public AgentBudget narrowedBy(AgentBudget requested) {
         return new AgentBudget(
                 Math.min(maxTurns, requested.maxTurns),
                 Math.min(maxToolCalls, requested.maxToolCalls),
                 Math.min(maxInputTokens, requested.maxInputTokens),
                 Math.min(maxOutputTokens, requested.maxOutputTokens),
-                Math.min(maxOutputCharacters, requested.maxOutputCharacters));
+                Math.min(maxOutputCharacters, requested.maxOutputCharacters),
+                Math.min(maxLlmCalls, requested.maxLlmCalls));
     }
 }

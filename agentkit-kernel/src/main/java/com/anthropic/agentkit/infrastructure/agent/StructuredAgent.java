@@ -6,11 +6,13 @@ import com.anthropic.agentkit.application.PermissionService;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.agent.AgentRunResult;
 import com.anthropic.agentkit.domain.agent.AgentSpec;
+import com.anthropic.agentkit.domain.agent.ModelPolicy;
 import com.anthropic.agentkit.domain.agent.TerminalToolSpec;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.port.LlmClientSelector;
+import com.anthropic.agentkit.domain.port.RetrySleeper;
 import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.infrastructure.tools.StructuredOutputTool;
@@ -46,10 +48,9 @@ public final class StructuredAgent {
         Objects.requireNonNull(context, "context");
         Conversation conversation = new Conversation(context.sessionId());
         conversation.append(UserMessage.of(task));
-        LlmClient client = Objects.requireNonNull(
-                clients.select(spec.modelTier()), "selected LLM client");
         AgentRunResult result = new AgentExecutor(
-                client, buildRegistry(), PermissionService.bypassing())
+                clients, ModelPolicy.defaults(spec.modelTier()), RetrySleeper.system(),
+                buildRegistry(), PermissionService.bypassing())
                 .run(conversation, context, AgentEventListener.NO_OP, spec.systemPrompt())
                 .join();
         return result.structuredOutput()

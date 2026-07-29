@@ -1,7 +1,9 @@
 package com.anthropic.agentkit.domain.agent;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /** Thread-safe hierarchical ledger: local consumption also charges every parent scope. */
@@ -37,6 +39,16 @@ public final class AgentBudgetState {
         }
     }
 
+    public void reserveLlmCall(AgentBudget budget, ModelIdentity model) {
+        Objects.requireNonNull(model, "model");
+        synchronized (lock) {
+            ancestors.forEach(BoundScope::ensureLlmCallAvailable);
+            ensureLlmCallAvailable(local, budget);
+            ancestors.forEach(scope -> scope.counter.recordModelAttempt(model));
+            local.recordModelAttempt(model);
+        }
+    }
+
     public void reserveToolCalls(AgentBudget budget, int requested) {
         synchronized (lock) {
             ancestors.forEach(scope -> scope.ensureToolCallsAvailable(requested));
@@ -50,6 +62,16 @@ public final class AgentBudgetState {
         synchronized (lock) {
             ancestors.forEach(scope -> scope.counter.recordUsage(input, output, cacheReadInput));
             local.recordUsage(input, output, cacheReadInput);
+        }
+    }
+
+    public void recordUsage(
+            ModelIdentity model, int input, int output, int cacheReadInput) {
+        Objects.requireNonNull(model, "model");
+        synchronized (lock) {
+            ancestors.forEach(scope -> scope.counter.recordUsage(
+                    model, input, output, cacheReadInput));
+            local.recordUsage(model, input, output, cacheReadInput);
         }
     }
 
@@ -82,6 +104,13 @@ public final class AgentBudgetState {
     private static void ensureTurnAvailable(Counter counter, AgentBudget budget) {
         if (counter.turns == Integer.MAX_VALUE || budget.exceedsTurns(counter.turns + 1)) {
             throw exceeded("maxTurns", budget.maxTurns());
+        }
+    }
+
+    private static void ensureLlmCallAvailable(Counter counter, AgentBudget budget) {
+        if (counter.llmCalls == Integer.MAX_VALUE
+                || budget.exceedsLlmCalls(counter.llmCalls + 1)) {
+            throw exceeded("maxLlmCalls", budget.maxLlmCalls());
         }
     }
 
@@ -118,6 +147,10 @@ public final class AgentBudgetState {
             AgentBudgetState.ensureToolCallsAvailable(counter, budget, requested);
         }
 
+        private void ensureLlmCallAvailable() {
+            AgentBudgetState.ensureLlmCallAvailable(counter, budget);
+        }
+
         private void ensureWithin() {
             AgentBudgetState.ensureWithin(counter, budget);
         }
@@ -130,6 +163,14 @@ public final class AgentBudgetState {
         private long outputTokens;
         private long outputCharacters;
         private long cacheReadInputTokens;
+        private int llmCalls;
+        private final Map<ModelIdentity, ModelUsageCounter> modelUsage =
+                new LinkedHashMap<>();
+
+        private void recordModelAttempt(ModelIdentity model) {
+            llmCalls++;
+            modelUsage.computeIfAbsent(model, ignored -> new ModelUsageCounter()).attempts++;
+        }
 
         private void recordUsage(int input, int output, int cacheReadInput) {
             inputTokens += positive(input);
@@ -137,21 +178,51 @@ public final class AgentBudgetState {
             cacheReadInputTokens += positive(cacheReadInput);
         }
 
+        private void recordUsage(
+                ModelIdentity model, int input, int output, int cacheReadInput) {
+            recordUsage(input, output, cacheReadInput);
+            modelUsage.computeIfAbsent(model, ignored -> new ModelUsageCounter())
+                    .recordUsage(input, output, cacheReadInput);
+        }
+
         private void recordOutputCharacters(int characters) {
             outputCharacters += positive(characters);
         }
 
         private AgentUsage usage() {
-            return new AgentUsage(inputTokens, outputTokens, cacheReadInputTokens);
+            List<ModelUsage> breakdown = modelUsage.entrySet().stream()
+                    .map(entry -> entry.getValue().toUsage(entry.getKey()))
+                    .toList();
+            return new AgentUsage(
+                    inputTokens, outputTokens, cacheReadInputTokens, breakdown);
         }
 
         private BudgetConsumption consumption() {
             return new BudgetConsumption(
-                    turns, toolCalls, inputTokens, outputTokens, outputCharacters);
+                    turns, toolCalls, inputTokens, outputTokens,
+                    outputCharacters, llmCalls);
         }
 
         private static long positive(long value) {
             return Math.max(0, value);
+        }
+    }
+
+    private static final class ModelUsageCounter {
+        private int attempts;
+        private long inputTokens;
+        private long outputTokens;
+        private long cacheReadInputTokens;
+
+        private void recordUsage(int input, int output, int cacheReadInput) {
+            inputTokens += Math.max(0, input);
+            outputTokens += Math.max(0, output);
+            cacheReadInputTokens += Math.max(0, cacheReadInput);
+        }
+
+        private ModelUsage toUsage(ModelIdentity model) {
+            return new ModelUsage(model, attempts, inputTokens,
+                    outputTokens, cacheReadInputTokens);
         }
     }
 }

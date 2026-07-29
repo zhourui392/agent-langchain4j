@@ -1,9 +1,11 @@
 package com.anthropic.agentkit.infrastructure.llm;
 
+import com.anthropic.agentkit.domain.agent.ModelIdentity;
 import com.anthropic.agentkit.infrastructure.config.AppConfig;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Objects;
 
 /**
@@ -25,6 +27,7 @@ public final class OpenAiLlmClientFactory implements LlmClientFactory {
                 .logRequests(true)
                 .logResponses(true);
         config.baseUrlIfPresent().ifPresent(builder::baseUrl);
-        return new LangChain4jLlmClient(builder.build());
+        return new LangChain4jLlmClient(builder.build(), new ModelIdentity(
+                config.provider().name().toLowerCase(Locale.ROOT), config.model()));
     }
 }

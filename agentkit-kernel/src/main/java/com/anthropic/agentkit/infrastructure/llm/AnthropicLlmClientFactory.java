@@ -1,9 +1,11 @@
 package com.anthropic.agentkit.infrastructure.llm;
 
+import com.anthropic.agentkit.domain.agent.ModelIdentity;
 import com.anthropic.agentkit.infrastructure.config.AppConfig;
 import dev.langchain4j.model.anthropic.AnthropicStreamingChatModel;
 
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Objects;
 
 public final class AnthropicLlmClientFactory implements LlmClientFactory {
@@ -33,7 +35,8 @@ public final class AnthropicLlmClientFactory implements LlmClientFactory {
         config.baseUrlIfPresent()
                 .map(AnthropicEndpointResolver::resolveBaseUrl)
                 .ifPresent(builder::baseUrl);
-        return new LangChain4jLlmClient(builder.build());
+        return new LangChain4jLlmClient(builder.build(), new ModelIdentity(
+                config.provider().name().toLowerCase(Locale.ROOT), config.model()));
     }
 
     public CacheBreakpointStrategy cacheStrategy() {

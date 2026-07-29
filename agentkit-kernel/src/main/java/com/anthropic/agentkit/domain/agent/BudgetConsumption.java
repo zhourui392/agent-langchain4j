@@ -6,20 +6,27 @@ public record BudgetConsumption(
         int toolCalls,
         long inputTokens,
         long outputTokens,
-        long outputCharacters) {
+        long outputCharacters,
+        int llmCalls) {
+
+    public BudgetConsumption(
+            int turns, int toolCalls, long inputTokens,
+            long outputTokens, long outputCharacters) {
+        this(turns, toolCalls, inputTokens, outputTokens, outputCharacters, 0);
+    }
 
     public BudgetConsumption(int turns, int toolCalls, long inputTokens) {
-        this(turns, toolCalls, inputTokens, 0, 0);
+        this(turns, toolCalls, inputTokens, 0, 0, 0);
     }
 
     public BudgetConsumption {
         if (turns < 0 || toolCalls < 0 || inputTokens < 0
-                || outputTokens < 0 || outputCharacters < 0) {
+                || outputTokens < 0 || outputCharacters < 0 || llmCalls < 0) {
             throw new IllegalArgumentException("budget consumption must be non-negative");
         }
     }
 
     public static BudgetConsumption zero() {
-        return new BudgetConsumption(0, 0, 0, 0, 0);
+        return new BudgetConsumption(0, 0, 0, 0, 0, 0);
     }
 }

@@ -2,6 +2,8 @@ package com.anthropic.agentkit.infrastructure.memory;
 
 import com.anthropic.agentkit.domain.agent.AgentUsage;
 import com.anthropic.agentkit.domain.agent.BudgetConsumption;
+import com.anthropic.agentkit.domain.agent.ModelIdentity;
+import com.anthropic.agentkit.domain.agent.ModelUsage;
 import com.anthropic.agentkit.domain.agent.RunId;
 import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.agent.WorkspaceId;
@@ -253,8 +255,9 @@ class FileRunEventStoreTest {
         return new RunEvent.RunStopped(
                 metadata(sequence), StopReason.TERMINAL_TOOL, finalMessage,
                 Optional.of(Map.of("answer", "kept")),
-                new AgentUsage(3, 2, 1),
-                new BudgetConsumption(1, 1, 3, 2, 8), Optional.of("detail"));
+                new AgentUsage(3, 2, 1, List.of(new ModelUsage(
+                        new ModelIdentity("openai", "gpt-test"), 2, 3, 2, 1))),
+                new BudgetConsumption(1, 1, 3, 2, 8, 2), Optional.of("detail"));
     }
 
     private static RunSuspension.WaitingForApproval approvalSuspension(

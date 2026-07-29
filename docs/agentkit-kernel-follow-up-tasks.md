@@ -534,7 +534,7 @@ sealed interface RunSuspension {
 
 ### #53 [Kernel-TDD, P3] provider-neutral `ModelPolicy` / `RetryPolicy`
 
-**状态**：进行中（Red，2026-07-29）。
+**状态**：进行中（Green，2026-07-29）。
 
 **实施前领域建模审计**
 

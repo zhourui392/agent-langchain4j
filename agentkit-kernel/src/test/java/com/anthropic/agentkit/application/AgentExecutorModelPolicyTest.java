@@ -11,6 +11,7 @@ import com.anthropic.agentkit.domain.agent.ModelUsage;
 import com.anthropic.agentkit.domain.agent.RetryPolicy;
 import com.anthropic.agentkit.domain.agent.RunDeadline;
 import com.anthropic.agentkit.domain.agent.StopReason;
+import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
 import com.anthropic.agentkit.domain.message.AiMessage;
@@ -86,6 +87,7 @@ class AgentExecutorModelPolicyTest {
         ScriptedModel budgeted = new ScriptedModel(PRIMARY).fail(transientFailure());
         Conversation budgetConversation = conversation("retry-budget");
         AgentRunContext limited = runContext(budgetConversation,
+                new CancellationToken(),
                 AgentBudget.unlimited().withMaxLlmCalls(1));
 
         AgentRunResult exhausted = executor(

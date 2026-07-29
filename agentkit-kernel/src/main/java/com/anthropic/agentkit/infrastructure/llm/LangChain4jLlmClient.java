@@ -2,6 +2,7 @@ package com.anthropic.agentkit.infrastructure.llm;
 
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.ChatMessage;
+import com.anthropic.agentkit.domain.agent.ModelIdentity;
 import com.anthropic.agentkit.domain.port.ChatRequest;
 import com.anthropic.agentkit.domain.port.LlmCall;
 import com.anthropic.agentkit.domain.port.LlmClient;
@@ -25,9 +26,16 @@ public final class LangChain4jLlmClient implements LlmClient {
     private static final Logger log = LoggerFactory.getLogger(LangChain4jLlmClient.class);
 
     private final StreamingChatModel model;
+    private final ModelIdentity identity;
 
     public LangChain4jLlmClient(StreamingChatModel model) {
+        this(model, ModelIdentity.unknown());
+    }
+
+    public LangChain4jLlmClient(
+            StreamingChatModel model, ModelIdentity identity) {
         this.model = Objects.requireNonNull(model, "model");
+        this.identity = Objects.requireNonNull(identity, "identity");
     }
 
     @Override
@@ -36,13 +44,28 @@ public final class LangChain4jLlmClient implements LlmClient {
         Objects.requireNonNull(handler, "handler");
         long startNs = System.nanoTime();
         log.info("lc4j stream started: messages={}, tools={}", request.messages().size(), request.tools().size());
-        dev.langchain4j.model.chat.request.ChatRequest lcRequest = buildLcRequest(request);
-        LlmCall call = LlmCall.start(handler,
-                guarded -> model.chat(lcRequest, new HandlerBridge(guarded)));
+        dev.langchain4j.model.chat.request.ChatRequest lcRequest;
+        try {
+            lcRequest = buildLcRequest(request);
+        } catch (IllegalArgumentException failure) {
+            throw ProviderFailureMapper.schemaIncompatible(failure);
+        }
+        LlmCall call = LlmCall.start(handler, guarded -> {
+            try {
+                model.chat(lcRequest, new HandlerBridge(guarded));
+            } catch (RuntimeException failure) {
+                guarded.onError(ProviderFailureMapper.toDomain(failure));
+            }
+        });
         call.completion().whenComplete((message, failure) ->
                 log.info("lc4j stream finished: durationMs={}, success={}",
                         elapsedMs(startNs), failure == null));
         return call;
+    }
+
+    @Override
+    public ModelIdentity modelIdentity() {
+        return identity;
     }
 
     private static dev.langchain4j.model.chat.request.ChatRequest buildLcRequest(ChatRequest req) {

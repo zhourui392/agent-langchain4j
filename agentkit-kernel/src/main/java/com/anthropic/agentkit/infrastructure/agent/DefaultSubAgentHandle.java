@@ -10,6 +10,7 @@ import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.agent.AgentRunResult;
 import com.anthropic.agentkit.domain.agent.AgentRunState;
 import com.anthropic.agentkit.domain.agent.AgentSpec;
+import com.anthropic.agentkit.domain.agent.ModelPolicy;
 import com.anthropic.agentkit.domain.agent.RunId;
 import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.agent.SubAgentExecutionScope;
@@ -20,6 +21,7 @@ import com.anthropic.agentkit.domain.conversation.SessionId;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.port.LlmClientSelector;
+import com.anthropic.agentkit.domain.port.RetrySleeper;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 
@@ -163,9 +165,14 @@ final class DefaultSubAgentHandle implements SubAgentHandle {
     }
 
     private AgentExecutor executor() {
-        LlmClient client = Objects.requireNonNull(
-                clients.select(spec.modelTier()), "selected LLM client");
-        return new AgentExecutor(client, tools, permissions, interceptors);
+        return new AgentExecutor(
+                clients, ModelPolicy.defaults(spec.modelTier()), RetrySleeper.system(),
+                tools, permissions, com.anthropic.agentkit.application.context.ContextPolicy.standard(
+                        Objects.requireNonNull(clients.select(spec.modelTier()),
+                                "selected LLM client")),
+                com.anthropic.agentkit.application.tool.ToolOutputPolicy.defaultLimited(),
+                com.anthropic.agentkit.domain.port.RunEventStore.none(), interceptors,
+                com.anthropic.agentkit.domain.port.RunSuspensionStore.none());
     }
 
     private void cancelFromParent() {
