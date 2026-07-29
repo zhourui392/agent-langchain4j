@@ -343,16 +343,15 @@ final class ParallelToolDispatcher {
 
     private ToolResult executeBounded(Tool tool, ToolInvocation invocation) {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-        AtomicBoolean toolStarted = new AtomicBoolean();
-        CountDownLatch toolStopped = new CountDownLatch(1);
+        ToolTaskLifecycle lifecycle = new ToolTaskLifecycle();
         Map<String, String> parentMdc = MDC.getCopyOfContextMap();
         Future<ToolResult> future = executor.submit(() -> {
-            toolStarted.set(true);
+            lifecycle.markStarted();
             try {
                 return withMdc(parentMdc, invocation.id(),
                         () -> tool.execute(invocation.args(), executionContext));
             } finally {
-                toolStopped.countDown();
+                lifecycle.markStopped();
             }
         });
         try (var ignored = executionContext.cancellation().onCancel(
@@ -376,25 +375,7 @@ final class ParallelToolDispatcher {
             }
             return ToolResult.of(ToolResultStatus.ERROR, messageOf(ex.getCause()));
         } finally {
-            stopExecutor(executor, tool.name(), toolStarted.get(), toolStopped);
-        }
-    }
-
-    private static void stopExecutor(
-            ExecutorService executor, String toolName,
-            boolean toolStarted, CountDownLatch toolStopped) {
-        executor.shutdownNow();
-        if (!toolStarted) {
-            return;
-        }
-        try {
-            if (!toolStopped.await(
-                    TOOL_TERMINATION_GRACE_MILLIS, TimeUnit.MILLISECONDS)) {
-                log.warn("tool execution outlived cancellation grace: tool={}", toolName);
-            }
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            log.warn("interrupted while awaiting tool termination: tool={}", toolName);
+            lifecycle.stopAndAwait(executor, tool.name());
         }
     }
 
@@ -517,6 +498,35 @@ final class ParallelToolDispatcher {
         private SettledTool {
             java.util.Objects.requireNonNull(message, "message");
             java.util.Objects.requireNonNull(interceptorFailure, "interceptorFailure");
+        }
+    }
+
+    private static final class ToolTaskLifecycle {
+        private final AtomicBoolean started = new AtomicBoolean();
+        private final CountDownLatch stopped = new CountDownLatch(1);
+
+        void markStarted() {
+            started.set(true);
+        }
+
+        void markStopped() {
+            stopped.countDown();
+        }
+
+        void stopAndAwait(ExecutorService executor, String toolName) {
+            executor.shutdownNow();
+            if (!started.get()) {
+                return;
+            }
+            try {
+                if (!stopped.await(
+                        TOOL_TERMINATION_GRACE_MILLIS, TimeUnit.MILLISECONDS)) {
+                    log.warn("tool execution outlived cancellation grace: tool={}", toolName);
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                log.warn("interrupted while awaiting tool termination: tool={}", toolName);
+            }
         }
     }
 
