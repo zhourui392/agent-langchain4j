@@ -28,4 +28,20 @@ class AgentBudgetTest {
         assertThat(budget.exceedsToolCalls(Integer.MAX_VALUE)).isFalse();
         assertThat(budget.exceedsInputTokens(Long.MAX_VALUE)).isFalse();
     }
+
+    @Test
+    void childLlmAttemptsCountAgainstParentLimit() {
+        AgentBudget parentBudget = AgentBudget.unlimited().withMaxLlmCalls(1);
+        AgentBudgetState parent = new AgentBudgetState();
+        AgentBudgetState child = parent.child(parentBudget);
+        ModelIdentity model = new ModelIdentity("provider", "model");
+
+        child.reserveLlmCall(AgentBudget.unlimited(), model);
+
+        assertThat(parent.consumption().llmCalls()).isEqualTo(1);
+        assertThat(child.consumption().llmCalls()).isEqualTo(1);
+        assertThatThrownBy(() -> child.reserveLlmCall(AgentBudget.unlimited(), model))
+                .isInstanceOf(AgentBudgetExceededException.class)
+                .hasMessageContaining("maxLlmCalls");
+    }
 }

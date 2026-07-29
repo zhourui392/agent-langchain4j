@@ -19,7 +19,6 @@ import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
 import com.anthropic.agentkit.domain.message.UserMessage;
-import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.port.LlmClientSelector;
 import com.anthropic.agentkit.domain.port.RetrySleeper;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
@@ -167,12 +166,7 @@ final class DefaultSubAgentHandle implements SubAgentHandle {
     private AgentExecutor executor() {
         return new AgentExecutor(
                 clients, ModelPolicy.defaults(spec.modelTier()), RetrySleeper.system(),
-                tools, permissions, com.anthropic.agentkit.application.context.ContextPolicy.standard(
-                        Objects.requireNonNull(clients.select(spec.modelTier()),
-                                "selected LLM client")),
-                com.anthropic.agentkit.application.tool.ToolOutputPolicy.defaultLimited(),
-                com.anthropic.agentkit.domain.port.RunEventStore.none(), interceptors,
-                com.anthropic.agentkit.domain.port.RunSuspensionStore.none());
+                tools, permissions, interceptors);
     }
 
     private void cancelFromParent() {

@@ -39,6 +39,9 @@ final class ToolSpecificationMapper {
         if (!root.isObject()) {
             throw new IllegalArgumentException("tool input schema must be a JSON object");
         }
+        if (root.has("type") && !"object".equals(root.path("type").asText())) {
+            throw new IllegalArgumentException("tool input schema root type must be object");
+        }
         return toObjectSchema(root);
     }
 
@@ -91,7 +94,8 @@ final class ToolSpecificationMapper {
             case "array" -> JsonArraySchema.builder().description(description)
                     .items(toJsonSchemaElement(propertySchema.path("items"))).build();
             case "object" -> toObjectSchema(propertySchema);
-            default -> JsonStringSchema.builder().description(description).build();
+            default -> throw new IllegalArgumentException(
+                    "unsupported tool schema type: " + type);
         };
     }
 

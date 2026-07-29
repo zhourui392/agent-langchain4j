@@ -20,7 +20,7 @@
 | S8 持久化 | #36–38 | 0.5d | JSONL store + /resume + SessionId |
 | MVP-Gate | #39 | — | 端到端冒烟，打 `v0.1.0-mvp` |
 | S9 Runtime Hardening | #40–46 | 已完成（7/7） | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
-| S10 Runtime Extensions | #47–55 | 进行中（6/9） | 子 Agent、interceptor、MCP、后台任务、暂停恢复、分支、模型策略、manifest、CLI |
+| S10 Runtime Extensions | #47–55 | 进行中（7/9） | 子 Agent、interceptor、MCP、后台任务、暂停恢复、分支、模型策略、manifest、CLI |
 | **MVP 合计** | — | **≈8 人天** | — |
 
 ## 依赖图
@@ -849,7 +849,7 @@ S0 (1→2→3)
 
 ### #53 [S10-Kernel-TDD] provider-neutral ModelPolicy / RetryPolicy （blockedBy: 42, 44, 46；与 47 协同）
 
-**状态**：进行中（Green）。
+**状态**：已完成（2026-07-29）。
 
 **Red**：assistant turn 被接受前可重试瞬态失败；认证错误不重试；retry 计入预算/deadline；不重放 settled tool；记录实际 fallback model。
 

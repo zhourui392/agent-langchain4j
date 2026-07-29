@@ -1,6 +1,6 @@
 # AgentKit Kernel：非高优先级与后续 Agent Runtime 任务
 
-> 状态：`#47–#52` 已完成，下一项为 `#53`；随后按 `#54 → #55` 继续交付，`#56` 保持条件触发候选
+> 状态：`#47–#53` 已完成，下一项为 `#54`；随后按 `#55` 继续交付，`#56` 保持条件触发候选
 >
 > 审计日期：2026-07-29
 >
@@ -56,7 +56,7 @@
                  └─→ #55 CLI composition cleanup
 ```
 
-建议交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`；当前 `#47–#52` 已完成，下一项为 `#53`。`#56` 独立按日志规模或多 writer 需求触发，不为“对齐产品功能表”提前实现没有消费方的扩展。
+建议交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`；当前 `#47–#53` 已完成，下一项为 `#54`。`#56` 独立按日志规模或多 writer 需求触发，不为“对齐产品功能表”提前实现没有消费方的扩展。
 
 ## 4. 变化点地图
 
@@ -68,7 +68,7 @@
 | 长命令和大输出 | scoped `TaskHandle`、增量 cursor、进程树回收、受治理 artifact 已落地 | `BackgroundTaskLauncher` + output projection + `ArtifactStore` | #50（已完成） |
 | 用户问题和计划批准 | typed suspension、完整 permission preflight、单次 token claim 与 CLI host adapter 已落地 | `RunSuspension` + `RunSuspensionStore` + `ResumeCommand` | #51（已完成） |
 | fork/rewind/checkpoint | immutable parent pointer、append-only branch journal、typed side effect 与文件补偿已落地 | `SessionBranchService` + `FileCheckpointProvider` | #52（已完成） |
-| provider retry/fallback | provider factory、异常文本、调用入口 | `ModelPolicy` / `RetryPolicy` | #53 |
+| provider retry/fallback | typed failure、有限退避、attempt budget、实际 model usage 已落地 | `ModelPolicy` / `RetryPolicy` | #53（已完成） |
 | Agent 发现与派发 | 手工 wiring、模块专属 builder | `AgentManifest`/registry（平台层） | #54 |
 | CLI 命令和取消接线 | `AgentKitApplication.main`、slash commands | CLI composition root | #55 |
 | 事件日志规模与多 writer | 文件 append 前全量读取校验、实例内同步、无 retention | tail index + writer fencing + retention/rotation policy | #56 |
@@ -534,7 +534,7 @@ sealed interface RunSuspension {
 
 ### #53 [Kernel-TDD, P3] provider-neutral `ModelPolicy` / `RetryPolicy`
 
-**状态**：进行中（Green，2026-07-29）。
+**状态**：已完成（2026-07-29）；Red/Green/Refactor 三提交交付，实施状态以 `TASKLIST.md` 为准。
 
 **实施前领域建模审计**
 
@@ -577,6 +577,15 @@ sealed interface RunSuspension {
 - policy 独立于 Anthropic/OpenAI SDK 类型。
 - 默认 retry 次数有限且有 jitter/backoff 可测试时钟。
 - 没有真实需求时 fallback 默认关闭。
+
+**完成后的领域建模复核**
+
+- `ModelPolicy` 只表达 requested tier、显式 fallback route 与 retry policy；`LlmClientSelector`/`LlmClient.modelIdentity` 负责解析实际 client/model，executor 没有 provider 分支。默认 route 的 fallback 列表为空，`RetryPolicy.standard` 的 attempt、指数退避、上限和 jitter 全部有限。
+- 一次逻辑 turn 与物理 LLM attempt 已分账：`maxLlmCalls` 在每次主调用、retry、fallback 和 compaction 前 reserve，并沿 child 的共享 `AgentBudgetState` 计入 ancestor；token callback 继续逐次累计，失败 attempt 不退款。
+- typed `ProviderFailureKind` 只允许 transient/rate-limited 进入 retry；authentication、configuration、invalid request、schema incompatibility、unknown 均停止。`ContextWindowExceededException` 仍只进入 `ContextPolicy` 的一次 compact/retry，不被通用 policy 捕获。
+- `AgentUsage.modelUsage` 按实际 `ModelIdentity` 聚合 attempt/token，随 `RunStopped` JSONL 往返；因此 fallback 与零 token 失败 attempt 都可审计。旧 v1 日志没有新字段时按空 breakdown/零 llmCalls 兼容读取。
+- LangChain4j adapter 在 provider 调用前验证 tool schema，unsupported/root mismatch 映射为 non-retryable `SCHEMA_INCOMPATIBLE`；已知 401/403、429、408/5xx/连接类诊断在 infrastructure 映射，domain 不依赖 SDK 类型。
+- 完成后评分 **15/15**：聚合边界 3、变化收敛 3、不变量守护 3、行为一致 3、下一轮演进 3。剩余限制是当前 LangChain4j 错误映射主要依赖通用诊断文本，SDK 若暴露稳定 status/retry-after 只需替换 mapper；失败前已输出的 partial text 不做终端字符级撤销，但 conversation/tool side effect 不会 replay。
 
 **blockedBy**：#42、#44、#46；`ModelTier` 与 #47 协同。
 

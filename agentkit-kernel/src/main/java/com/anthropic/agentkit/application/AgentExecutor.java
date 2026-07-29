@@ -155,6 +155,16 @@ public final class AgentExecutor {
     public AgentExecutor(
             LlmClientSelector models, ModelPolicy modelPolicy,
             RetrySleeper retrySleeper, ToolRegistry tools,
+            PermissionService permissions, AgentInterceptors interceptors) {
+        this(models, modelPolicy, retrySleeper, tools, permissions,
+                ContextPolicy.standard(primaryClient(models, modelPolicy)),
+                ToolOutputPolicy.defaultLimited(), RunEventStore.none(),
+                interceptors, RunSuspensionStore.none());
+    }
+
+    public AgentExecutor(
+            LlmClientSelector models, ModelPolicy modelPolicy,
+            RetrySleeper retrySleeper, ToolRegistry tools,
             PermissionService permissions, ContextPolicy contextPolicy,
             ToolOutputPolicy toolOutputPolicy, RunEventStore eventStore,
             AgentInterceptors interceptors, RunSuspensionStore suspensionStore) {
@@ -1107,7 +1117,7 @@ public final class AgentExecutor {
         @Override
         public void onError(Throwable error) {
             if (open.get()) {
-                log.error("llm stream failed", error);
+                log.debug("llm stream reported failure: {}", messageOf(error));
             }
         }
 

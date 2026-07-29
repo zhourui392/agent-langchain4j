@@ -852,8 +852,24 @@ session rewind 是从不可变 run fact 创建新分支并选择性补偿 kernel
 
 ---
 
+### 16.21 Provider-neutral ModelPolicy、有限重试与实际模型审计（2026-07-29）
+
+一次逻辑 assistant turn 与一次物理 LLM attempt 不再混为同一个预算单位。`AgentExecutor` 只在完整 `AiMessage` 尚未被接受时，根据 typed provider failure 发起下一 attempt；conversation 中已经接受的 assistant/tool result、已经 settled 的工具和已观察到的副作用都不进入 model retry 的重放单元。
+
+| 决策面 | 选型 | 不变量 / 后果 |
+|---|---|---|
+| 模型路由 | domain `ModelPolicy` 持有 primary `ModelTier`、显式 fallback tier 列表与 `RetryPolicy`；`LlmClientSelector` 解析每次 attempt 的 client，client 暴露 provider-neutral `ModelIdentity` | fallback 默认空；角色只请求能力档位，不引用 provider SDK；配置了多个 fallback 后按 attempt 前进，耗尽后停留在最后一个显式 tier |
+| 失败分类 | adapter 把已知 authentication、rate-limit、transient 诊断映射为 `ProviderFailureException(ProviderFailureKind)`；未知失败保持 non-retryable | executor 不解析 Anthropic/OpenAI 异常或文本；认证、配置、invalid request、schema incompatibility 均不重试；context overflow 继续只由 `ContextPolicy` compact/recover |
+| 次数与时间 | `RetryPolicy` 提供有限 max attempts、指数退避上限、jitter 和 provider retry-after 下界；`RetrySleeper` 是可替换时钟 | backoff 开始前必须能容纳于 run deadline，等待后再次检查 deadline/cancel；默认最多三次 attempt，不存在无限递归或 run 外层重跑 |
+| 预算 | `AgentBudget.maxLlmCalls` / `BudgetConsumption.llmCalls` 独立于逻辑 `turns`；主请求与 compaction 都通过共享分层 `AgentBudgetState` 记账 | 每次 primary/retry/fallback attempt 在发出前原子 reserve；child attempt 同时计入 ancestor；失败 attempt 已报告的 token 也不退款 |
+| usage / 审计 | `AgentUsage.modelUsage` 按实际 `ModelIdentity` 聚合 attempt 与 token；`RunStopped` JSONL 同时持久化 model breakdown 和 llmCalls | fallback 不会被错误归到请求的 tier；即使某次失败没有 token usage，实际尝试过的 provider/model 仍以零 token attempt 留痕；旧 v1 event 缺少新增可选字段时按空 breakdown/零 call 读取 |
+| adapter 兼容 | LangChain4j adapter 在调用 provider 前映射并验证 tool JSON schema；不支持的 root/property type 形成 `SCHEMA_INCOMPATIBLE` | primary/fallback client 各自在自己的 attempt 校验同一 request；不把 schema 错误伪装成 transient，也不静默降级为错误的 string schema |
+
+当前诊断映射只识别 kernel 已知的通用错误文本；若 SDK 后续稳定暴露 status/retry-after，应只扩展 infrastructure mapper，domain policy 与 executor 不变。流式失败前已经展示的 partial text 不会被回收；policy 保证的是 conversation/tool side effect 不重放，不承诺终端字符级撤销。
+
+---
+
 ## 17. 下一步
 
-1. 完成 #53 provider-neutral model/retry policy。
-2. 用 #54 manifest 建立 diagnosis/coding 的统一派发入口。
-3. 最后以 #55 清理 slash command、run recovery、branch host UX 与每轮 SIGINT/context 接线。
+1. 用 #54 manifest 建立 diagnosis/coding 的统一派发入口。
+2. 最后以 #55 清理 slash command、run recovery、branch host UX 与每轮 SIGINT/context 接线。

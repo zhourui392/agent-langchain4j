@@ -230,6 +230,20 @@ class FileRunEventStoreTest {
                 .hasMessageContaining("missing run event field: runId");
     }
 
+    @Test
+    void readsVersionOneUsageWrittenBeforeModelAttemptFields() throws IOException {
+        String legacy = RunEventJsonCodec.toJson(
+                        stoppedWithPayload(1, AiMessage.text("legacy")))
+                .replace(",\"models\":[]", "")
+                .replace(",\"llmCalls\":0", "");
+
+        RunEvent.RunStopped stopped = (RunEvent.RunStopped)
+                RunEventJsonCodec.fromJson(legacy);
+
+        assertThat(stopped.usage().modelUsage()).isEmpty();
+        assertThat(stopped.consumption().llmCalls()).isZero();
+    }
+
     private static RunEvent.RunStarted started(long sequence) {
         return new RunEvent.RunStarted(
                 metadata(sequence), List.of(UserMessage.of("start")), Optional.empty());

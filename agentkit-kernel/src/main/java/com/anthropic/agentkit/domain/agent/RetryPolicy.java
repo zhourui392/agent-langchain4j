@@ -51,10 +51,10 @@ public record RetryPolicy(
             DoubleSupplier jitterSource) {
         Objects.requireNonNull(failure, "failure");
         Objects.requireNonNull(jitterSource, "jitterSource");
-        Duration policyDelay = exponentialDelay(failedAttempt);
+        Duration policyDelay = applyJitter(
+                exponentialDelay(failedAttempt), jitterSource.getAsDouble());
         Duration retryAfter = failure.retryAfter().orElse(Duration.ZERO);
-        Duration base = policyDelay.compareTo(retryAfter) >= 0 ? policyDelay : retryAfter;
-        return applyJitter(base, jitterSource.getAsDouble());
+        return policyDelay.compareTo(retryAfter) >= 0 ? policyDelay : retryAfter;
     }
 
     private Duration exponentialDelay(int failedAttempt) {

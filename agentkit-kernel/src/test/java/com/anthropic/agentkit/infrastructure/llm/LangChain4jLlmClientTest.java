@@ -2,9 +2,12 @@ package com.anthropic.agentkit.infrastructure.llm;
 
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.UserMessage;
+import com.anthropic.agentkit.domain.agent.ModelIdentity;
 import com.anthropic.agentkit.domain.port.ChatRequest;
 import com.anthropic.agentkit.domain.port.ContextWindowExceededException;
 import com.anthropic.agentkit.domain.port.LlmClient.StreamHandler;
+import com.anthropic.agentkit.domain.port.ProviderFailureException;
+import com.anthropic.agentkit.domain.port.ProviderFailureKind;
 import dev.langchain4j.model.anthropic.AnthropicTokenUsage;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.response.ChatResponse;
@@ -17,6 +20,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class LangChain4jLlmClientTest {
 
@@ -261,6 +265,32 @@ class LangChain4jLlmClientTest {
         assertThat(parameters.properties().get("filter"))
                 .isInstanceOf(dev.langchain4j.model.chat.request.json.JsonObjectSchema.class);
         assertThat(parameters.additionalProperties()).isFalse();
+    }
+
+    @Test
+    void rejectsUnsupportedToolSchemaBeforeCallingProvider() {
+        FakeStreamingChatModel fake = new FakeStreamingChatModel().completionText("unused");
+        LangChain4jLlmClient client = new LangChain4jLlmClient(fake);
+        ChatRequest request = ChatRequest.builder().message(UserMessage.of("hi"))
+                .tool(new com.anthropic.agentkit.domain.port.ToolSpec(
+                        "Unsupported", "unsupported schema",
+                        "{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"null\"}}}"))
+                .build();
+
+        assertThatThrownBy(() -> client.streamChat(request, StreamHandler.noop()))
+                .isInstanceOfSatisfying(ProviderFailureException.class,
+                        failure -> assertThat(failure.kind())
+                                .isEqualTo(ProviderFailureKind.SCHEMA_INCOMPATIBLE));
+        assertThat(fake.capturedRequests()).isEmpty();
+    }
+
+    @Test
+    void exposesConfiguredProviderNeutralModelIdentity() {
+        ModelIdentity identity = new ModelIdentity("anthropic", "claude-test");
+        LangChain4jLlmClient client = new LangChain4jLlmClient(
+                new FakeStreamingChatModel(), identity);
+
+        assertThat(client.modelIdentity()).isEqualTo(identity);
     }
 
     private static final class ControllableStreamingChatModel implements StreamingChatModel {
