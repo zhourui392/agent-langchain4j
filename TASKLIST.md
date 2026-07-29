@@ -779,7 +779,7 @@ S0 (1→2→3)
 
 ### #48 [S10-Kernel-TDD] typed AgentInterceptor 生命周期扩展 （blockedBy: 41, 42, 46）
 
-**状态**：待开始。
+**状态**：进行中（Red）。
 
 **Red**：pre-tool deny 仍 settle；observer failure 隔离；blocking failure 有明确 stop reason；声明顺序稳定；terminal validation 不破坏配对；sub-agent lifecycle 携带 parent/child RunId。
 
