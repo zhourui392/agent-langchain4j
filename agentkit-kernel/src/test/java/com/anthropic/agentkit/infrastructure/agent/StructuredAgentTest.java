@@ -1,15 +1,27 @@
 package com.anthropic.agentkit.infrastructure.agent;
 
+import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
+import com.anthropic.agentkit.domain.agent.RunId;
+import com.anthropic.agentkit.domain.agent.WorkspaceId;
+import com.anthropic.agentkit.domain.conversation.CancellationToken;
+import com.anthropic.agentkit.domain.conversation.SessionId;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
+import com.anthropic.agentkit.domain.tool.Tool;
+import com.anthropic.agentkit.domain.tool.ToolArguments;
+import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
 import com.anthropic.agentkit.domain.tool.ToolUseRequest;
 import com.anthropic.agentkit.testsupport.StubLlmClient;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -56,7 +68,45 @@ class StructuredAgentTest {
                 .hasMessageContaining(TERMINAL_TOOL);
     }
 
-    private static ExecutionContext context() {
-        return ExecutionContext.at(Paths.get(System.getProperty("user.dir")));
+    @Test
+    void usesProvidedRunContextForDomainTools(@TempDir Path workspace) {
+        AtomicReference<ExecutionContext> received = new AtomicReference<>();
+        Tool inspect = contextRecordingTool(received);
+        StubLlmClient llm = new StubLlmClient()
+                .enqueue(AiMessage.of("", List.of(new ToolUseRequest(
+                        new ToolUseId("inspect-1"), "Inspect", "{}"))))
+                .enqueue(AiMessage.of("", List.of(new ToolUseRequest(
+                        new ToolUseId("terminal-1"), TERMINAL_TOOL,
+                        "{\"problemStatement\":\"scoped\"}"))))
+                .enqueue(AiMessage.text("done"));
+        StructuredAgent agent = new StructuredAgent(llm, "Plan it.", OUTPUT, List.of(inspect));
+        CancellationToken cancellation = new CancellationToken();
+        AgentRunContext context = AgentRunContext.of(
+                RunId.of("structured-run"), SessionId.of("structured-session"),
+                WorkspaceId.of("structured-workspace"), workspace, cancellation,
+                AgentBudget.unlimited());
+
+        agent.run("Inspect then plan", context);
+
+        assertThat(received.get().cwd()).isEqualTo(workspace);
+        assertThat(received.get().cancellation()).isSameAs(cancellation);
+        assertThat(received.get().runId()).isEqualTo(RunId.of("structured-run"));
+    }
+
+    private static AgentRunContext context() {
+        return AgentRunContext.at(Paths.get(System.getProperty("user.dir")));
+    }
+
+    private static Tool contextRecordingTool(AtomicReference<ExecutionContext> received) {
+        return new Tool() {
+            @Override public String name() { return "Inspect"; }
+            @Override public String description() { return "capture run context"; }
+            @Override public String inputSchema() { return "{}"; }
+            @Override public boolean isReadOnly() { return true; }
+            @Override public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
+                received.set(ctx);
+                return ToolResult.ok("inspected");
+            }
+        };
     }
 }
