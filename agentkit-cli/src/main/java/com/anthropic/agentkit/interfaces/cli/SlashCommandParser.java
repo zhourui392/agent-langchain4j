@@ -21,6 +21,10 @@ public final class SlashCommandParser {
         return this;
     }
 
+    public List<SlashCommand> commands() {
+        return List.copyOf(commands.values());
+    }
+
     public ParseResult parse(String input) {
         Objects.requireNonNull(input, "input");
         String trimmed = input.trim();

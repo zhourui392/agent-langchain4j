@@ -6,5 +6,9 @@ public interface SlashCommand {
 
     String name();
 
+    String usage();
+
+    String description();
+
     String execute(List<String> args);
 }

@@ -50,8 +50,8 @@ class CliSessionTest {
         assertThat(session.activeConversation()).isSameAs(recovered.conversation());
         assertThat(recovered.conversation().messages())
                 .extracting(message -> message.text())
-                .containsExactly("inspect", "reading", "Tool outcome is unknown after recovery; "
-                        + "reconciliation is required before retrying.");
+                .containsExactly("inspect", "reading",
+                        "tool outcome unknown after interrupted run; reconciliation required");
         assertThat(recovered.invocations()).singleElement()
                 .extracting(invocation -> invocation.status())
                 .isEqualTo(RecoveryStatus.UNKNOWN);

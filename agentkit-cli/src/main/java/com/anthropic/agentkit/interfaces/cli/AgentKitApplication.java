@@ -2,25 +2,21 @@ package com.anthropic.agentkit.interfaces.cli;
 
 import com.anthropic.agentkit.application.AgentExecutor;
 import com.anthropic.agentkit.application.PermissionService;
-import com.anthropic.agentkit.application.SessionResumer;
 import com.anthropic.agentkit.application.SystemPromptComposer;
 import com.anthropic.agentkit.application.TerminalIoPrompter;
+import com.anthropic.agentkit.application.agent.AgentRegistry;
+import com.anthropic.agentkit.application.cli.CliSession;
 import com.anthropic.agentkit.application.context.ContextPolicy;
 import com.anthropic.agentkit.application.interception.AgentInterceptors;
-import com.anthropic.agentkit.application.io.TerminalIo;
+import com.anthropic.agentkit.application.recovery.RunEventResumer;
 import com.anthropic.agentkit.application.task.ArtifactContentPolicy;
 import com.anthropic.agentkit.application.task.BackgroundTaskCleanupInterceptor;
 import com.anthropic.agentkit.application.task.BackgroundTaskService;
 import com.anthropic.agentkit.application.tool.ArtifactToolOutputPolicy;
 import com.anthropic.agentkit.application.tool.LimitedToolOutputPolicy;
-import com.anthropic.agentkit.domain.agent.AgentBudget;
-import com.anthropic.agentkit.domain.agent.AgentRunContext;
-import com.anthropic.agentkit.domain.agent.AgentRunResult;
+import com.anthropic.agentkit.domain.agent.AgentEntryPoint;
+import com.anthropic.agentkit.domain.agent.AgentId;
 import com.anthropic.agentkit.domain.context.ContextProvider;
-import com.anthropic.agentkit.domain.conversation.CancellationToken;
-import com.anthropic.agentkit.domain.conversation.Conversation;
-import com.anthropic.agentkit.domain.conversation.SessionId;
-import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.port.FileCheckpointProvider;
 import com.anthropic.agentkit.domain.port.SecretProvider;
@@ -35,7 +31,6 @@ import com.anthropic.agentkit.infrastructure.context.CwdProvider;
 import com.anthropic.agentkit.infrastructure.context.DateProvider;
 import com.anthropic.agentkit.infrastructure.context.GitStatusProvider;
 import com.anthropic.agentkit.infrastructure.llm.LlmClientFactories;
-import com.anthropic.agentkit.infrastructure.memory.FileChatMemoryStore;
 import com.anthropic.agentkit.infrastructure.memory.FileRunEventStore;
 import com.anthropic.agentkit.infrastructure.memory.FileRunSuspensionStore;
 import com.anthropic.agentkit.infrastructure.memory.SessionPaths;
@@ -65,7 +60,7 @@ import java.nio.file.Paths;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -95,7 +90,7 @@ public final class AgentKitApplication {
             return;
         }
         try {
-            new AgentKitApplication().run();
+            new AgentKitApplication().run(args);
         } catch (IllegalStateException missingConfig) {
             log.error("configuration load failed", missingConfig);
             System.err.println(missingConfig.getMessage());
@@ -111,27 +106,25 @@ public final class AgentKitApplication {
         }
     }
 
-    private void run() throws IOException {
+    private void run(String[] args) throws IOException {
         AppConfig config = ConfigLoader.fromSystem().load();
         LlmClient llm = LlmClientFactories.create(config);
         SecretProvider secrets = EnvironmentSecretProvider.system();
+        AgentId selectedAgent = selectedAgentId(args);
 
         Path cwd = Paths.get(System.getProperty("user.dir", "."));
         FileStateCache fileStateCache = new FileStateCache();
         java.util.Optional<SkillCatalog> skills = loadSkills();
 
         SystemPromptComposer composer = new SystemPromptComposer(SYSTEM_INSTRUCTIONS, contextProviders(skills));
-        FileChatMemoryStore store = new FileChatMemoryStore(SessionPaths.defaultLocation().baseDirectory());
         FileRunEventStore eventStore = new FileRunEventStore(
                 SessionPaths.defaultLocation().baseDirectory().resolve("runs"));
         FileRunSuspensionStore suspensionStore = new FileRunSuspensionStore(
                 SessionPaths.defaultLocation().baseDirectory().resolve("suspensions"));
         FileSystemCheckpointProvider checkpoints = new FileSystemCheckpointProvider(
                 SessionPaths.defaultLocation().baseDirectory().resolve("checkpoints"));
-        SessionResumer resumer = new SessionResumer(store);
-
-        CancellationToken cancel = new CancellationToken();
-        SigintHandler sigint = new SigintHandler(cancel, () -> System.exit(130));
+        CliSession session = new CliSession(new RunEventResumer(eventStore));
+        SigintHandler sigint = new SigintHandler(() -> System.exit(130));
 
         try (BackgroundTaskRuntime background = openBackgroundRuntime();
              JLineTerminalIo terminalIo = JLineTerminalIo.openSystem(historyFile())) {
@@ -148,16 +141,18 @@ public final class AgentKitApplication {
                     llm, tools, permissions, eventStore, suspensionStore, background);
 
             OutputRenderer renderer = new OutputRenderer(terminalIo);
+            CliAgentEntryPoint cliAgent = new CliAgentEntryPoint(
+                    executor, composer, cwd, renderer, terminalIo, sigint, secrets);
+            AgentRegistry agents = new AgentRegistry(
+                    List.of(CliAgentManifest.create(cliAgent, tools)), Set.of());
+            AgentEntryPoint<CliAgentRequest, CliAgentResult> agent = agents.select(
+                    selectedAgent, CliAgentRequest.class, CliAgentResult.class);
+            terminalIo.onSigint(sigint::onSigint);
             terminalIo.writeLine("(permission mode: " + config.permissionMode() + ")");
-            AtomicReference<Conversation> active = new AtomicReference<>(new Conversation(SessionId.fresh()));
-            SlashCommandParser parser = new SlashCommandParser()
-                    .register(new HelpCommand())
-                    .register(new ClearCommand());
-
-            ReplLoop repl = new ReplLoop(terminalIo, input -> handleLine(
-                    input, parser, active, executor, llm, composer, cwd, cancel,
-                    store, resumer, renderer, terminalIo, sigint, secrets));
-            repl.run();
+            terminalIo.writeLine("(agent: " + selectedAgent + ")");
+            CliCommandHandler handler = new CliCommandHandler(
+                    SlashCommands.standard(session), session, agent, terminalIo);
+            new ReplLoop(terminalIo, handler::handle).run();
         }
     }
 
@@ -266,74 +261,19 @@ public final class AgentKitApplication {
         return configured;
     }
 
-    private static void handleLine(String input,
-                                    SlashCommandParser parser,
-                                    AtomicReference<Conversation> active,
-                                    AgentExecutor executor,
-                                    LlmClient llm,
-                                    SystemPromptComposer composer,
-                                    Path cwd,
-                                    CancellationToken cancel,
-                                    FileChatMemoryStore store,
-                                    SessionResumer resumer,
-                                    OutputRenderer renderer,
-                                    TerminalIo terminalIo,
-                                    SigintHandler sigint,
-                                    SecretProvider secrets) {
-        SlashCommandParser.ParseResult parsed = parser.parse(input);
-        switch (parsed) {
-            case SlashCommandParser.UnknownCommand unknown ->
-                    terminalIo.writeError("unknown command: /" + unknown.name());
-            case SlashCommandParser.CommandInvocation invocation -> {
-                if ("resume".equals(invocation.command().name()) && !invocation.args().isEmpty()) {
-                    Conversation resumed = resumer.resume(SessionId.of(invocation.args().get(0)));
-                    active.set(resumed);
-                    terminalIo.writeLine("(resumed " + resumed.sessionId() + ")");
-                } else {
-                    terminalIo.writeLine(invocation.command().execute(invocation.args()));
-                }
+    private static AgentId selectedAgentId(String[] args) {
+        for (int index = 0; index < args.length; index++) {
+            if (args[index].startsWith("--agent=")) {
+                return AgentId.of(args[index].substring("--agent=".length()));
             }
-            case SlashCommandParser.UserMessage userText -> {
-                Conversation conversation = active.get();
-                conversation.append(UserMessage.of(userText.text()));
-                runTurn(conversation, executor, composer, cwd, cancel,
-                        renderer, terminalIo, secrets);
-                store.save(conversation.sessionId(), conversation.messages());
-                sigint.turnFinished();
+            if ("--agent".equals(args[index])) {
+                if (index + 1 >= args.length) {
+                    throw new IllegalArgumentException("--agent requires an agent id");
+                }
+                return AgentId.of(args[index + 1]);
             }
         }
-    }
-
-    private static void runTurn(Conversation conversation,
-                                 AgentExecutor executor,
-                                 SystemPromptComposer composer,
-                                 Path cwd,
-                                 CancellationToken cancel,
-                                 OutputRenderer renderer,
-                                 TerminalIo terminalIo,
-                                 SecretProvider secrets) {
-        try {
-            String systemPrompt = composer.compose(cwd).full();
-            AgentRunContext context = AgentRunContext.create(
-                    conversation.sessionId(), cwd, cancel, AgentBudget.unlimited(), secrets);
-            AgentRunResult result = executor.run(
-                    conversation, context, renderer, systemPrompt).join();
-            RunSuspensionPrompter prompter = new RunSuspensionPrompter(terminalIo);
-            while (result.suspension().isPresent()) {
-                var command = prompter.prompt(result);
-                if (command.isEmpty()) {
-                    break;
-                }
-                AgentRunContext resumed = AgentRunContext.create(
-                        conversation.sessionId(), cwd, cancel,
-                        AgentBudget.unlimited(), secrets);
-                result = executor.resume(
-                        conversation, resumed, command.orElseThrow(),
-                        renderer, systemPrompt).join();
-            }
-        } catch (RuntimeException ex) {
-            renderer.onError(ex);
-        }
+        return CliAgentManifest.ID;
     }
 
     private static boolean containsFlag(String[] args, String... flags) {
@@ -356,6 +296,7 @@ public final class AgentKitApplication {
                 Usage: agentkit [options]
                   --version, -v   Print version
                   --help, -h      Print this help
+                  --agent <id>    Select a registered agent (default: assistant)
 
                 Required env: AK_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY
                 Optional env: AK_PROVIDER, AK_MODEL, AK_MAX_TOKENS, AK_BASE_URL, AK_SKILLS_DIR

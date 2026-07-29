@@ -1,23 +1,12 @@
 package com.anthropic.agentkit.interfaces.cli;
 
-import com.anthropic.agentkit.application.AgentExecutor;
-import com.anthropic.agentkit.application.SessionResumer;
-import com.anthropic.agentkit.application.SystemPromptComposer;
-import com.anthropic.agentkit.application.io.TerminalIo;
 import com.anthropic.agentkit.application.task.BackgroundTaskService;
-import com.anthropic.agentkit.domain.conversation.CancellationToken;
+import com.anthropic.agentkit.domain.agent.AgentId;
 import com.anthropic.agentkit.domain.context.ContextProvider;
-import com.anthropic.agentkit.domain.conversation.SessionId;
-import com.anthropic.agentkit.domain.message.ChatMessage;
-import com.anthropic.agentkit.domain.port.ChatMemoryStore;
-import com.anthropic.agentkit.domain.port.LlmClient;
-import com.anthropic.agentkit.domain.port.SecretProvider;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
-import com.anthropic.agentkit.infrastructure.memory.FileChatMemoryStore;
 import com.anthropic.agentkit.infrastructure.task.FileArtifactStore;
 import com.anthropic.agentkit.infrastructure.task.ProcessBackgroundTaskLauncher;
 import com.anthropic.agentkit.infrastructure.tools.support.FileStateCache;
-import com.anthropic.agentkit.testsupport.io.ScriptedTerminalIo;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -31,7 +20,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -43,7 +31,8 @@ class AgentKitApplicationTest {
         String help = captureStdout(() -> AgentKitApplication.main(new String[]{"--help"}));
 
         assertThat(version).contains("agentkit", AgentKitApplication.version());
-        assertThat(help).contains("Usage:", "AK_API_KEY", "OPENAI_API_KEY", "AK_SKILLS_DIR");
+        assertThat(help).contains(
+                "Usage:", "--agent", "AK_API_KEY", "OPENAI_API_KEY", "AK_SKILLS_DIR");
     }
 
     @Test
@@ -122,50 +111,19 @@ class AgentKitApplicationTest {
     }
 
     @Test
-    void handleLineExecutesSlashCommandBranches() throws Exception {
-        ScriptedTerminalIo terminal = ScriptedTerminalIo.builder().build();
-        SlashCommandParser parser = new SlashCommandParser()
-                .register(new HelpCommand())
-                .register(new ClearCommand());
+    void agentSelectionDefaultsAndSupportsBothOptionForms() throws Exception {
+        AgentId defaultId = (AgentId) invoke(
+                "selectedAgentId", new Class<?>[]{String[].class}, (Object) new String[]{});
+        AgentId separate = (AgentId) invoke(
+                "selectedAgentId", new Class<?>[]{String[].class},
+                (Object) new String[]{"--agent", "diagnosis"});
+        AgentId joined = (AgentId) invoke(
+                "selectedAgentId", new Class<?>[]{String[].class},
+                (Object) new String[]{"--agent=coding"});
 
-        handleLine("/missing", parser, terminal, null);
-        handleLine("/help", parser, terminal, null);
-
-        assertThat(terminal.errorOutput()).contains("unknown command");
-        assertThat(terminal.output()).contains("/help", "/clear");
-    }
-
-    @Test
-    void handleLineResumesExistingSession() throws Exception {
-        ScriptedTerminalIo terminal = ScriptedTerminalIo.builder().build();
-        SlashCommandParser parser = new SlashCommandParser().register(new ResumeCommand());
-        SessionResumer resumer = new SessionResumer(new StubMemoryStore());
-
-        handleLine("/resume session-1", parser, terminal, resumer);
-
-        assertThat(terminal.output()).contains("(resumed session-1)");
-    }
-
-    private static void handleLine(String input, SlashCommandParser parser,
-                                   TerminalIo terminal, SessionResumer resumer) throws Exception {
-        invoke("handleLine", new Class<?>[]{
-                        String.class,
-                        SlashCommandParser.class,
-                        AtomicReference.class,
-                        AgentExecutor.class,
-                        LlmClient.class,
-                        SystemPromptComposer.class,
-                        Path.class,
-                        CancellationToken.class,
-                        FileChatMemoryStore.class,
-                        SessionResumer.class,
-                        OutputRenderer.class,
-                        TerminalIo.class,
-                        SigintHandler.class,
-                        SecretProvider.class},
-                input, parser, new AtomicReference<>(), null, null, null, Path.of("."),
-                new CancellationToken(), null, resumer, null, terminal, null,
-                SecretProvider.none());
+        assertThat(defaultId).isEqualTo(CliAgentManifest.ID);
+        assertThat(separate).isEqualTo(AgentId.of("diagnosis"));
+        assertThat(joined).isEqualTo(AgentId.of("coding"));
     }
 
     private static Object invoke(String name, Class<?>[] parameterTypes, Object... args) throws Exception {
@@ -191,32 +149,4 @@ class AgentKitApplicationTest {
         Files.writeString(directory.resolve("SKILL.md"), content);
     }
 
-    private static final class ResumeCommand implements SlashCommand {
-
-        @Override
-        public String name() {
-            return "resume";
-        }
-
-        @Override
-        public String execute(List<String> args) {
-            return "unused";
-        }
-    }
-
-    private static final class StubMemoryStore implements ChatMemoryStore {
-
-        @Override
-        public List<ChatMessage> load(SessionId sessionId) {
-            return List.of(com.anthropic.agentkit.domain.message.UserMessage.of("old"));
-        }
-
-        @Override
-        public void save(SessionId sessionId, List<ChatMessage> messages) {
-        }
-
-        @Override
-        public void delete(SessionId sessionId) {
-        }
-    }
 }

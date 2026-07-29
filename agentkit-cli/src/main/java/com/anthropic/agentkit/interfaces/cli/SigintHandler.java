@@ -15,11 +15,10 @@ public final class SigintHandler {
     public enum State { IDLE, CANCELLING, EXIT }
 
     private final AtomicReference<State> state = new AtomicReference<>(State.IDLE);
-    private final CancellationToken cancellation;
+    private final AtomicReference<CancellationToken> activeRun = new AtomicReference<>();
     private final Runnable exitAction;
 
-    public SigintHandler(CancellationToken cancellation, Runnable exitAction) {
-        this.cancellation = Objects.requireNonNull(cancellation, "cancellation");
+    public SigintHandler(Runnable exitAction) {
         this.exitAction = Objects.requireNonNull(exitAction, "exitAction");
     }
 
@@ -27,7 +26,20 @@ public final class SigintHandler {
         return state.get();
     }
 
+    public CancellationToken turnStarted() {
+        CancellationToken token = new CancellationToken();
+        if (!activeRun.compareAndSet(null, token)) {
+            throw new IllegalStateException("a CLI run is already active");
+        }
+        return token;
+    }
+
     public void onSigint() {
+        CancellationToken cancellation = activeRun.get();
+        if (cancellation == null) {
+            log.debug("SIGINT received while CLI is idle");
+            return;
+        }
         State previous = state.get();
         switch (previous) {
             case IDLE -> {
@@ -48,9 +60,11 @@ public final class SigintHandler {
         }
     }
 
-    public void turnFinished() {
-        if (state.compareAndSet(State.CANCELLING, State.IDLE)) {
-            log.debug("SIGINT state reset after turn finished");
+    public void turnFinished(CancellationToken token) {
+        Objects.requireNonNull(token, "token");
+        if (activeRun.compareAndSet(token, null)) {
+            state.compareAndSet(State.CANCELLING, State.IDLE);
+            log.debug("SIGINT state reset after CLI run finished");
         }
     }
 }

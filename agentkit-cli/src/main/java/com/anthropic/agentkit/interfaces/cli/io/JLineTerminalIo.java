@@ -27,7 +27,7 @@ public final class JLineTerminalIo implements TerminalIo, AutoCloseable {
         this(reader, stdout, stderr, null);
     }
 
-    private JLineTerminalIo(LineReader reader, PrintStream stdout, PrintStream stderr, Terminal terminal) {
+    JLineTerminalIo(LineReader reader, PrintStream stdout, PrintStream stderr, Terminal terminal) {
         this.reader = Objects.requireNonNull(reader, "reader");
         this.stdout = Objects.requireNonNull(stdout, "stdout");
         this.stderr = Objects.requireNonNull(stderr, "stderr");
@@ -42,6 +42,14 @@ public final class JLineTerminalIo implements TerminalIo, AutoCloseable {
         }
         LineReader reader = builder.build();
         return new JLineTerminalIo(reader, System.out, System.err, terminal);
+    }
+
+    public void onSigint(Runnable handler) {
+        Objects.requireNonNull(handler, "handler");
+        if (terminal == null) {
+            throw new IllegalStateException("SIGINT requires a system terminal");
+        }
+        terminal.handle(Terminal.Signal.INT, ignored -> handler.run());
     }
 
     @Override

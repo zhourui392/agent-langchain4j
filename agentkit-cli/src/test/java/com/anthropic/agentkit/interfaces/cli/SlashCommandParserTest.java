@@ -1,5 +1,8 @@
 package com.anthropic.agentkit.interfaces.cli;
 
+import com.anthropic.agentkit.application.cli.CliSession;
+import com.anthropic.agentkit.application.recovery.RunEventResumer;
+import com.anthropic.agentkit.domain.port.RunEventStore;
 import com.anthropic.agentkit.interfaces.cli.SlashCommandParser.CommandInvocation;
 import com.anthropic.agentkit.interfaces.cli.SlashCommandParser.ParseResult;
 import com.anthropic.agentkit.interfaces.cli.SlashCommandParser.UnknownCommand;
@@ -11,8 +14,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SlashCommandParserTest {
 
     private final SlashCommandParser parser = new SlashCommandParser()
-            .register(new HelpCommand())
-            .register(new ClearCommand());
+            .register(command("help"))
+            .register(command("clear"));
 
     @Test
     void parsesKnownCommand() {
@@ -34,14 +37,7 @@ class SlashCommandParserTest {
 
     @Test
     void parsesArgs() {
-        SlashCommandParser withResume = new SlashCommandParser()
-                .register(new HelpCommand())
-                .register(new SlashCommand() {
-                    @Override public String name() { return "resume"; }
-                    @Override public String execute(java.util.List<String> args) {
-                        return "resuming " + args;
-                    }
-                });
+        SlashCommandParser withResume = new SlashCommandParser().register(command("resume"));
 
         ParseResult result = withResume.parse("/resume abc123");
 
@@ -61,7 +57,10 @@ class SlashCommandParserTest {
 
     @Test
     void helpCommandLists() {
-        String output = new HelpCommand().execute(java.util.List.of());
+        CliSession session = new CliSession(new RunEventResumer(RunEventStore.none()));
+        SlashCommandParser commands = SlashCommands.standard(session);
+        CommandInvocation invocation = (CommandInvocation) commands.parse("/help");
+        String output = invocation.command().execute(java.util.List.of());
 
         assertThat(output).contains("/help", "/clear", "/resume", "exit");
     }
@@ -71,5 +70,14 @@ class SlashCommandParserTest {
         ParseResult result = parser.parse("   /clear");
         assertThat(result).isInstanceOf(CommandInvocation.class);
         assertThat(((CommandInvocation) result).command().name()).isEqualTo("clear");
+    }
+
+    private static SlashCommand command(String name) {
+        return new SlashCommand() {
+            @Override public String name() { return name; }
+            @Override public String usage() { return name; }
+            @Override public String description() { return "Test " + name; }
+            @Override public String execute(java.util.List<String> args) { return name; }
+        };
     }
 }

@@ -30,6 +30,16 @@ public final class AgentRegistry {
         return List.copyOf(manifests.values());
     }
 
+    public <I, O> AgentEntryPoint<I, O> select(
+            AgentId id, Class<I> requestType, Class<O> resultType) {
+        Objects.requireNonNull(requestType, "requestType");
+        Objects.requireNonNull(resultType, "resultType");
+        AgentManifest<?, ?> manifest = requireManifest(id);
+        requireConfiguration(manifest);
+        requireDeclaredTypes(manifest.entryPoint(), requestType, resultType);
+        return castEntryPoint(manifest.entryPoint());
+    }
+
     public <O> O dispatch(AgentId id, Object request, Class<O> resultType) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(resultType, "resultType");
@@ -43,7 +53,10 @@ public final class AgentRegistry {
     private AgentManifest<?, ?> requireManifest(AgentId id) {
         AgentManifest<?, ?> manifest = manifests.get(Objects.requireNonNull(id, "id"));
         if (manifest == null) {
-            throw new IllegalArgumentException("unknown agent: " + id);
+            String available = manifests.keySet().stream().map(AgentId::value)
+                    .collect(Collectors.joining(", "));
+            throw new IllegalArgumentException(
+                    "unknown agent: " + id + "; available agents: " + available);
         }
         return manifest;
     }
@@ -71,6 +84,21 @@ public final class AgentRegistry {
             throw new IllegalArgumentException(
                     "agent result must be " + entryPoint.resultType().getName());
         }
+    }
+
+    private static void requireDeclaredTypes(
+            AgentEntryPoint<?, ?> entryPoint, Class<?> requestType, Class<?> resultType) {
+        if (!entryPoint.requestType().equals(requestType)) {
+            throw new IllegalArgumentException(
+                    "agent request must be " + entryPoint.requestType().getName());
+        }
+        requireResultType(entryPoint, resultType);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <I, O> AgentEntryPoint<I, O> castEntryPoint(
+            AgentEntryPoint<?, ?> entryPoint) {
+        return (AgentEntryPoint<I, O>) entryPoint;
     }
 
     private static Object invoke(AgentEntryPoint<?, ?> entryPoint, Object request) {
