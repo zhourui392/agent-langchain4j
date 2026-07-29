@@ -46,6 +46,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -301,9 +302,17 @@ class DefaultSubAgentRuntimeTest {
 
         parent.cancellation().cancel();
 
+        assertThat(tool.cancellationObserved.await(1, TimeUnit.SECONDS)).isTrue();
+        try {
+            assertThatThrownBy(() -> handle.result().toCompletableFuture()
+                    .get(100, TimeUnit.MILLISECONDS))
+                    .isInstanceOf(TimeoutException.class);
+        } finally {
+            tool.allowCompletion.countDown();
+        }
         assertThat(handle.result().toCompletableFuture().join().stopReason())
                 .isEqualTo(StopReason.CANCELLED);
-        assertThat(tool.cancelled.get()).isTrue();
+        assertThat(tool.completed.get()).isTrue();
     }
 
     private static DefaultSubAgentRuntime runtime(
@@ -388,7 +397,9 @@ class DefaultSubAgentRuntimeTest {
 
     private static final class BlockingTool implements Tool {
         private final CountDownLatch started = new CountDownLatch(1);
-        private final AtomicBoolean cancelled = new AtomicBoolean();
+        private final CountDownLatch cancellationObserved = new CountDownLatch(1);
+        private final CountDownLatch allowCompletion = new CountDownLatch(1);
+        private final AtomicBoolean completed = new AtomicBoolean();
 
         @Override public String name() { return "Block"; }
         @Override public String description() { return "Wait until cancelled"; }
@@ -405,8 +416,23 @@ class DefaultSubAgentRuntimeTest {
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
             }
-            cancelled.set(context.cancellation().isCancelled() || Thread.currentThread().isInterrupted());
+            cancellationObserved.countDown();
+            awaitCompletion();
+            completed.set(true);
             return ToolResult.error("cancelled");
+        }
+
+        private void awaitCompletion() {
+            boolean interrupted = Thread.interrupted();
+            try {
+                allowCompletion.await();
+            } catch (InterruptedException ex) {
+                interrupted = true;
+            } finally {
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }
         }
     }
 }
