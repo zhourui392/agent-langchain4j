@@ -28,6 +28,7 @@ import com.anthropic.agentkit.infrastructure.context.DateProvider;
 import com.anthropic.agentkit.infrastructure.context.GitStatusProvider;
 import com.anthropic.agentkit.infrastructure.llm.LlmClientFactories;
 import com.anthropic.agentkit.infrastructure.memory.FileChatMemoryStore;
+import com.anthropic.agentkit.infrastructure.memory.FileRunEventStore;
 import com.anthropic.agentkit.infrastructure.memory.SessionPaths;
 import com.anthropic.agentkit.infrastructure.permission.DefaultPermissionPolicy;
 import com.anthropic.agentkit.infrastructure.skill.DirectorySkillSource;
@@ -105,6 +106,8 @@ public final class AgentKitApplication {
 
         SystemPromptComposer composer = new SystemPromptComposer(SYSTEM_INSTRUCTIONS, contextProviders(skills));
         FileChatMemoryStore store = new FileChatMemoryStore(SessionPaths.defaultLocation().baseDirectory());
+        FileRunEventStore eventStore = new FileRunEventStore(
+                SessionPaths.defaultLocation().baseDirectory().resolve("runs"));
         SessionResumer resumer = new SessionResumer(store);
 
         CancellationToken cancel = new CancellationToken();
@@ -115,7 +118,7 @@ public final class AgentKitApplication {
                     new DefaultPermissionPolicy(),
                     new TerminalIoPrompter(terminalIo),
                     config.permissionMode());
-            AgentExecutor executor = new AgentExecutor(llm, tools, permissions);
+            AgentExecutor executor = new AgentExecutor(llm, tools, permissions, eventStore);
 
             OutputRenderer renderer = new OutputRenderer(terminalIo);
             terminalIo.writeLine("(permission mode: " + config.permissionMode() + ")");

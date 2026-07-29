@@ -19,6 +19,18 @@ public final class Conversation {
         this.sessionId = Objects.requireNonNull(sessionId, "sessionId");
     }
 
+    public static Conversation restoreProjection(
+            SessionId sessionId, List<ChatMessage> messages,
+            Optional<CompactionBoundary> boundary) {
+        Conversation conversation = new Conversation(sessionId);
+        for (ChatMessage message : List.copyOf(messages)) {
+            conversation.append(message);
+        }
+        Optional<CompactionBoundary> safeBoundary = Objects.requireNonNull(boundary, "boundary");
+        safeBoundary.ifPresent(value -> conversation.restoreBoundary(value));
+        return conversation;
+    }
+
     public SessionId sessionId() {
         return sessionId;
     }
@@ -66,5 +78,13 @@ public final class Conversation {
         if (!expected.equals(retained)) {
             throw new IllegalArgumentException("retained messages do not match compaction boundary");
         }
+    }
+
+    private void restoreBoundary(CompactionBoundary boundary) {
+        if (messages.isEmpty() || !messages.getFirst().equals(boundary.asMessage())) {
+            throw new IllegalArgumentException(
+                    "restored compaction boundary does not match message projection");
+        }
+        lastCompaction = boundary;
     }
 }

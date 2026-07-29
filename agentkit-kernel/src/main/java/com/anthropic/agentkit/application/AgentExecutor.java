@@ -15,6 +15,8 @@ import com.anthropic.agentkit.domain.port.ChatRequest;
 import com.anthropic.agentkit.domain.port.LlmCall;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.port.LlmClient.StreamHandler;
+import com.anthropic.agentkit.domain.port.RunEventPersistenceException;
+import com.anthropic.agentkit.domain.port.RunEventStore;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.domain.tool.ToolKind;
 import com.anthropic.agentkit.domain.tool.ToolResultStatus;
@@ -44,19 +46,34 @@ public final class AgentExecutor {
     private final PermissionService permissions;
     private final ContextPolicy contextPolicy;
     private final ToolOutputPolicy toolOutputPolicy;
+    private final RunEventStore eventStore;
 
     public AgentExecutor(LlmClient llm, ToolRegistry tools, PermissionService permissions) {
         this(llm, tools, permissions,
-                ContextPolicy.standard(llm), ToolOutputPolicy.defaultLimited());
+                ContextPolicy.standard(llm), ToolOutputPolicy.defaultLimited(),
+                RunEventStore.none());
+    }
+
+    public AgentExecutor(LlmClient llm, ToolRegistry tools, PermissionService permissions,
+                         RunEventStore eventStore) {
+        this(llm, tools, permissions,
+                ContextPolicy.standard(llm), ToolOutputPolicy.defaultLimited(), eventStore);
     }
 
     public AgentExecutor(LlmClient llm, ToolRegistry tools, PermissionService permissions,
                          ContextPolicy contextPolicy, ToolOutputPolicy toolOutputPolicy) {
+        this(llm, tools, permissions, contextPolicy, toolOutputPolicy, RunEventStore.none());
+    }
+
+    public AgentExecutor(LlmClient llm, ToolRegistry tools, PermissionService permissions,
+                         ContextPolicy contextPolicy, ToolOutputPolicy toolOutputPolicy,
+                         RunEventStore eventStore) {
         this.llm = Objects.requireNonNull(llm, "llm");
         this.tools = Objects.requireNonNull(tools, "tools");
         this.permissions = Objects.requireNonNull(permissions, "permissions");
         this.contextPolicy = Objects.requireNonNull(contextPolicy, "contextPolicy");
         this.toolOutputPolicy = Objects.requireNonNull(toolOutputPolicy, "toolOutputPolicy");
+        this.eventStore = Objects.requireNonNull(eventStore, "eventStore");
     }
 
     public CompletableFuture<AgentRunResult> run(Conversation conversation, AgentRunContext context) {
@@ -84,16 +101,21 @@ public final class AgentExecutor {
                                 AgentEventListener listener, String systemPrompt) {
         MDC.put("session", conversation.sessionId().value());
         MDC.put("run", context.runId().value());
-        listener.onRunStart(context);
-        log.info("session started: runId={}, workspaceId={}, initialMessages={}, systemPromptChars={}",
-                context.runId(), context.workspaceId(), conversation.messages().size(), systemPrompt.length());
         AgentRunState state = AgentRunState.create(
-                context, tools, permissions, toolOutputPolicy);
+                context, tools, permissions, toolOutputPolicy, eventStore);
         try {
-            return runLoop(conversation, state, listener, systemPrompt);
-        } catch (AgentBudgetExceededException ex) {
-            log.warn("session stopped: budget exhausted: {}", ex.getMessage());
-            return state.finish(StopReason.BUDGET_EXHAUSTED);
+            state.recorder().runStarted(conversation);
+            listener.onRunStart(context);
+            log.info("session started: runId={}, workspaceId={}, initialMessages={}, systemPromptChars={}",
+                    context.runId(), context.workspaceId(), conversation.messages().size(), systemPrompt.length());
+            AgentRunResult result = runWithBudgetHandling(
+                    conversation, state, listener, systemPrompt);
+            state.recorder().runStopped(result);
+            return result;
+        } catch (RunEventPersistenceException ex) {
+            log.error("session stopped: run event persistence failed", ex);
+            return state.finishWithError(
+                    StopReason.PERSISTENCE_ERROR, Optional.of(messageOf(ex)));
         } catch (RuntimeException ex) {
             log.error("session failed", ex);
             listener.onError(ex);
@@ -104,6 +126,17 @@ public final class AgentExecutor {
             MDC.remove("toolUseId");
             MDC.remove("run");
             MDC.remove("session");
+        }
+    }
+
+    private AgentRunResult runWithBudgetHandling(
+            Conversation conversation, AgentRunState state,
+            AgentEventListener listener, String systemPrompt) {
+        try {
+            return runLoop(conversation, state, listener, systemPrompt);
+        } catch (AgentBudgetExceededException ex) {
+            log.warn("session stopped: budget exhausted: {}", ex.getMessage());
+            return state.finish(StopReason.BUDGET_EXHAUSTED);
         }
     }
 
@@ -121,12 +154,14 @@ public final class AgentExecutor {
             MDC.put("turn", String.valueOf(turn));
             log.info("turn {} started: messageCount={}", turn, conversation.messages().size());
             LlmTurnOutcome turnOutcome = executeTurn(
-                    conversation, state.context(), listener, state.budget(), systemPrompt);
+                    conversation, state.context(), listener, state.budget(),
+                    state.recorder(), systemPrompt);
             if (turnOutcome.stopReason().isPresent()) {
                 return state.finishWithError(
                         turnOutcome.stopReason().orElseThrow(), turnOutcome.errorDetail());
             }
             AiMessage aiMessage = turnOutcome.message().orElseThrow();
+            state.recorder().assistantTurnReceived(aiMessage);
             state.remember(aiMessage);
             appendMessage(conversation, aiMessage, "assistant message");
             if (!aiMessage.hasToolUseRequests()) {
@@ -199,30 +234,30 @@ public final class AgentExecutor {
 
     private LlmTurnOutcome executeTurn(Conversation conversation, AgentRunContext context,
                                        AgentEventListener listener, AgentBudgetGuard budgetGuard,
-                                       String systemPrompt) {
-        ContextDecision preparation = contextPolicy.beforeLlmCall(conversation, context);
+                                       RunEventRecorder recorder, String systemPrompt) {
+        ContextDecision preparation = prepareContext(conversation, context, recorder);
         if (preparation.stopReason().isPresent()) {
             return LlmTurnOutcome.from(preparation);
         }
         LlmTurnOutcome first = requestLlm(
-                conversation, context, listener, budgetGuard, systemPrompt);
+                conversation, context, listener, budgetGuard, recorder, systemPrompt);
         if (first.failure().isEmpty()) {
             return first;
         }
-        ContextDecision recovery = contextPolicy.recoverFromOverflow(
-                conversation, first.failure().orElseThrow(), context);
+        ContextDecision recovery = recoverContext(
+                conversation, first.failure().orElseThrow(), context, recorder);
         if (recovery.notApplicable()) {
             return first;
         }
         if (recovery.stopReason().isPresent()) {
             return LlmTurnOutcome.from(recovery);
         }
-        ContextDecision retryPreparation = contextPolicy.beforeLlmCall(conversation, context);
+        ContextDecision retryPreparation = prepareContext(conversation, context, recorder);
         if (retryPreparation.stopReason().isPresent()) {
             return LlmTurnOutcome.from(retryPreparation);
         }
         LlmTurnOutcome retry = requestLlm(
-                conversation, context, listener, budgetGuard, systemPrompt);
+                conversation, context, listener, budgetGuard, recorder, systemPrompt);
         if (retry.failure().filter(contextPolicy::isContextOverflow).isPresent()) {
             return LlmTurnOutcome.failed(
                     StopReason.CONTEXT_EXHAUSTED, messageOf(retry.failure().orElseThrow()));
@@ -230,11 +265,40 @@ public final class AgentExecutor {
         return retry;
     }
 
+    private ContextDecision prepareContext(
+            Conversation conversation, AgentRunContext context, RunEventRecorder recorder) {
+        Optional<com.anthropic.agentkit.domain.conversation.CompactionBoundary> before =
+                conversation.lastCompaction();
+        ContextDecision decision = contextPolicy.beforeLlmCall(conversation, context);
+        recordCompaction(before, conversation, recorder);
+        return decision;
+    }
+
+    private ContextDecision recoverContext(
+            Conversation conversation, Throwable failure, AgentRunContext context,
+            RunEventRecorder recorder) {
+        Optional<com.anthropic.agentkit.domain.conversation.CompactionBoundary> before =
+                conversation.lastCompaction();
+        ContextDecision decision = contextPolicy.recoverFromOverflow(
+                conversation, failure, context);
+        recordCompaction(before, conversation, recorder);
+        return decision;
+    }
+
+    private void recordCompaction(
+            Optional<com.anthropic.agentkit.domain.conversation.CompactionBoundary> before,
+            Conversation conversation, RunEventRecorder recorder) {
+        conversation.lastCompaction()
+                .filter(boundary -> before.filter(boundary::equals).isEmpty())
+                .ifPresent(boundary -> recorder.compactionCompleted(conversation, boundary));
+    }
+
     private LlmTurnOutcome requestLlm(Conversation conversation, AgentRunContext context,
                                       AgentEventListener listener, AgentBudgetGuard budgetGuard,
-                                      String systemPrompt) {
+                                      RunEventRecorder recorder, String systemPrompt) {
         long startNs = System.nanoTime();
         log.info("llm request started: messages={}, tools={}", conversation.messages().size(), tools.specs().size());
+        recorder.llmCallStarted(conversation.messages().size());
         listener.onLlmRequestStart();
         ChatRequest.Builder builder = ChatRequest.builder()
                 .systemPrompt(systemPrompt)
@@ -337,28 +401,32 @@ public final class AgentExecutor {
         private final AgentRunContext context;
         private final AgentBudgetGuard budget;
         private final ParallelToolDispatcher dispatcher;
+        private final RunEventRecorder recorder;
         private AiMessage lastMessage = AiMessage.text("");
 
         private AgentRunState(AgentRunContext context, AgentBudgetGuard budget,
-                              ParallelToolDispatcher dispatcher) {
+                              ParallelToolDispatcher dispatcher, RunEventRecorder recorder) {
             this.context = context;
             this.budget = budget;
             this.dispatcher = dispatcher;
+            this.recorder = recorder;
         }
 
         private static AgentRunState create(
                 AgentRunContext context, ToolRegistry tools, PermissionService permissions,
-                ToolOutputPolicy toolOutputPolicy) {
+                ToolOutputPolicy toolOutputPolicy, RunEventStore eventStore) {
             AgentBudgetGuard budget = new AgentBudgetGuard(
                     context.budget(), context.budgetState());
+            RunEventRecorder recorder = RunEventRecorder.forRun(eventStore, context);
             ParallelToolDispatcher dispatcher = new ParallelToolDispatcher(
-                    tools, context.executionContext(), permissions, toolOutputPolicy);
-            return new AgentRunState(context, budget, dispatcher);
+                    tools, context.executionContext(), permissions, toolOutputPolicy, recorder);
+            return new AgentRunState(context, budget, dispatcher, recorder);
         }
 
         private AgentRunContext context() { return context; }
         private AgentBudgetGuard budget() { return budget; }
         private ParallelToolDispatcher dispatcher() { return dispatcher; }
+        private RunEventRecorder recorder() { return recorder; }
 
         private void remember(AiMessage message) {
             lastMessage = message;

@@ -4,6 +4,7 @@ import com.anthropic.agentkit.application.tool.ToolOutputPolicy;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.ToolResultMessage;
 import com.anthropic.agentkit.domain.permission.Decision;
+import com.anthropic.agentkit.domain.port.RunEventPersistenceException;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.domain.tool.ToolInvocation;
@@ -36,6 +37,7 @@ final class ParallelToolDispatcher {
     private final ExecutionContext executionContext;
     private final PermissionService permissions;
     private final ToolOutputPolicy outputPolicy;
+    private final RunEventRecorder eventRecorder;
 
     ParallelToolDispatcher(ToolRegistry tools, ExecutionContext executionContext,
                            PermissionService permissions) {
@@ -44,10 +46,17 @@ final class ParallelToolDispatcher {
 
     ParallelToolDispatcher(ToolRegistry tools, ExecutionContext executionContext,
                            PermissionService permissions, ToolOutputPolicy outputPolicy) {
+        this(tools, executionContext, permissions, outputPolicy, RunEventRecorder.disabled());
+    }
+
+    ParallelToolDispatcher(ToolRegistry tools, ExecutionContext executionContext,
+                           PermissionService permissions, ToolOutputPolicy outputPolicy,
+                           RunEventRecorder eventRecorder) {
         this.tools = tools;
         this.executionContext = executionContext;
         this.permissions = permissions;
         this.outputPolicy = outputPolicy;
+        this.eventRecorder = eventRecorder;
     }
 
     List<ToolResultMessage> dispatch(AiMessage aiMessage) {
@@ -85,13 +94,21 @@ final class ParallelToolDispatcher {
     List<ToolResultMessage> settleWithoutExecution(
             AiMessage aiMessage, ToolResultStatus status, String reason) {
         return aiMessage.toolUseRequests().stream()
-                .map(request -> ToolResultMessage.of(request.id(), status, reason, Map.of()))
+                .map(request -> settleWithoutExecution(request, status, reason))
                 .toList();
+    }
+
+    private ToolResultMessage settleWithoutExecution(
+            ToolUseRequest request, ToolResultStatus status, String reason) {
+        ToolResult result = ToolResult.of(status, reason);
+        eventRecorder.toolInvocationSettled(request.id(), result);
+        return ToolResultMessage.from(request.id(), result);
     }
 
     private ToolResult runWithEvents(ToolUseRequest request, AgentEventListener listener) {
         long startNs = System.nanoTime();
         ToolResult result = safeOutcome(request);
+        eventRecorder.toolInvocationSettled(request.id(), result);
         long durationMs = (System.nanoTime() - startNs) / 1_000_000L;
         notifyEnd(listener, request, result, durationMs);
         return result;
@@ -115,6 +132,7 @@ final class ParallelToolDispatcher {
         } catch (CancellationException ex) {
             return failure(ToolResultStatus.CANCELLED, ex, "permission");
         } catch (RuntimeException ex) {
+            rethrowPersistence(ex);
             return failure(ToolResultStatus.ERROR, ex, "permission");
         }
     }
@@ -138,6 +156,7 @@ final class ParallelToolDispatcher {
             log.debug("tool arguments summary: tool={}, args={}", tool.name(), summarizeArgs(invocation.args()));
         }
         try {
+            eventRecorder.toolInvocationStarted(invocation.id());
             ToolResult result = executeBounded(tool, invocation);
             result = governAndSettle(invocation, result);
             log.info("tool completed: tool={}, success={}, durationMs={}",
@@ -147,6 +166,7 @@ final class ParallelToolDispatcher {
             ToolResult cancelled = failure(ToolResultStatus.CANCELLED, ex, "execution");
             return governAndSettle(invocation, cancelled);
         } catch (RuntimeException ex) {
+            rethrowPersistence(ex);
             ToolResult failure = failure(ToolResultStatus.ERROR, ex, "execution");
             failure = governAndSettle(invocation, failure);
             log.error("tool failed: tool={}, errorType={}, message={}",
@@ -220,6 +240,7 @@ final class ParallelToolDispatcher {
                 Thread.currentThread().interrupt();
                 results.add(cancelled(requests.get(index), ie));
             } catch (ExecutionException ee) {
+                rethrowPersistence(ee.getCause());
                 results.add(failed(requests.get(index), ee.getCause()));
             }
         }
@@ -235,6 +256,12 @@ final class ParallelToolDispatcher {
         ToolResult result = ToolResult.of(ToolResultStatus.ERROR,
                 messageOf(cause), Map.of("stage", "dispatch"));
         return ToolResultMessage.from(request.id(), result);
+    }
+
+    private static void rethrowPersistence(Throwable failure) {
+        if (failure instanceof RunEventPersistenceException persistence) {
+            throw persistence;
+        }
     }
 
     private static ToolResult failure(ToolResultStatus status, Throwable failure, String stage) {
