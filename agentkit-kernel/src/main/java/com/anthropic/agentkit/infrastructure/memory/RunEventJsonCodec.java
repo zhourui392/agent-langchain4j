@@ -11,6 +11,9 @@ import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.ChatMessage;
 import com.anthropic.agentkit.domain.run.RunEvent;
 import com.anthropic.agentkit.domain.run.RunEventMetadata;
+import com.anthropic.agentkit.domain.suspension.ApprovalDecision;
+import com.anthropic.agentkit.domain.suspension.InputAnswer;
+import com.anthropic.agentkit.domain.suspension.RunSuspension;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.domain.tool.ToolResultStatus;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
@@ -56,6 +59,12 @@ final class RunEventJsonCodec {
             }
             case RunEvent.ToolInvocationSettled settled -> writeSettled(root, settled);
             case RunEvent.CompactionCompleted compacted -> writeCompaction(root, compacted);
+            case RunEvent.RunSuspended suspended -> {
+                root.put("type", "run_suspended");
+                root.set("suspension", RunSuspensionJsonCodec.toNode(suspended.suspension()));
+            }
+            case RunEvent.ApprovalSubmitted submitted -> writeApproval(root, submitted);
+            case RunEvent.InputAnswered answered -> writeInputAnswer(root, answered);
             case RunEvent.RunStopped stopped -> writeStopped(root, stopped);
         }
         return DATA_POLICY.govern(root).toString();
@@ -79,6 +88,10 @@ final class RunEventJsonCodec {
                     metadata, new ToolUseId(requiredText(root, "toolUseId")),
                     readToolResult(required(root, "result")));
             case "compaction_completed" -> readCompaction(root, metadata);
+            case "run_suspended" -> new RunEvent.RunSuspended(
+                    metadata, RunSuspensionJsonCodec.fromNode(required(root, "suspension")));
+            case "approval_submitted" -> readApproval(root, metadata);
+            case "input_answered" -> readInputAnswer(root, metadata);
             case "run_stopped" -> readStopped(root, metadata);
             default -> throw new IOException("unknown run event type: " + root.path("type").asText());
         };
@@ -143,6 +156,43 @@ final class RunEventJsonCodec {
         return new RunEvent.CompactionCompleted(
                 metadata, readBoundary(required(root, "boundary")),
                 readMessages(required(root, "retainedMessages")));
+    }
+
+    private static void writeApproval(
+            ObjectNode root, RunEvent.ApprovalSubmitted event) throws IOException {
+        root.put("type", "approval_submitted");
+        root.set("suspension", RunSuspensionJsonCodec.toNode(event.suspension()));
+        root.put("decision", event.decision().name());
+    }
+
+    private static RunEvent.ApprovalSubmitted readApproval(
+            JsonNode root, RunEventMetadata metadata) throws IOException {
+        RunSuspension suspension = RunSuspensionJsonCodec.fromNode(
+                required(root, "suspension"));
+        if (!(suspension instanceof RunSuspension.WaitingForApproval approval)) {
+            throw new IOException("approval event requires approval suspension");
+        }
+        return new RunEvent.ApprovalSubmitted(
+                metadata, approval,
+                ApprovalDecision.valueOf(requiredText(root, "decision")));
+    }
+
+    private static void writeInputAnswer(
+            ObjectNode root, RunEvent.InputAnswered event) throws IOException {
+        root.put("type", "input_answered");
+        root.set("suspension", RunSuspensionJsonCodec.toNode(event.suspension()));
+        root.put("answer", event.answer().value());
+    }
+
+    private static RunEvent.InputAnswered readInputAnswer(
+            JsonNode root, RunEventMetadata metadata) throws IOException {
+        RunSuspension suspension = RunSuspensionJsonCodec.fromNode(
+                required(root, "suspension"));
+        if (!(suspension instanceof RunSuspension.WaitingForInput input)) {
+            throw new IOException("input answer event requires input suspension");
+        }
+        return new RunEvent.InputAnswered(
+                metadata, input, InputAnswer.of(requiredText(root, "answer")));
     }
 
     private static void writeStopped(ObjectNode root, RunEvent.RunStopped event) throws IOException {

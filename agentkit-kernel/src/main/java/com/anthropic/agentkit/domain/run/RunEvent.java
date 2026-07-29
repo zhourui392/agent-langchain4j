@@ -7,6 +7,9 @@ import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.conversation.CompactionBoundary;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.ChatMessage;
+import com.anthropic.agentkit.domain.suspension.ApprovalDecision;
+import com.anthropic.agentkit.domain.suspension.InputAnswer;
+import com.anthropic.agentkit.domain.suspension.RunSuspension;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
 
@@ -23,6 +26,9 @@ public sealed interface RunEvent permits
         RunEvent.ToolInvocationStarted,
         RunEvent.ToolInvocationSettled,
         RunEvent.CompactionCompleted,
+        RunEvent.RunSuspended,
+        RunEvent.ApprovalSubmitted,
+        RunEvent.InputAnswered,
         RunEvent.RunStopped {
 
     int CURRENT_SCHEMA_VERSION = 1;
@@ -92,6 +98,37 @@ public sealed interface RunEvent permits
         }
     }
 
+    record RunSuspended(
+            RunEventMetadata metadata,
+            RunSuspension suspension) implements RunEvent {
+        public RunSuspended {
+            requireMetadata(metadata);
+            Objects.requireNonNull(suspension, "suspension");
+        }
+    }
+
+    record ApprovalSubmitted(
+            RunEventMetadata metadata,
+            RunSuspension.WaitingForApproval suspension,
+            ApprovalDecision decision) implements RunEvent {
+        public ApprovalSubmitted {
+            requireMetadata(metadata);
+            Objects.requireNonNull(suspension, "suspension");
+            Objects.requireNonNull(decision, "decision");
+        }
+    }
+
+    record InputAnswered(
+            RunEventMetadata metadata,
+            RunSuspension.WaitingForInput suspension,
+            InputAnswer answer) implements RunEvent {
+        public InputAnswered {
+            requireMetadata(metadata);
+            Objects.requireNonNull(suspension, "suspension");
+            Objects.requireNonNull(answer, "answer");
+        }
+    }
+
     record RunStopped(
             RunEventMetadata metadata,
             StopReason stopReason,
@@ -116,6 +153,12 @@ public sealed interface RunEvent permits
             return new AgentRunResult(
                     metadata.runId(), stopReason, finalMessage, structuredOutput,
                     usage, consumption, errorDetail);
+        }
+
+        public AgentRunResult toResult(Optional<RunSuspension> suspension) {
+            return new AgentRunResult(
+                    metadata.runId(), stopReason, finalMessage, structuredOutput,
+                    usage, consumption, errorDetail, suspension, Optional.empty());
         }
     }
 

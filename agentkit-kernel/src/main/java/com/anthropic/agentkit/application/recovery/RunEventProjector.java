@@ -4,12 +4,14 @@ import com.anthropic.agentkit.domain.agent.AgentRunResult;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.ToolResultMessage;
+import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.run.RunEvent;
 import com.anthropic.agentkit.domain.run.RunEventMetadata;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.domain.tool.ToolResultStatus;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
 import com.anthropic.agentkit.domain.tool.ToolUseRequest;
+import com.anthropic.agentkit.domain.suspension.RunSuspension;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -57,6 +59,7 @@ public final class RunEventProjector {
         private final Conversation conversation;
         private final List<RecoveredToolInvocation> invocations = new ArrayList<>();
         private Optional<AgentRunResult> terminalResult = Optional.empty();
+        private Optional<RunSuspension> suspension = Optional.empty();
         private PendingBatch activeBatch;
 
         private ProjectionState(RunEvent.RunStarted started) {
@@ -74,8 +77,27 @@ public final class RunEventProjector {
                 case RunEvent.ToolInvocationStarted started -> started(started.toolUseId());
                 case RunEvent.ToolInvocationSettled settled -> settled(settled);
                 case RunEvent.CompactionCompleted compacted -> compact(compacted);
-                case RunEvent.RunStopped stopped -> terminalResult = Optional.of(stopped.toResult());
+                case RunEvent.RunSuspended suspended -> suspend(suspended.suspension());
+                case RunEvent.ApprovalSubmitted submitted ->
+                        receive(submitted.suspension().pendingAssistantMessage());
+                case RunEvent.InputAnswered answered -> answer(answered.answer().value());
+                case RunEvent.RunStopped stopped ->
+                        terminalResult = Optional.of(stopped.toResult(suspension));
             }
+        }
+
+        private void suspend(RunSuspension pending) {
+            if (suspension.isPresent() || activeBatch != null) {
+                throw new IllegalArgumentException("run suspension occurred in invalid state");
+            }
+            suspension = Optional.of(pending);
+        }
+
+        private void answer(String value) {
+            if (activeBatch != null) {
+                throw new IllegalArgumentException("input answer arrived during tool batch");
+            }
+            conversation.append(UserMessage.of(value));
         }
 
         private void receive(AiMessage message) {

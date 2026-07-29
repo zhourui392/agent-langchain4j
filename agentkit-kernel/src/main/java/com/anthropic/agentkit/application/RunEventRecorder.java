@@ -10,6 +10,9 @@ import com.anthropic.agentkit.domain.port.RunEventPersistenceException;
 import com.anthropic.agentkit.domain.port.RunEventStore;
 import com.anthropic.agentkit.domain.run.RunEvent;
 import com.anthropic.agentkit.domain.run.RunEventMetadata;
+import com.anthropic.agentkit.domain.suspension.ApprovalDecision;
+import com.anthropic.agentkit.domain.suspension.InputAnswer;
+import com.anthropic.agentkit.domain.suspension.RunSuspension;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
 
@@ -43,6 +46,16 @@ interface RunEventRecorder {
 
     default void compactionCompleted(
             Conversation conversation, CompactionBoundary boundary) { }
+
+    default void runSuspended(RunSuspension suspension) { }
+
+    default void approvalSubmitted(
+            RunSuspension.WaitingForApproval suspension,
+            ApprovalDecision decision) { }
+
+    default void inputAnswered(
+            RunSuspension.WaitingForInput suspension,
+            InputAnswer answer) { }
 
     default void runStopped(AgentRunResult result) { }
 
@@ -89,6 +102,25 @@ interface RunEventRecorder {
             List<ChatMessage> messages = conversation.messages();
             append(new RunEvent.CompactionCompleted(
                     metadata(), boundary, messages.subList(1, messages.size())));
+        }
+
+        @Override
+        public void runSuspended(RunSuspension suspension) {
+            append(new RunEvent.RunSuspended(metadata(), suspension));
+        }
+
+        @Override
+        public void approvalSubmitted(
+                RunSuspension.WaitingForApproval suspension,
+                ApprovalDecision decision) {
+            append(new RunEvent.ApprovalSubmitted(metadata(), suspension, decision));
+        }
+
+        @Override
+        public void inputAnswered(
+                RunSuspension.WaitingForInput suspension,
+                InputAnswer answer) {
+            append(new RunEvent.InputAnswered(metadata(), suspension, answer));
         }
 
         @Override

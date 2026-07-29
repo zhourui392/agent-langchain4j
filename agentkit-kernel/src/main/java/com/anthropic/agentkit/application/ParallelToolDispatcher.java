@@ -10,6 +10,9 @@ import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.ToolResultMessage;
 import com.anthropic.agentkit.domain.permission.Decision;
 import com.anthropic.agentkit.domain.port.RunEventPersistenceException;
+import com.anthropic.agentkit.domain.suspension.ApprovalDecision;
+import com.anthropic.agentkit.domain.suspension.ApprovalRequest;
+import com.anthropic.agentkit.domain.suspension.PlannedToolInvocation;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.domain.tool.ToolInvocation;
@@ -17,6 +20,7 @@ import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.domain.tool.ToolResultStatus;
 import com.anthropic.agentkit.domain.tool.ToolUseRequest;
+import com.anthropic.agentkit.domain.tool.ToolUseId;
 import com.anthropic.agentkit.domain.tool.UnknownToolException;
 
 import java.util.ArrayList;
@@ -85,30 +89,46 @@ final class ParallelToolDispatcher {
 
     ToolDispatchBatch dispatchOutcome(
             AiMessage aiMessage, AgentEventListener listener) {
+        return dispatchOutcome(aiMessage, listener, Map.of());
+    }
+
+    ToolDispatchBatch dispatchApproved(
+            AiMessage aiMessage, AgentEventListener listener,
+            ApprovalRequest request, ApprovalDecision response) {
+        return dispatchOutcome(aiMessage, listener, permissionPlan(request, response));
+    }
+
+    private ToolDispatchBatch dispatchOutcome(
+            AiMessage aiMessage, AgentEventListener listener,
+            Map<ToolUseId, Decision> permissionPlan) {
         AgentEventListener safeListener = SafeAgentEventListener.protect(listener);
         List<ToolUseRequest> requests = aiMessage.toolUseRequests();
         requests.forEach(safeListener::onToolUseStart);
         log.info("dispatching tools: names={}, concurrency={}", toolNames(requests), requests.size());
         if (requests.size() == 1) {
             return ToolDispatchBatch.from(List.of(
-                    executeSingle(requests.get(0), safeListener)));
+                    executeSingle(requests.get(0), safeListener, permissionPlan)));
         }
-        return ToolDispatchBatch.from(executeAll(requests, safeListener));
+        return ToolDispatchBatch.from(executeAll(requests, safeListener, permissionPlan));
     }
 
-    private SettledTool executeSingle(ToolUseRequest request, AgentEventListener listener) {
+    private SettledTool executeSingle(
+            ToolUseRequest request, AgentEventListener listener,
+            Map<ToolUseId, Decision> permissionPlan) {
         Map<String, String> parentMdc = MDC.getCopyOfContextMap();
-        return withMdc(parentMdc, request, () -> runWithEvents(request, listener));
+        return withMdc(parentMdc, request,
+                () -> runWithEvents(request, listener, permissionPlan));
     }
 
     private List<SettledTool> executeAll(
-            List<ToolUseRequest> requests, AgentEventListener listener) {
+            List<ToolUseRequest> requests, AgentEventListener listener,
+            Map<ToolUseId, Decision> permissionPlan) {
         try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
             List<Future<SettledTool>> futures = new ArrayList<>(requests.size());
             for (ToolUseRequest req : requests) {
                 Map<String, String> parentMdc = MDC.getCopyOfContextMap();
                 futures.add(pool.submit(() -> withMdc(parentMdc, req,
-                        () -> runWithEvents(req, listener))));
+                        () -> runWithEvents(req, listener, permissionPlan))));
             }
             return awaitAll(requests, futures);
         }
@@ -129,9 +149,10 @@ final class ParallelToolDispatcher {
     }
 
     private SettledTool runWithEvents(
-            ToolUseRequest request, AgentEventListener listener) {
+            ToolUseRequest request, AgentEventListener listener,
+            Map<ToolUseId, Decision> permissionPlan) {
         long startNs = System.nanoTime();
-        ToolExecutionOutcome outcome = safeOutcome(request);
+        ToolExecutionOutcome outcome = safeOutcome(request, permissionPlan);
         ToolResult result = outcome.result();
         eventRecorder.toolInvocationSettled(request.id(), result);
         long durationMs = (System.nanoTime() - startNs) / 1_000_000L;
@@ -142,7 +163,8 @@ final class ParallelToolDispatcher {
                 ToolResultMessage.from(request.id(), result), outcome.interceptorFailure());
     }
 
-    private ToolExecutionOutcome safeOutcome(ToolUseRequest request) {
+    private ToolExecutionOutcome safeOutcome(
+            ToolUseRequest request, Map<ToolUseId, Decision> permissionPlan) {
         Tool tool;
         try {
             tool = tools.find(request.toolName(), executionContext);
@@ -169,7 +191,7 @@ final class ParallelToolDispatcher {
                         governAndSettle(invocation, denied), dispatch);
             }
             return ToolExecutionOutcome.completed(
-                    runWithPermission(tool, invocation), dispatch);
+                    runWithPermission(tool, invocation, permissionPlan), dispatch);
         } catch (AgentInterceptorException failure) {
             ToolResult result = ToolResult.of(
                     ToolResultStatus.INTERCEPTOR_ERROR, failure.getMessage(),
@@ -187,8 +209,13 @@ final class ParallelToolDispatcher {
         }
     }
 
-    private ToolResult runWithPermission(Tool tool, ToolInvocation invocation) {
-        Decision decision = permissions.check(executionContext, invocation, tool);
+    private ToolResult runWithPermission(
+            Tool tool, ToolInvocation invocation,
+            Map<ToolUseId, Decision> permissionPlan) {
+        Decision decision = permissionPlan.get(invocation.id());
+        if (decision == null) {
+            decision = permissions.check(executionContext, invocation, tool);
+        }
         log.info("permission decision: tool={}, decision={}", tool.name(), decision);
         if (decision == Decision.DENY) {
             log.warn("permission denied: {}", tool.name());
@@ -198,6 +225,21 @@ final class ParallelToolDispatcher {
         }
         invocation.allow();
         return runTool(tool, invocation);
+    }
+
+    private static Map<ToolUseId, Decision> permissionPlan(
+            ApprovalRequest request, ApprovalDecision response) {
+        Map<ToolUseId, Decision> plan = new java.util.LinkedHashMap<>();
+        for (PlannedToolInvocation item : request.invocations()) {
+            Decision decision = response == ApprovalDecision.DENY
+                    ? Decision.DENY : approved(item.decision());
+            plan.put(item.request().id(), decision);
+        }
+        return Map.copyOf(plan);
+    }
+
+    private static Decision approved(Decision planned) {
+        return planned == Decision.ASK ? Decision.ALLOW : planned;
     }
 
     private ToolResult runTool(Tool tool, ToolInvocation invocation) {

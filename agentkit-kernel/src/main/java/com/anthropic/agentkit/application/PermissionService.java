@@ -44,6 +44,17 @@ public final class PermissionService {
     }
 
     public Decision check(ExecutionContext context, ToolInvocation invocation, Tool tool) {
+        Decision planned = decide(context, invocation, tool);
+        if (planned != Decision.ASK) {
+            return planned;
+        }
+        Decision interactiveDecision = askInteractively(context, invocation, tool);
+        logDecision(context, tool, interactiveDecision);
+        return interactiveDecision;
+    }
+
+    /** Evaluates policy and cache without invoking a synchronous host prompt. */
+    public Decision decide(ExecutionContext context, ToolInvocation invocation, Tool tool) {
         Objects.requireNonNull(context, "context");
         Objects.requireNonNull(invocation, "invocation");
         Objects.requireNonNull(tool, "tool");
@@ -58,9 +69,8 @@ public final class PermissionService {
             logDecision(context, tool, Decision.ALLOW);
             return Decision.ALLOW;
         }
-        Decision interactiveDecision = askInteractively(context, invocation, tool);
-        logDecision(context, tool, interactiveDecision);
-        return interactiveDecision;
+        logDecision(context, tool, Decision.ASK);
+        return Decision.ASK;
     }
 
     public void clear(RunId runId) {
