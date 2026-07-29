@@ -5,11 +5,15 @@ import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.port.ChatRequest;
 import com.anthropic.agentkit.domain.port.LlmClient.StreamHandler;
 import dev.langchain4j.model.anthropic.AnthropicTokenUsage;
+import dev.langchain4j.model.chat.StreamingChatModel;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -71,6 +75,46 @@ class LangChain4jLlmClientTest {
         });
 
         assertThat(received.get()).hasMessage("boom");
+    }
+
+    @Test
+    void completionAndErrorCanOnlyWinOnce() {
+        ControllableStreamingChatModel model = new ControllableStreamingChatModel();
+        LangChain4jLlmClient client = new LangChain4jLlmClient(model);
+        AtomicInteger completions = new AtomicInteger();
+        AtomicInteger errors = new AtomicInteger();
+
+        var call = client.streamChat(baseRequest, new StreamHandler() {
+            @Override public void onPartialText(String delta) { }
+            @Override public void onComplete(AiMessage message) { completions.incrementAndGet(); }
+            @Override public void onError(Throwable error) { errors.incrementAndGet(); }
+        });
+        model.complete("first");
+        model.fail(new IllegalStateException("late"));
+
+        assertThat(call.completion().toCompletableFuture().join().text()).isEqualTo("first");
+        assertThat(completions).hasValue(1);
+        assertThat(errors).hasValue(0);
+    }
+
+    @Test
+    void cancellationIgnoresLateProviderCallbacks() {
+        ControllableStreamingChatModel model = new ControllableStreamingChatModel();
+        LangChain4jLlmClient client = new LangChain4jLlmClient(model);
+        AtomicInteger callbacks = new AtomicInteger();
+
+        var call = client.streamChat(baseRequest, new StreamHandler() {
+            @Override public void onPartialText(String delta) { callbacks.incrementAndGet(); }
+            @Override public void onComplete(AiMessage message) { callbacks.incrementAndGet(); }
+            @Override public void onError(Throwable error) { callbacks.incrementAndGet(); }
+        });
+        assertThat(call.cancel()).isTrue();
+        model.token("late");
+        model.complete("late");
+        model.fail(new IllegalStateException("later"));
+
+        assertThat(call.completion().toCompletableFuture()).isCancelled();
+        assertThat(callbacks).hasValue(0);
     }
 
     @Test
@@ -169,5 +213,29 @@ class LangChain4jLlmClientTest {
         dev.langchain4j.agent.tool.ToolSpecification spec = fake.capturedRequests().get(0).toolSpecifications().get(0);
         assertThat(spec.parameters().properties()).isEmpty();
         assertThat(spec.parameters().required()).isEmpty();
+    }
+
+    private static final class ControllableStreamingChatModel implements StreamingChatModel {
+        private StreamingChatResponseHandler handler;
+
+        @Override
+        public void chat(dev.langchain4j.model.chat.request.ChatRequest request,
+                         StreamingChatResponseHandler handler) {
+            this.handler = handler;
+        }
+
+        private void token(String token) {
+            handler.onPartialResponse(token);
+        }
+
+        private void complete(String text) {
+            handler.onCompleteResponse(ChatResponse.builder()
+                    .aiMessage(dev.langchain4j.data.message.AiMessage.from(text))
+                    .build());
+        }
+
+        private void fail(Throwable failure) {
+            handler.onError(failure);
+        }
     }
 }
