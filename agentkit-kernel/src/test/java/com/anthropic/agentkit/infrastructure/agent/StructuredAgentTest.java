@@ -1,8 +1,14 @@
 package com.anthropic.agentkit.infrastructure.agent;
 
 import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.AgentId;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
+import com.anthropic.agentkit.domain.agent.AgentRunLimits;
+import com.anthropic.agentkit.domain.agent.AgentSpec;
+import com.anthropic.agentkit.domain.agent.ModelTier;
 import com.anthropic.agentkit.domain.agent.RunId;
+import com.anthropic.agentkit.domain.agent.TerminalToolSpec;
+import com.anthropic.agentkit.domain.agent.ToolCapabilitySet;
 import com.anthropic.agentkit.domain.agent.WorkspaceId;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.SessionId;
@@ -21,6 +27,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,7 +57,7 @@ class StructuredAgentTest {
                 .enqueue(AiMessage.of("", List.of(new ToolUseRequest(
                         new ToolUseId("t-1"), TERMINAL_TOOL,
                         "{\"problemStatement\":\"db slow\"}"))));
-        StructuredAgent agent = new StructuredAgent(llm, "Plan it.", OUTPUT, List.of());
+        StructuredAgent agent = new StructuredAgent(llm, spec(ToolCapabilitySet.none()), List.of());
 
         Map<String, Object> payload = agent.run("Make a plan", context());
 
@@ -61,7 +68,7 @@ class StructuredAgentTest {
     @Test
     void throwsWhenTerminalToolNeverCalled() {
         StubLlmClient llm = new StubLlmClient().enqueue(AiMessage.text("I won't"));
-        StructuredAgent agent = new StructuredAgent(llm, "Plan it.", OUTPUT, List.of());
+        StructuredAgent agent = new StructuredAgent(llm, spec(ToolCapabilitySet.none()), List.of());
 
         assertThatThrownBy(() -> agent.run("Make a plan", context()))
                 .isInstanceOf(StructuredOutputMissingException.class)
@@ -78,7 +85,8 @@ class StructuredAgentTest {
                 .enqueue(AiMessage.of("", List.of(new ToolUseRequest(
                         new ToolUseId("terminal-1"), TERMINAL_TOOL,
                         "{\"problemStatement\":\"scoped\"}"))));
-        StructuredAgent agent = new StructuredAgent(llm, "Plan it.", OUTPUT, List.of(inspect));
+        StructuredAgent agent = new StructuredAgent(
+                llm, spec(ToolCapabilitySet.of("Inspect")), List.of(inspect));
         CancellationToken cancellation = new CancellationToken();
         AgentRunContext context = AgentRunContext.of(
                 RunId.of("structured-run"), SessionId.of("structured-session"),
@@ -94,6 +102,12 @@ class StructuredAgentTest {
 
     private static AgentRunContext context() {
         return AgentRunContext.at(Paths.get(System.getProperty("user.dir")));
+    }
+
+    private static AgentSpec spec(ToolCapabilitySet tools) {
+        return new AgentSpec(
+                AgentId.of("planner"), "Plan it.", tools, ModelTier.DEFAULT,
+                AgentBudget.unlimited(), AgentRunLimits.defaults(), Optional.of(OUTPUT));
     }
 
     private static Tool contextRecordingTool(AtomicReference<ExecutionContext> received) {

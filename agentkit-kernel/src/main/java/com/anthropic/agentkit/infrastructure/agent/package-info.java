@@ -1,6 +1,6 @@
 /**
- * Infrastructure：受约束的专家 Agent 运行时（StructuredAgent SPI）。
- * 把 "建终结工具 -> 塞 registry -> 跑 executor -> 读 sink" 四步样板收进 kernel；
- * 返回通用 payload，领域 VO 映射由调用方负责。
+ * Infrastructure：从领域无关 AgentSpec 运行受约束角色和有生命周期的 child agent。
+ * StructuredAgent 返回通用 payload；DefaultSubAgentRuntime 强制能力、预算、取消和并发边界；
+ * 领域 VO 映射与工作流编排仍由各 agent 包负责。
  */
 package com.anthropic.agentkit.infrastructure.agent;

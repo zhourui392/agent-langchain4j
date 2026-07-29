@@ -132,7 +132,7 @@ final class DefaultSubAgentHandle implements SubAgentHandle {
         CancellationToken.Registration propagation = parent.cancellation()
                 .onCancel(this::cancelFromParent);
         try {
-            CompletableFuture<AgentRunResult> future = executor(context).run(
+            CompletableFuture<AgentRunResult> future = executor().run(
                     conversation, context, AgentEventListener.NO_OP, spec.systemPrompt());
             currentResult = future.whenComplete(
                     (result, failure) -> finish(result, failure, propagation, lease));
@@ -151,7 +151,7 @@ final class DefaultSubAgentHandle implements SubAgentHandle {
                 spec.budget(), spec.limits(), scope);
     }
 
-    private AgentExecutor executor(AgentRunContext context) {
+    private AgentExecutor executor() {
         LlmClient client = Objects.requireNonNull(
                 clients.select(spec.modelTier()), "selected LLM client");
         return new AgentExecutor(client, tools, permissions);

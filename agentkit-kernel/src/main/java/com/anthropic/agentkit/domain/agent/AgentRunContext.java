@@ -52,21 +52,6 @@ public record AgentRunContext(
                 AgentRunLimits.defaults(), new AgentBudgetState(), Optional.empty());
     }
 
-    public static AgentRunContext childOf(ExecutionContext parent, SessionId childSession) {
-        return childOf(parent, childSession, parent.budget(), parent.limits());
-    }
-
-    public static AgentRunContext childOf(ExecutionContext parent, SessionId childSession,
-                                          AgentBudget requestedBudget,
-                                          AgentRunLimits requestedLimits) {
-        Objects.requireNonNull(parent, "parent");
-        return new AgentRunContext(
-                parent.runId(), childSession, parent.workspaceId(), parent.cwd(),
-                parent.cancellation(), parent.budget().narrowedBy(requestedBudget),
-                parent.secretProvider(), parent.limits().narrowedBy(requestedLimits),
-                parent.budgetState(), parent.subAgentScope());
-    }
-
     public static AgentRunContext at(Path workspaceRoot) {
         return create(SessionId.fresh(), workspaceRoot, new CancellationToken(), AgentBudget.unlimited());
     }

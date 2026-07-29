@@ -1,7 +1,14 @@
 package com.anthropic.agentkit.infrastructure.diagnosis;
 
 import com.anthropic.agentkit.application.diagnosis.DiagnosisReporter;
+import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.AgentId;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
+import com.anthropic.agentkit.domain.agent.AgentRunLimits;
+import com.anthropic.agentkit.domain.agent.AgentSpec;
+import com.anthropic.agentkit.domain.agent.ModelTier;
+import com.anthropic.agentkit.domain.agent.TerminalToolSpec;
+import com.anthropic.agentkit.domain.agent.ToolCapabilitySet;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisCase;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisReport;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisReportValidationResult;
@@ -9,12 +16,12 @@ import com.anthropic.agentkit.domain.diagnosis.DiagnosisReportValidator;
 import com.anthropic.agentkit.domain.diagnosis.RootCauseCandidate;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.infrastructure.agent.StructuredAgent;
-import com.anthropic.agentkit.infrastructure.agent.TerminalToolSpec;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,6 +52,10 @@ public final class StructuredDiagnosisReporter implements DiagnosisReporter {
             "Submit a structured diagnosis report by calling the submit_report tool.";
     private static final TerminalToolSpec REPORT_OUTPUT = new TerminalToolSpec(
             TOOL_NAME, "Submit a structured diagnosis report", REPORT_SCHEMA);
+    private static final AgentSpec SPEC = new AgentSpec(
+            AgentId.of("diagnosis-reporter"), SYSTEM_PROMPT, ToolCapabilitySet.none(),
+            ModelTier.DEFAULT, AgentBudget.unlimited(), AgentRunLimits.defaults(),
+            Optional.of(REPORT_OUTPUT));
 
     private final LlmClient llm;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -57,7 +68,7 @@ public final class StructuredDiagnosisReporter implements DiagnosisReporter {
     @Override
     public DiagnosisReport report(DiagnosisCase diagnosisCase, AgentRunContext context) {
         long startNs = System.nanoTime();
-        StructuredAgent agent = new StructuredAgent(llm, SYSTEM_PROMPT, REPORT_OUTPUT, List.of());
+        StructuredAgent agent = new StructuredAgent(llm, SPEC, List.of());
         Map<String, Object> payload = agent.run(
                 "Create a report for: " + diagnosisCase.question(), context);
         DiagnosisReport report = toReport(payload);

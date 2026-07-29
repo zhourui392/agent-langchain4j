@@ -32,6 +32,7 @@ import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
 import com.anthropic.agentkit.domain.tool.ToolUseRequest;
+import com.anthropic.agentkit.infrastructure.tools.SubAgentTool;
 import com.anthropic.agentkit.testsupport.FakeTool;
 import com.anthropic.agentkit.testsupport.StubLlmClient;
 import org.junit.jupiter.api.Test;
@@ -101,6 +102,29 @@ class DefaultSubAgentRuntimeTest {
         assertThat(parent.budgetConsumption().turns()).isEqualTo(2);
         assertThat(exhausted.stopReason()).isEqualTo(StopReason.BUDGET_EXHAUSTED);
         assertThat(llm.capturedRequests()).hasSize(2);
+    }
+
+    @Test
+    void siblingChildrenHaveLocalBudgetsAndOneSharedParentLedger() {
+        SequencedLlmClient llm = new SequencedLlmClient(
+                AiMessage.text("first"), AiMessage.text("second"));
+        AgentRunContext parent = parent(AgentBudget.of(2, 10, 10_000));
+        SubAgentRuntime runtime = runtime(llm, new ToolRegistry(), new SubAgentLimits(2, 2));
+        AgentSpec bounded = new AgentSpec(
+                AgentId.of("bounded"), "Complete one bounded turn.", ToolCapabilitySet.none(),
+                ModelTier.DEFAULT, AgentBudget.of(1, 1, 1_000),
+                AgentRunLimits.defaults(), Optional.empty());
+
+        AgentRunResult first = runtime.spawn(bounded, "one", parent).result()
+                .toCompletableFuture().join();
+        AgentRunResult second = runtime.spawn(bounded, "two", parent).result()
+                .toCompletableFuture().join();
+
+        assertThat(first.stopReason()).isEqualTo(StopReason.MODEL_COMPLETED);
+        assertThat(second.stopReason()).isEqualTo(StopReason.MODEL_COMPLETED);
+        assertThat(first.consumption().turns()).isEqualTo(1);
+        assertThat(second.consumption().turns()).isEqualTo(1);
+        assertThat(parent.budgetConsumption().turns()).isEqualTo(2);
     }
 
     @Test
@@ -233,6 +257,20 @@ class DefaultSubAgentRuntimeTest {
         runtime.spawn(spec, "do it", parent()).result().toCompletableFuture().join();
 
         assertThat(selected.get()).isEqualTo(ModelTier.FAST);
+    }
+
+    @Test
+    void toolAdapterHasConfigurableIdentityAndConservativeWriteClassification() {
+        SubAgentRuntime runtime = runtime(
+                new StubLlmClient(), new ToolRegistry(), new SubAgentLimits(2, 1));
+        AgentSpec spec = spec("researcher", ToolCapabilitySet.none());
+
+        SubAgentTool tool = new SubAgentTool(
+                "Research", "Delegate bounded research", runtime, spec, false);
+
+        assertThat(tool.name()).isEqualTo("Research");
+        assertThat(tool.description()).isEqualTo("Delegate bounded research");
+        assertThat(tool.isReadOnly()).isFalse();
     }
 
     private static void assertParentCancellationStopsLlm() throws Exception {

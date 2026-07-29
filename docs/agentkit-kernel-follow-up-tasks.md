@@ -77,6 +77,8 @@
 
 ### #47 [Kernel-TDD, P2] `AgentSpec` + `SubAgentRuntime` / `SubAgentHandle`
 
+**状态**：已完成（2026-07-29）；Red/Green/Refactor 三提交交付，实施状态以 `TASKLIST.md` 为准。
+
 **Goal**
 
 把当前同步、只读、文本返回的 `SubAgentTool` 升级为领域无关的子 Agent primitive；角色通过组合注入，不通过子类或 prompt 自觉约束。
@@ -137,6 +139,13 @@ interface SubAgentHandle {
 - diagnosis/coding 只提供 `AgentSpec` 和领域 payload 映射，不把工作流下沉 kernel。
 - javadoc 和工具描述领域中立。
 - 本任务不实现 peer 黑板、自动任务拆分或分布式调度。
+
+**完成后的领域建模复核**
+
+- commands：`spawn`、`followUp`、`cancel`；事实流为 child session 建立 → 独立 run segment 启动 → result/stop → 可选 follow-up，旧 conversation 不被复制或改写。
+- `AgentSpec` 是静态 VO；`SubAgentHandle` 是串行 child session 生命周期边界；`SubAgentExecutionScope` 是显式 depth/quota 一致性边界；`AgentBudgetState` 是 child-local + ancestor-total 的分层账本。
+- 变化点已分别收敛到 `LlmClientSelector`（model tier）、`ToolCapabilitySet`（能力）、`AgentRunLimits`（时间）、`SubAgentLimits`（depth/concurrency）和 terminal spec（结构化退出）。
+- 建模评分从实施前的 **7/15** 提升到 **14/15**：聚合边界 3、变化收敛 3、不变量守护 3、行为一致 3、下一轮演进 2；剩余 1 分是 parent/child 生命周期关联尚未进入 typed interceptor/event schema，归 #48，不在 #47 偷改 `RunEvent` v1。
 
 **blockedBy**：#40、#42、#43、#44、#46。
 

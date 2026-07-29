@@ -1,7 +1,14 @@
 package com.anthropic.agentkit.infrastructure.coding;
 
 import com.anthropic.agentkit.application.coding.CodingPatcher;
+import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.AgentId;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
+import com.anthropic.agentkit.domain.agent.AgentRunLimits;
+import com.anthropic.agentkit.domain.agent.AgentSpec;
+import com.anthropic.agentkit.domain.agent.ModelTier;
+import com.anthropic.agentkit.domain.agent.TerminalToolSpec;
+import com.anthropic.agentkit.domain.agent.ToolCapabilitySet;
 import com.anthropic.agentkit.domain.coding.CodingPlan;
 import com.anthropic.agentkit.domain.coding.CodingTask;
 import com.anthropic.agentkit.domain.coding.FileChange;
@@ -10,12 +17,12 @@ import com.anthropic.agentkit.domain.coding.Patch;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.infrastructure.agent.StructuredAgent;
-import com.anthropic.agentkit.infrastructure.agent.TerminalToolSpec;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,7 +65,7 @@ public final class StructuredCodingPatcher implements CodingPatcher {
     @Override
     public Patch producePatch(CodingTask task, CodingPlan plan, AgentRunContext context) {
         long startNs = System.nanoTime();
-        StructuredAgent agent = new StructuredAgent(llm, SYSTEM_PROMPT, PATCH_OUTPUT, codingTools);
+        StructuredAgent agent = new StructuredAgent(llm, spec(), codingTools);
         Map<String, Object> payload = agent.run(buildTask(task, plan), context);
         Patch patch = toPatch(payload);
         log.info("patch produced: taskId={}, changes={}, durationMs={}",
@@ -70,6 +77,14 @@ public final class StructuredCodingPatcher implements CodingPatcher {
         return "Implement the requirement: " + task.requirement()
                 + "\nPlan: " + plan.problemStatement()
                 + "\nTask items: " + plan.tasks().size();
+    }
+
+    private AgentSpec spec() {
+        String[] capabilities = codingTools.stream().map(Tool::name).toArray(String[]::new);
+        return new AgentSpec(
+                AgentId.of("coding-patcher"), SYSTEM_PROMPT,
+                ToolCapabilitySet.of(capabilities), ModelTier.DEFAULT,
+                AgentBudget.unlimited(), AgentRunLimits.defaults(), Optional.of(PATCH_OUTPUT));
     }
 
     private Patch toPatch(Map<String, Object> payload) {

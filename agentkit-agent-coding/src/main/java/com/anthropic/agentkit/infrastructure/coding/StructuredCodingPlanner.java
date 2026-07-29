@@ -1,19 +1,26 @@
 package com.anthropic.agentkit.infrastructure.coding;
 
 import com.anthropic.agentkit.application.coding.CodingPlanner;
+import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.AgentId;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
+import com.anthropic.agentkit.domain.agent.AgentRunLimits;
+import com.anthropic.agentkit.domain.agent.AgentSpec;
+import com.anthropic.agentkit.domain.agent.ModelTier;
+import com.anthropic.agentkit.domain.agent.TerminalToolSpec;
+import com.anthropic.agentkit.domain.agent.ToolCapabilitySet;
 import com.anthropic.agentkit.domain.coding.CodingPlan;
 import com.anthropic.agentkit.domain.coding.CodingTask;
 import com.anthropic.agentkit.domain.coding.TaskItem;
 import com.anthropic.agentkit.domain.coding.TaskItemStatus;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.infrastructure.agent.StructuredAgent;
-import com.anthropic.agentkit.infrastructure.agent.TerminalToolSpec;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,6 +47,10 @@ public final class StructuredCodingPlanner implements CodingPlanner {
             "Decompose the coding requirement into an ordered plan by calling the update_plan tool.";
     private static final TerminalToolSpec PLAN_OUTPUT = new TerminalToolSpec(
             TOOL_NAME, "Submit a structured coding plan", PLAN_SCHEMA);
+    private static final AgentSpec SPEC = new AgentSpec(
+            AgentId.of("coding-planner"), SYSTEM_PROMPT, ToolCapabilitySet.none(),
+            ModelTier.DEFAULT, AgentBudget.unlimited(), AgentRunLimits.defaults(),
+            Optional.of(PLAN_OUTPUT));
 
     private final LlmClient llm;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -51,7 +62,7 @@ public final class StructuredCodingPlanner implements CodingPlanner {
     @Override
     public CodingPlan createPlan(CodingTask task, AgentRunContext context) {
         long startNs = System.nanoTime();
-        StructuredAgent agent = new StructuredAgent(llm, SYSTEM_PROMPT, PLAN_OUTPUT, List.of());
+        StructuredAgent agent = new StructuredAgent(llm, SPEC, List.of());
         Map<String, Object> payload = agent.run(
                 "Create a coding plan for: " + task.requirement(),
                 context);

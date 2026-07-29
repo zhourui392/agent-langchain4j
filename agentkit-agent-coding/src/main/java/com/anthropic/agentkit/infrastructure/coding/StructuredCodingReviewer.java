@@ -1,19 +1,26 @@
 package com.anthropic.agentkit.infrastructure.coding;
 
 import com.anthropic.agentkit.application.coding.CodingReviewer;
+import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.AgentId;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
+import com.anthropic.agentkit.domain.agent.AgentRunLimits;
+import com.anthropic.agentkit.domain.agent.AgentSpec;
+import com.anthropic.agentkit.domain.agent.ModelTier;
+import com.anthropic.agentkit.domain.agent.TerminalToolSpec;
+import com.anthropic.agentkit.domain.agent.ToolCapabilitySet;
 import com.anthropic.agentkit.domain.coding.CodingTask;
 import com.anthropic.agentkit.domain.coding.Patch;
 import com.anthropic.agentkit.domain.coding.ReviewVerdict;
 import com.anthropic.agentkit.domain.coding.Verdict;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.infrastructure.agent.StructuredAgent;
-import com.anthropic.agentkit.infrastructure.agent.TerminalToolSpec;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,6 +51,10 @@ public final class StructuredCodingReviewer implements CodingReviewer {
                     + "calling the submit_review tool. Do not modify any files.";
     private static final TerminalToolSpec REVIEW_OUTPUT = new TerminalToolSpec(
             TOOL_NAME, "Submit the structured review verdict for the patch", REVIEW_SCHEMA);
+    private static final AgentSpec SPEC = new AgentSpec(
+            AgentId.of("coding-reviewer"), SYSTEM_PROMPT, ToolCapabilitySet.none(),
+            ModelTier.DEFAULT, AgentBudget.unlimited(), AgentRunLimits.defaults(),
+            Optional.of(REVIEW_OUTPUT));
 
     private final LlmClient llm;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -55,7 +66,7 @@ public final class StructuredCodingReviewer implements CodingReviewer {
     @Override
     public ReviewVerdict review(CodingTask task, Patch patch, AgentRunContext context) {
         long startNs = System.nanoTime();
-        StructuredAgent agent = new StructuredAgent(llm, SYSTEM_PROMPT, REVIEW_OUTPUT, List.of());
+        StructuredAgent agent = new StructuredAgent(llm, SPEC, List.of());
         Map<String, Object> payload = agent.run(buildTask(task, patch), context);
         ReviewVerdict verdict = toVerdict(payload);
         log.info("review verdict: taskId={}, decision={}, issues={}, durationMs={}",

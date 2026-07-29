@@ -626,7 +626,7 @@ agentkit/
 | 工具视图 | `ExecutionContext` 是从 `AgentRunContext` 派生的受限工具执行视图，不是第二份运行配置 | 所有工具收到同一 RunId/workspace/cancellation/budget；生产入口不得自行制造默认 context |
 | 可变状态 | dispatcher 与 budget guard 收敛进每次 run 创建的私有 `AgentRunState` | 并发 run 不共享 dispatcher 或预算消费 |
 | 授权隔离 | permission `ALLOW_ALWAYS` cache 按 RunId；文件先读后写 cache 按 `(RunId, WorkspaceId, normalizedPath)` | run 结束清理权限；同 workspace 的另一 run 也不能复用读授权 |
-| 子 Agent 与事件 | `SubAgentTool` 建新 child session，但继承父 RunId/workspace/cancellation/budget；listener 通过 `onRunStart` 接收完整 context | 子 Agent、工具、权限、日志和事件可用同一 RunId 关联 |
+| 子 Agent 与事件 | 本节原定 child 继承父 RunId/cancellation；该决定已由 §16.15 替代：child 使用独立 RunId/取消令牌，并显式保留 parentRunId 关联 | workspace 与分层预算继续继承；parent cancel 单向传播，child cancel 不反向取消 parent |
 | agent 包透传 | diagnosis orchestrator 从请求 cwd 构造一次 context；coding pipeline 接收一次 context，按 Planner → Patcher → Reviewer 原样传递 | 领域角色不再读取进程 cwd，且编排规则仍留在各 agent 包 application 层 |
 
 `AgentRunContext` 仍只承载运行能力边界，不承载任意集合或 agent 领域状态。deadline、child limits 等后续运行限制可以演进为明确的 limits VO；不得把全局单例或 `ThreadLocal` 变成事实来源。MDC 只保留日志投影职责。
@@ -695,7 +695,7 @@ L0 单用户/worktree 运行时必须同时具备两种性质不同的控制：p
 | LangChain4j 边界 | 删除 adapter 内固定 90 秒 `CountDownLatch`；timeout 由调用 context 决定 | LangChain4j 1.18 的 streaming API 返回 `void` 且无原生 cancel handle，当前 cancel 是 kernel 终态与 callback 隔离层面的 best effort；不能声称 SDK 已终止底层 HTTP 请求 |
 | 时间限制 | `AgentRunLimits` 明确区分单调 run deadline、单次 provider timeout 和单次 tool timeout；实际等待始终取 operation timeout 与 deadline 剩余时间的较小值 | 默认值是命名配置，不再散落 runtime 魔法常量；diagnosis request timeout 直接物化为 run deadline，`TIMED_OUT` 与用户 `CANCELLED` 可稳定区分 |
 | 输出预算 | `AgentBudget` 增加 max output tokens 与 max output characters；provider usage 只累计 token，stream delta 只累计 characters | 不重复用最终 message 再计量；字符上限可在 streaming 中主动终止，token 上限在 provider usage 到达后以 `BUDGET_EXHAUSTED` 结束 |
-| 父子配额 | `AgentBudgetState` 是 parent/child 共享的线程安全 ledger；child budget/limits 与 parent 逐项取最小值 | child 的 turn、tool、token、character 消费计入同一总账；child 可以收紧限制，但请求 unlimited 不能放大 parent 能力 |
+| 父子配额 | `AgentBudgetState` 是分层 ledger view：每个 child 有本地计数，同时一次原子预留会计入所有 ancestor scope；child budget/limits 与 parent 逐项取最小值 | child result 可报告自身消费，parent 总账仍包含所有后代；并行 child 不会错误共享同一个“本地上限”，且请求 unlimited 不能放大 parent 能力 |
 | 工具终态 | dispatcher 必经路径对每个工具应用 run-scoped timeout/cancel，governance decorator 只能进一步收紧 | TIMEOUT/CANCELLED 都形成结构化 result；即使 deadline 在 batch 内到达，也先按 §16.9 完整有序 settle，再停止 run |
 | Provider 错误 | `AgentRunResult` 为 provider failure 保留可选 error detail，同时以 `PROVIDER_ERROR` 表达机器可判定终态 | diagnosis/coding/CLI 可按 stop reason 分支并展示诊断信息，不需要重新依赖 exceptional future 或解析日志 |
 
@@ -740,8 +740,28 @@ Conversation 是消息投影，不再承担一次 run 的全部事实记录。ke
 
 ---
 
+### 16.15 AgentSpec 与有界 SubAgentRuntime（2026-07-29）
+
+子 Agent 不再是固定名称、同步等待且只能返回文本的特殊工具实现，而是 kernel 的领域无关运行 primitive。角色静态定义、一次 run 的动态 scope、child session 生命周期和跨层资源账本必须分别建模；diagnosis/coding 只提供角色 spec、领域工具和 payload→VO 映射，不把自己的工作流下沉 kernel。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| 静态角色 | domain `AgentSpec` 持有 `AgentId`、system prompt、`ToolCapabilitySet`、`ModelTier`、budget/limits 与可选 terminal spec | cwd、RunId、cancellation、已消费预算等动态状态不进入 spec；`StructuredAgent` 和各 agent 角色使用同一角色模型 |
+| 能力边界 | `DefaultSubAgentRuntime` 从 parent 授权 catalog 选择 child registry；未知或超出 parent 的 capability 在 spawn 前失败 | child 不能靠 prompt 或自报工具名升级能力；terminal 是无外部副作用的独立退出通道，不能与普通 capability 重名 |
+| 生命周期 | `SubAgentHandle` 代表一个独立 child session；initial/follow-up 串行复用同一 Conversation，每个 segment 生成新的 child RunId 并返回完整 `AgentRunResult` | follow-up 带上既有消息历史；terminal payload 不退化成文本；同一 Conversation 不允许并发 append |
+| 取消方向 | 每个 child segment 创建独立 `CancellationToken`，注册 parent→child 的临时传播；handle cancel 只关闭 child handle | parent cancel 能终止 child LLM 和工具；child cancel 不污染 parent 或下一次 parent run；segment 完成后移除传播注册 |
+| 时间与预算 | child deadline/operation timeout 逐项收窄；分层 `AgentBudgetState` 同时维护 child 本地计数和所有 ancestor 总账 | child 无法放大 parent deadline/budget；child 消费进入 parent；多个并行 child 各自守本地 budget，而 parent 仍有统一总上限 |
+| depth/concurrency | `SubAgentExecutionScope` 显式随 `ExecutionContext` 传播 depth 和共享 quota；runtime 在启动前 acquire，终态后 release | 嵌套深度和 active child 数由硬状态强制，不能靠 prompt；跨 runtime 的嵌套调用也继承更严格的 parent 限制 |
+| model 变化点 | domain port `LlmClientSelector` 解析 provider-neutral `ModelTier`；固定单 client 使用 `fixed` adapter | #47 不引入 provider if/else；实际 retry/fallback/model policy 留 S10 #53 扩展同一 port |
+| 工具兼容 | `SubAgentTool` 只负责把同步 `Tool.execute` 适配到 runtime handle；新构造可配置工具名/描述，legacy 构造仍提供只读兼容 | 通用生命周期只有 runtime 一条事实路径；可写 child adapter 默认保守标记 non-read-only，避免通过外层 permission 隧道提升权限 |
+| 事件边界 | handle 当前显式暴露 parentRunId/childRunId，但不修改 `RunEvent` schema v1 | #47 不偷偷演进持久化 schema；typed interceptor 的关联事件和持久化策略在 S10 #48 明确设计 |
+
+本节不实现 peer 黑板、自动任务拆分、分布式调度、worktree 创建或领域流水线。diagnosis 的假设循环与 coding 的 Planner→Patcher→Reviewer 仍由各自 application 层编排；kernel 只提供受约束 child runtime、结构化退出和资源治理积木。
+
+---
+
 ## 17. 下一步
 
-1. agent-web 切换依赖 `agentkit-agent-diagnosis`，通过 `DiagnoseEngineBuilder` 组装。
-2. 在宿主侧验证 `AgentType.NATIVE`、stop、历史回放、状态快照往返。
-3. 根据真实调用链补齐生产 allowlist、审计 sink 与日志 API 配置。
+1. 按 `TASKLIST.md` S10 顺序实施 #48 typed `AgentInterceptor`，再接 #49 MCP lifecycle/adapters。
+2. 在同一 runtime 不变量上补 #50 background task 与 #51 可恢复 waiting states。
+3. 完成 #52/#53 后，再用 #54 manifest 和 #55 CLI 组合根形成 diagnosis/coding 的统一派发入口。

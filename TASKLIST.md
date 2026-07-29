@@ -20,7 +20,7 @@
 | S8 持久化 | #36–38 | 0.5d | JSONL store + /resume + SessionId |
 | MVP-Gate | #39 | — | 端到端冒烟，打 `v0.1.0-mvp` |
 | S9 Runtime Hardening | #40–46 | 已完成（7/7） | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
-| S10 Runtime Extensions | #47–55 | 进行中（0/9） | 子 Agent、interceptor、MCP、后台任务、暂停恢复、分支、模型策略、manifest、CLI |
+| S10 Runtime Extensions | #47–55 | 进行中（1/9） | 子 Agent、interceptor、MCP、后台任务、暂停恢复、分支、模型策略、manifest、CLI |
 | **MVP 合计** | — | **≈8 人天** | — |
 
 ## 依赖图
@@ -765,7 +765,7 @@ S0 (1→2→3)
 
 ### #47 [S10-Kernel-TDD] AgentSpec + SubAgentRuntime / SubAgentHandle （blockedBy: 40, 42, 43, 44, 46）
 
-**状态**：进行中（Green）。
+**状态**：已完成（2026-07-29）。
 
 **Red**：child capability 必须是 parent 子集；child budget 计入 parent；deadline 不得放大；depth/concurrency 受硬限制；follow-up 复用 child conversation；parent cancel 传播到 child LLM/工具；terminal payload 穿过 child boundary。
 

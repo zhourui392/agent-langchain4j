@@ -52,7 +52,7 @@ class SubAgentToolTest {
     }
 
     @Test
-    void childToolExecutionKeepsParentRunIdentity() {
+    void childToolExecutionUsesIndependentRunIdentity() {
         AtomicReference<ExecutionContext> observed = new AtomicReference<>();
         Tool inspect = contextRecordingTool(observed);
         StubLlmClient llm = new StubLlmClient()
@@ -64,7 +64,7 @@ class SubAgentToolTest {
 
         tool.execute(promptArgs, parent);
 
-        assertThat(observed.get().runId()).isEqualTo(parent.runId());
+        assertThat(observed.get().runId()).isNotEqualTo(parent.runId());
         assertThat(observed.get().workspaceId()).isEqualTo(parent.workspaceId());
     }
 

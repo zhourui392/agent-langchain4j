@@ -1,13 +1,12 @@
 package com.anthropic.agentkit.application.diagnosis;
 
-import com.anthropic.agentkit.domain.port.LlmClient;
+import com.anthropic.agentkit.domain.agent.AgentRunResult;
+import com.anthropic.agentkit.domain.agent.AgentSpec;
+import com.anthropic.agentkit.domain.agent.SubAgentRuntime;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
-import com.anthropic.agentkit.domain.tool.ToolArguments;
-import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.domain.tool.ToolResult;
-import com.anthropic.agentkit.infrastructure.tools.SubAgentTool;
+import com.anthropic.agentkit.domain.tool.ToolResultStatus;
 
-import java.util.Map;
 import java.util.Objects;
 
 import org.slf4j.Logger;
@@ -23,12 +22,12 @@ public final class DiagnosisTaskRunner {
 
     private static final Logger log = LoggerFactory.getLogger(DiagnosisTaskRunner.class);
 
-    private final SubAgentTool taskTool;
+    private final SubAgentRuntime runtime;
+    private final AgentSpec taskSpec;
 
-    public DiagnosisTaskRunner(LlmClient llm, ToolRegistry childTools) {
-        this.taskTool = new SubAgentTool(
-                Objects.requireNonNull(llm, "llm"),
-                Objects.requireNonNull(childTools, "childTools"));
+    public DiagnosisTaskRunner(SubAgentRuntime runtime, AgentSpec taskSpec) {
+        this.runtime = Objects.requireNonNull(runtime, "runtime");
+        this.taskSpec = Objects.requireNonNull(taskSpec, "taskSpec");
     }
 
     /**
@@ -44,7 +43,10 @@ public final class DiagnosisTaskRunner {
         long startNs = System.nanoTime();
         log.info("diagnosis task started: taskType={}, hypothesisId={}",
                 request.taskType(), request.hypothesisId());
-        ToolResult result = taskTool.execute(ToolArguments.of(Map.of("prompt", formatPrompt(request))), context);
+        AgentRunResult childResult = runtime.spawn(
+                        taskSpec, formatPrompt(request), context)
+                .result().toCompletableFuture().join();
+        ToolResult result = toToolResult(childResult);
         long durationMs = (System.nanoTime() - startNs) / 1_000_000L;
         if (!result.success()) {
             log.warn("diagnosis task failed: taskType={}, hypothesisId={}, durationMs={}",
@@ -63,5 +65,16 @@ public final class DiagnosisTaskRunner {
                 "goal: " + request.goal(),
                 "scope: " + request.scopeSummary(),
                 "Return a concise evidence-backed finding.");
+    }
+
+    private static ToolResult toToolResult(AgentRunResult result) {
+        return switch (result.stopReason()) {
+            case MODEL_COMPLETED, TERMINAL_TOOL -> ToolResult.ok(result.finalMessage().text());
+            case CANCELLED -> ToolResult.of(ToolResultStatus.CANCELLED, "sub-agent cancelled");
+            case TIMED_OUT -> ToolResult.of(ToolResultStatus.TIMEOUT, "sub-agent timed out");
+            case BUDGET_EXHAUSTED -> ToolResult.of(
+                    ToolResultStatus.BUDGET_EXHAUSTED, "sub-agent budget exhausted");
+            default -> ToolResult.error("sub-agent stopped: " + result.stopReason());
+        };
     }
 }

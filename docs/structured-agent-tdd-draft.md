@@ -1,6 +1,7 @@
 # StructuredAgent 提取到 kernel —— TDD 草图
 
-> 状态：草图（未实现）。目标是把"受约束跑一轮 agent → 产出结构化 payload"的样板从各 agent 包收进 kernel，作为可复用 SPI。
+> 状态：历史 TDD 草图；`StructuredAgent` 已实现，并在 S10 #47 统一改由 domain `AgentSpec` 描述角色。
+> 下文保留最初提取过程，当前 API 与正式决策以 `DESIGN.md §16.15` 和生产代码为准。
 > 配套原则见 `AGENTS.md` → "kernel 为基座 · agent 逐个扩展"。正式采纳后决策正本进 `DESIGN.md §16`（带日期）。
 
 ## 1. 背景与动机

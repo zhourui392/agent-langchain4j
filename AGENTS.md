@@ -115,8 +115,8 @@ interfaces/cli  →  application  →  domain  ←  infrastructure
 
 ### 依赖纪律（单向）
 - agent 包 **只能单向依赖 kernel，kernel 绝不反向依赖任何 agent 包**。Maven 模块边界 + ArchUnit `kernelHasNoDiagnosisDependency` 已强制；新加 coding 包同此规则。
-- 领域概念不准漏进 kernel：`Evidence`/`Hypothesis`/`DiagnosisPlan` 留诊断包，`Patch`/`ReviewVerdict` 留 coding 包。注意：`SubAgentTool` 的 javadoc 仍有诊断味（"chase one hypothesis"）——代码本身通用（只收 `prompt`），注释应改领域中立。
+- 领域概念不准漏进 kernel：`Evidence`/`Hypothesis`/`DiagnosisPlan` 留诊断包，`Patch`/`ReviewVerdict` 留 coding 包。`SubAgentTool` 的描述和 javadoc 已保持领域中立；后续不得重新引入 diagnosis/coding 术语。
 
-### kernel 待补的两块（让"加 agent"变薄）
-1. **`StructuredAgent`（应抽到 kernel）**：把"受约束跑一轮 → 产出结构化 payload"的样板收掉。现在每个角色（`StructuredDiagnosisPlanner`）都手搓"建终结工具 → 塞 registry → `new AgentExecutor().run(prompt)` → 读 sink"四步。kernel 返回**通用 payload（不认识领域 VO）**，payload→VO 映射留在包里。其构造参数 `(systemPrompt, domainTools, terminalToolSpec)` 即"角色"的物化。落点 `infrastructure/agent/`（与 `SubAgentTool` 同理由：要同时用 application 的 `AgentExecutor` 与 infra 的 `StructuredOutputTool`，只能在 infra）。TDD 草图见 `docs/structured-agent-tdd-draft.md`。
-2. **`AgentManifest`（第二个 agent 真要插入时再上）**：agent 自描述（id / description / entryPoint / requiredConfigKeys），让运行时/CLI 发现与派发，取代 `AgentKitApplication.main` 手工 wiring。先不做，等需要。
+### kernel 扩展基座状态（让"加 agent"变薄）
+1. **`StructuredAgent` + `AgentSpec`（已完成）**：kernel 已收敛"受约束运行 → 结构化 payload"样板；角色用 domain `AgentSpec` 物化 system prompt、能力集、model tier、预算/限制与 terminal spec。kernel 只返回通用 payload，payload→VO 映射留在 agent 包。历史 TDD 草图见 `docs/structured-agent-tdd-draft.md`。
+2. **`AgentManifest`（S10 #54）**：agent 自描述（id / description / entryPoint / requiredConfigKeys），让运行时/CLI 发现与派发，取代 `AgentKitApplication.main` 手工 wiring。等 #47–#53 基座稳定后实施，不引入反射扫描或插件子系统。
