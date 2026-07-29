@@ -650,6 +650,23 @@ listener 是观察者：其异常只记录日志，不改变工具协议结果�
 
 ---
 
+### 16.10 AgentRunResult 与原生终结工具（2026-07-29）
+
+一次 run 的结束是 kernel 的正式领域结果；结构化交接工具不是“执行后再让模型说 done”的普通工具。运行结果不再从 listener、异常文本或日志拼装，listener 只保留事件投影职责。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| 统一终态 | `AgentExecutor.run` 返回 `AgentRunResult`，包含 `RunId`、`StopReason`、最终 assistant message、可选结构化 payload、provider usage 和预算消费 | model completed、terminal、预算耗尽和协议错误可由调用方直接分支；不再维护返回 `AiMessage` 的并行合同 |
+| 终结能力 | `Tool.kind()` 默认 `STANDARD`；`StructuredOutputTool` 明确为 `TERMINAL`，executor 不识别具体工具名 | 新 agent 包可注册自己的终结 schema，kernel 不引入 diagnosis/coding 领域名 |
+| 批次排他 | terminal 必须独占 assistant tool batch；混入普通工具或一次调用多个 terminal 时整批不执行并以 ERROR 配对，run 以 `TOOL_PROTOCOL_ERROR` 结束 | terminal 成功后不会遗留同批副作用；仍满足 §16.9 的完整有序 settle |
+| 成功条件 | 只有 schema 校验和 consumer 接受都成功的 terminal result 才以 `TERMINAL_TOOL` 停止；result 先写入 conversation，再返回 | 校验失败或 consumer 异常生成 ERROR result，模型可在下一轮修正；成功场景 LLM 只调用一次 |
+| Schema 子集 | kernel 严格支持 object/array/string/number/integer/boolean/null、properties/required/additionalProperties/items/enum，以及描述性 `$schema`/title/description/default；未知关键字 fail-fast | 当前 planner/patcher/reviewer/reporter schema 得到递归类型、枚举、嵌套字段和额外字段验证，不宣称实现完整 JSON Schema 标准 |
+| 角色适配 | `StructuredAgent` 直接读取 `AgentRunResult.structuredOutput`；diagnosis 通过 `RunSummaryAdapter` 显式投影 kernel stop reason 与 usage | 结构化角色不再依赖可覆盖 sink 或第二轮响应；diagnosis 的公开 `RunSummary` 保持兼容但只有一个 kernel 终态事实源 |
+
+取消、deadline、provider error 的原生结果化属于 §S9 #44；本节只定义枚举位置，不提前吞掉仍需终止底层 I/O 的异常。
+
+---
+
 ## 17. 下一步
 
 1. agent-web 切换依赖 `agentkit-agent-diagnosis`，通过 `DiagnoseEngineBuilder` 组装。

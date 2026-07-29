@@ -1,6 +1,6 @@
 # AgentKit Kernel：高优先级 Agent Runtime 补齐任务
 
-> 状态：执行中；已纳入 `TASKLIST.md` S9，#40–#41 已完成
+> 状态：执行中；已纳入 `TASKLIST.md` S9，#40–#42 已完成
 >
 > 审计日期：2026-07-29
 >
@@ -36,11 +36,11 @@
 | 流程环节 | 当前 kernel | Claude Code / Codex 对照能力 | 判断 |
 |---|---|---|---|
 | 模型回合 | 已支持流式 LLM → tool batch → result → 下一轮 | 都以可中断、受策略控制的 agent loop 为核心 | happy path 已有 |
-| 工具批次 | 多工具用虚拟线程并发，按原 `tool_use` 顺序回填 | 都要求工具调用拥有明确生命周期、错误和批准结果 | 正常路径完整，异常路径会留下悬空调用 |
-| 终结语义 | `StructuredOutputTool` 只是普通工具，调用后仍继续请求模型 | 结构化交接/任务完成应形成明确 stop reason | 缺失 |
-| Run 作用域 | `ExecutionContext` 固定在 executor/dispatcher，`run` 另收 cancellation | 工作区、审批、会话、沙箱、取消均绑定一次运行 | 分裂，且会传错 cwd/cancellation |
+| 工具批次 | `AssistantTurn` 强制 ID 唯一、完整配对和原顺序回填；预期失败结构化 settle | 都要求工具调用拥有明确生命周期、错误和批准结果 | 已补齐批次协议，持久化事件恢复见 #46 |
+| 终结语义 | `ToolKind.TERMINAL` 独占批次；校验成功并配对后原生停止 | 结构化交接/任务完成应形成明确 stop reason | 已补齐 |
+| Run 作用域 | `AgentRunContext` 统一 run/workspace/session/cancel/budget，executor 可重入 | 工作区、审批、会话、沙箱、取消均绑定一次运行 | 已补齐 L0 运行作用域，安全边界见 #43 |
 | 权限与隔离 | 有 ALLOW/ASK/DENY，但默认 BYPASS；文件路径可越 workspace | 两者都把审批与 sandbox/workspace policy 分开处理 | 权限存在，执行边界不足 |
-| 运行结果 | executor 只返回最后一条 `AiMessage` | stop reason、usage、取消、超时、任务结果都是一等运行结果 | 缺失 |
+| 运行结果 | executor 返回 `AgentRunResult`，含 stop reason、payload、usage 和预算消费 | stop reason、usage、取消、超时、任务结果都是一等运行结果 | 基础终态已补齐，主动取消/超时见 #44 |
 | LLM 取消 | stream callback 中检查 token；provider 等待固定 90 秒 | 运行取消应终止正在进行的模型/工具 I/O | 未闭环 |
 | 上下文 | 有压缩服务，但只有 diagnosis 在 run 前显式调用 | 成熟 runtime 在每轮调用前治理上下文，并可从 overflow 恢复 | 接线分散 |
 | 会话恢复 | 保存消息投影，整文件原子重写 | 支持 resume/fork/checkpoint，并区分已完成和 in-flight action | 仅有消息恢复 |
@@ -313,6 +313,8 @@ final class AssistantTurn {
 ---
 
 ### #42 [Kernel-TDD] `AgentRunResult` + 原生 terminal-tool 退出
+
+**状态**：已完成（2026-07-29）。
 
 **Goal**
 

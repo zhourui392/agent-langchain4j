@@ -9,9 +9,10 @@ import com.anthropic.agentkit.application.diagnosis.DiagnosisReporter;
 import com.anthropic.agentkit.application.diagnosis.PlanGuardMode;
 import com.anthropic.agentkit.application.diagnosis.PlanGuardPolicy;
 import com.anthropic.agentkit.domain.agent.AgentBudget;
-import com.anthropic.agentkit.domain.agent.AgentBudgetExceededException;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.agent.AgentRunResult;
+import com.anthropic.agentkit.domain.agent.AgentUsage;
+import com.anthropic.agentkit.domain.agent.BudgetConsumption;
 import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
@@ -38,7 +39,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.CompletionException;
 import java.util.function.Consumer;
 
 /**
@@ -104,19 +104,23 @@ public final class DiagnosisOrchestrator {
         AgentRunContext context = context(request, conversation, cancel);
         DiagnosisStateListener listener = listener(request, context, onChunk);
         if (planIfConfigured(listener)) {
-            listener.finish(AiMessage.text("Need more information before diagnosis."));
-            return listener.result();
+            AiMessage message = AiMessage.text("Need more information before diagnosis.");
+            listener.finish(message);
+            return listener.result(waitingForInput(context, message));
         }
 
         AgentExecutor executor = new AgentExecutor(llm, tools, permissions(listener));
-        try {
-            AgentRunResult result = executor.run(
-                    conversation, context, listener, systemPrompt).join();
-            finishNonModelStop(listener, result);
-        } catch (CompletionException ex) {
-            handleRunFailure(listener, ex);
-        }
-        return listener.result();
+        AgentRunResult result = executor.run(
+                conversation, context, listener, systemPrompt).join();
+        finishNonModelStop(listener, result);
+        return listener.result(result);
+    }
+
+    private static AgentRunResult waitingForInput(
+            AgentRunContext context, AiMessage finalMessage) {
+        return new AgentRunResult(
+                context.runId(), StopReason.WAITING_FOR_INPUT, finalMessage,
+                Optional.empty(), AgentUsage.zero(), BudgetConsumption.zero());
     }
 
     private static void finishNonModelStop(
@@ -210,15 +214,6 @@ public final class DiagnosisOrchestrator {
                 conversation.sessionId(), Path.of(request.workingDir()), cancel, budget);
     }
 
-    private void handleRunFailure(DiagnosisStateListener listener, CompletionException failure) {
-        Throwable cause = failure.getCause();
-        if (cause instanceof AgentBudgetExceededException budgetExceeded) {
-            listener.finishWithBudgetReport(budgetExceeded.getMessage());
-            return;
-        }
-        throw failure;
-    }
-
     public record Options(AgentBudget budget, DiagnosisStateCodec stateCodec, DiagnosisPlanner planner,
                           DiagnosisReporter reporter, PlanGuardMode guardMode,
                           String promptPack, String skillsCatalog) {
@@ -244,7 +239,6 @@ public final class DiagnosisOrchestrator {
         private final AgentRunContext context;
         private final DiagnosisStateCodec stateCodec;
         private final String sessionId;
-        private RunSummary.Usage usage = RunSummary.Usage.zero();
         private String stateSnapshot = "";
 
         private DiagnosisStateListener(ClaudeStreamJsonListener delegate, DiagnosisCase diagnosisCase,
@@ -313,7 +307,6 @@ public final class DiagnosisOrchestrator {
         @Override
         public void onUsage(int inputTokens, int outputTokens, int cacheReadInputTokens) {
             delegate.onUsage(inputTokens, outputTokens, cacheReadInputTokens);
-            usage = usage.plus(inputTokens, outputTokens, cacheReadInputTokens);
         }
 
         @Override
@@ -365,8 +358,8 @@ public final class DiagnosisOrchestrator {
                     "snapshot", stateSnapshot));
         }
 
-        private OrchestrationResult result() {
-            return new OrchestrationResult(stateSnapshot, usage);
+        private OrchestrationResult result(AgentRunResult runResult) {
+            return new OrchestrationResult(stateSnapshot, runResult);
         }
     }
 }

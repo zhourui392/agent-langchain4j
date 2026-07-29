@@ -104,11 +104,11 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
                 sessionId, request.workingDir(), request.history().size(), !request.stateSnapshot().isBlank());
         try {
             OrchestrationResult result = await(request, conversation, start.control(), onChunk);
-            RunSummary summary = summary(ExitReason.SUCCESS, result, "");
+            RunSummary summary = RunSummaryAdapter.from(result);
             logCompletion(sessionId, startedAt, summary);
             onComplete.accept(summary);
         } catch (RuntimeException ex) {
-            RunSummary summary = summary(exitReason(start.control()), null, errorDetail(ex));
+            RunSummary summary = summary(exitReason(start.control()), errorDetail(ex));
             logIfUnexpectedFailure(sessionId, summary, ex);
             logCompletion(sessionId, startedAt, summary);
             onComplete.accept(summary);
@@ -197,11 +197,8 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
         return timeoutScheduler.schedule(control::timeout, timeoutSeconds, TimeUnit.SECONDS);
     }
 
-    private static RunSummary summary(ExitReason reason, OrchestrationResult result, String errorDetail) {
-        if (result == null) {
-            return new RunSummary(reason, "", RunSummary.Usage.zero(), errorDetail);
-        }
-        return new RunSummary(reason, result.stateSnapshot(), result.usage(), errorDetail);
+    private static RunSummary summary(ExitReason reason, String errorDetail) {
+        return new RunSummary(reason, "", RunSummary.Usage.zero(), errorDetail);
     }
 
     private static ExitReason exitReason(RunningSessions.RunControl control) {
