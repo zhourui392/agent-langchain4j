@@ -4,6 +4,11 @@ import com.anthropic.agentkit.application.diagnosis.DiagnosisPlanner;
 import com.anthropic.agentkit.application.diagnosis.DiagnosisReporter;
 import com.anthropic.agentkit.application.diagnosis.PlanGuardMode;
 import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.AgentId;
+import com.anthropic.agentkit.domain.agent.AgentManifest;
+import com.anthropic.agentkit.domain.agent.CapabilityDescriptor;
+import com.anthropic.agentkit.domain.agent.ConfigKey;
+import com.anthropic.agentkit.domain.agent.ToolCapabilitySet;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.skill.SkillCatalog;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
@@ -26,7 +31,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
+import java.util.LinkedHashSet;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Explicit assembly root for the in-process diagnosis agent.
@@ -51,6 +58,7 @@ public final class DiagnoseEngineBuilder {
     private DiagnosisToolPolicy toolPolicy = DiagnosisToolPolicy.allowAll();
     private String promptPack = "";
     private SkillCatalog skills;
+    private Set<ConfigKey> requiredConfigKeys = Set.of();
 
     private DiagnoseEngineBuilder() {
     }
@@ -95,6 +103,11 @@ public final class DiagnoseEngineBuilder {
 
     public DiagnoseEngineBuilder budget(AgentBudget budget) {
         this.budget = Objects.requireNonNull(budget, "budget");
+        return this;
+    }
+
+    public DiagnoseEngineBuilder requiredConfigKeys(Set<ConfigKey> keys) {
+        this.requiredConfigKeys = Set.copyOf(Objects.requireNonNull(keys, "keys"));
         return this;
     }
 
@@ -149,6 +162,16 @@ public final class DiagnoseEngineBuilder {
         return new DefaultDiagnoseEngine(llm, tools,
                 new DefaultDiagnoseEngine.EngineOptions(
                         budget, planner, reporter, guardMode, promptPack, renderSkillCatalog()));
+    }
+
+    public AgentManifest<RunRequest, RunSummary> buildManifest() {
+        ToolCapabilitySet capabilities = ToolCapabilitySet.copyOf(
+                new LinkedHashSet<>(tools.names()));
+        return new AgentManifest<>(
+                AgentId.of("diagnosis"),
+                "Investigate a scoped operational problem and report evidence",
+                build(), requiredConfigKeys,
+                new CapabilityDescriptor(capabilities, Set.of()));
     }
 
     private void assembleBackendTools() {

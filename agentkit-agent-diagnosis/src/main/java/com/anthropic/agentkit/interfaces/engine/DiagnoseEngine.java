@@ -1,8 +1,11 @@
 package com.anthropic.agentkit.interfaces.engine;
 
+import com.anthropic.agentkit.domain.agent.AgentEntryPoint;
+
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * In-process entry point for the host (agent-web). Signatures use only JDK types
@@ -13,7 +16,24 @@ import java.util.function.IntConsumer;
  * @author zhourui(V33215020)
  * @since 2026-06-08
  */
-public interface DiagnoseEngine extends AutoCloseable {
+public interface DiagnoseEngine extends AgentEntryPoint<RunRequest, RunSummary>, AutoCloseable {
+
+    @Override
+    default Class<RunRequest> requestType() {
+        return RunRequest.class;
+    }
+
+    @Override
+    default Class<RunSummary> resultType() {
+        return RunSummary.class;
+    }
+
+    @Override
+    default RunSummary invoke(RunRequest request) {
+        AtomicReference<RunSummary> result = new AtomicReference<>();
+        run(request, ignored -> { }, result::set);
+        return Objects.requireNonNull(result.get(), "diagnosis run did not complete");
+    }
 
     /**
      * Runs one diagnosis turn and reports the structured terminal state.
