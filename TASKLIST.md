@@ -19,7 +19,7 @@
 | S7 中断 + 流式渲染 | #33–35 | 0.5d | CancellationToken + SIGINT + 实时 token 输出 |
 | S8 持久化 | #36–38 | 0.5d | JSONL store + /resume + SessionId |
 | MVP-Gate | #39 | — | 端到端冒烟，打 `v0.1.0-mvp` |
-| S9 Runtime Hardening | #40–46 | 待评估 | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
+| S9 Runtime Hardening | #40–46 | 进行中（2/7） | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
 | **MVP 合计** | — | **≈8 人天** | — |
 
 ## 依赖图
@@ -669,7 +669,7 @@ S0 (1→2→3)
 
 ### #41 [S9-Kernel-TDD] AssistantTurn / tool batch 完整 settle （blockedBy: 40）
 
-**状态**：待开始。
+**状态**：已完成（2026-07-29）。
 
 **Red**：重复 ToolUseId、pending batch 后追加消息、budget/unknown-tool/invalid-args/permission/listener/cancel 异常路径。
 

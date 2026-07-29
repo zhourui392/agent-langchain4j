@@ -3,11 +3,9 @@ package com.anthropic.agentkit.domain.tool;
 public enum InvocationState {
     PENDING,
     ALLOWED,
-    DENIED,
-    COMPLETED,
-    FAILED;
+    SETTLED;
 
     public boolean isTerminal() {
-        return this == DENIED || this == COMPLETED || this == FAILED;
+        return this == SETTLED;
     }
 }

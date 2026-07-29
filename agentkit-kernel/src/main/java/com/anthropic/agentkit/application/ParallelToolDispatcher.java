@@ -117,8 +117,10 @@ final class ParallelToolDispatcher {
         log.info("permission decision: tool={}, decision={}", tool.name(), decision);
         if (decision == Decision.DENY) {
             log.warn("permission denied: {}", tool.name());
-            invocation.deny();
-            return ToolResult.of(ToolResultStatus.DENIED, "permission denied: " + tool.name());
+            ToolResult denied = ToolResult.of(
+                    ToolResultStatus.DENIED, "permission denied: " + tool.name());
+            invocation.settle(denied);
+            return denied;
         }
         invocation.allow();
         return runTool(tool, invocation);
@@ -131,21 +133,17 @@ final class ParallelToolDispatcher {
         }
         try {
             ToolResult result = tool.execute(invocation.args(), executionContext);
-            if (result.success()) {
-                invocation.complete(result);
-            } else {
-                invocation.fail(result);
-            }
+            invocation.settle(result);
             log.info("tool completed: tool={}, success={}, durationMs={}",
                     tool.name(), result.success(), elapsedMs(startNs));
             return result;
         } catch (CancellationException ex) {
             ToolResult cancelled = failure(ToolResultStatus.CANCELLED, ex, "execution");
-            invocation.fail(cancelled);
+            invocation.settle(cancelled);
             return cancelled;
         } catch (RuntimeException ex) {
             ToolResult failure = failure(ToolResultStatus.ERROR, ex, "execution");
-            invocation.fail(failure);
+            invocation.settle(failure);
             log.error("tool failed: tool={}, errorType={}, message={}",
                     tool.name(), ex.getClass().getSimpleName(), ex.getMessage());
             log.debug("tool failure stack", ex);

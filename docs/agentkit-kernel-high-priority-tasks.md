@@ -1,6 +1,6 @@
 # AgentKit Kernel：高优先级 Agent Runtime 补齐任务
 
-> 状态：审计结论 / 待纳入 `TASKLIST.md`
+> 状态：执行中；已纳入 `TASKLIST.md` S9，#40–#41 已完成
 >
 > 审计日期：2026-07-29
 >
@@ -25,11 +25,11 @@
 
 ## 2. 文档与任务编号约定
 
-- `#40`–`#46` 是本次审计建议的**候选任务 ID**，尚未写入 `TASKLIST.md`。
-- 正式实施前，先给 `TASKLIST.md` 现有 `#1`–`#39` 回填完成状态，再确认这些编号没有冲突。
+- `#40`–`#46` 已正式写入 `TASKLIST.md` S9；实施状态以该文件为准。
+- `#1`–`#39` 的既有完成状态已核对，新增编号没有冲突。
 - 所有标记 `[Kernel-TDD]` 的任务继续遵守仓库的 Red → Green → Refactor 三提交纪律。
 - 本文不会替代 `DESIGN.md` 的架构决策正本。涉及公开 API、退出语义、安全默认值的最终选择，应同步记录到 `DESIGN.md §16`，注明日期。
-- 本次只建立任务文档，不修改生产代码、`TASKLIST.md` 或既有测试。
+- 本文保留审计时的“当前问题与证据”作为历史基线；完成任务后同步更新本页状态、`TASKLIST.md` 与 `DESIGN.md §16`。
 
 ## 3. 当前能力与成熟流程对照
 
@@ -169,6 +169,8 @@ AgentRuntime / AgentExecutor
 
 ### #40 [Kernel-TDD] `AgentRunContext` 单一作用域 + `AgentExecutor` 可重入
 
+**状态**：已完成（2026-07-29）。
+
 **Goal**
 
 让一次 run 的 workspace、取消、预算消费、权限缓存和事件关联拥有单一事实来源；`AgentExecutor` 只持无状态配置，可被多个 run 并发复用。
@@ -238,6 +240,8 @@ record AgentRunContext(
 ---
 
 ### #41 [Kernel-TDD] `AssistantTurn` / tool batch 完整 settle 不变量
+
+**状态**：已完成（2026-07-29）。
 
 **Goal**
 

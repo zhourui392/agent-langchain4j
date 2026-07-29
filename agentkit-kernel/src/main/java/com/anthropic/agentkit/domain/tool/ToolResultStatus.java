@@ -18,4 +18,11 @@ public enum ToolResultStatus {
     public boolean isTerminal() {
         return true;
     }
+
+    public boolean canSettleWithoutPermission() {
+        return switch (this) {
+            case DENIED, UNKNOWN_TOOL, INVALID_ARGUMENTS, BUDGET_EXHAUSTED -> true;
+            case SUCCESS, ERROR, CANCELLED, TIMEOUT -> false;
+        };
+    }
 }

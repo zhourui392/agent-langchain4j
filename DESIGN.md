@@ -486,7 +486,7 @@ agentkit/
 |---|---|---|
 | LangChain4j 的 Anthropic provider 对 `thinking` 块支持滞后 | 思考模式可能不可用 | MVP 不依赖 thinking；P2 评估是否绕过 LC4J 直连 Anthropic SDK |
 | `StreamingChatResponseHandler` 不能主动取消 | Ctrl-C 体验差 | 在 handler 内自查 cancel 标志后丢弃 token；P2 提交 PR 给 LC4J |
-| 工具并发执行需要保持 `tool_result` 顺序 | 模型要求 `tool_use` 和 `tool_result` 一一对应 | 用 `ConcurrentHashMap<ToolUseId, ToolResult>` 聚合，按 `tool_use` 顺序回填 |
+| 工具并发执行需要保持 `tool_result` 顺序 | 模型要求 `tool_use` 和 `tool_result` 一一对应 | 每个 request 独立生成终态 outcome，以有序 future 列表回收并按原批次顺序写入；domain `AssistantTurn` 强制完整配对 |
 | Anthropic prompt cache 命中率取决于消息前缀稳定性 | 成本/延迟 | system prompt 拼接顺序固化在 `SystemPromptComposer`，禁止动态字段插在前面 |
 | Windows 上 ripgrep / bash 不一定有 | 工具不可用 | Bash 工具检测平台用 `cmd.exe`；Grep 工具优先 ripgrep，回退 Java 实现 |
 
@@ -630,6 +630,23 @@ agentkit/
 | agent 包透传 | diagnosis orchestrator 从请求 cwd 构造一次 context；coding pipeline 接收一次 context，按 Planner → Patcher → Reviewer 原样传递 | 领域角色不再读取进程 cwd，且编排规则仍留在各 agent 包 application 层 |
 
 `AgentRunContext` 仍只承载运行能力边界，不承载任意集合或 agent 领域状态。deadline、child limits 等后续运行限制可以演进为明确的 limits VO；不得把全局单例或 `ThreadLocal` 变成事实来源。MDC 只保留日志投影职责。
+
+---
+
+### 16.9 AssistantTurn 工具批次完整结算（2026-07-29）
+
+一次 assistant 响应中的 tool-use 列表是强一致批次，不是若干彼此无关的异步任务。模型进入下一轮前，该批次必须按原顺序、每项恰好一次地写入终态 result；任何预期失败也属于终态，不能以异常跳过消息配对。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| 批次聚合 | domain `AssistantTurn` 持有原始 `ToolUseId` 顺序和 `RECEIVED → SETTLING → SETTLED` 状态 | 重复 ID、乱序 result、pending 时追加 user/assistant 都在 `Conversation.append` 前被拒绝，失败写入不改变 conversation |
+| 结果模型 | `ToolResultStatus` 是终态事实源：SUCCESS / ERROR / DENIED / CANCELLED / TIMEOUT / UNKNOWN_TOOL / INVALID_ARGUMENTS / BUDGET_EXHAUSTED | `ToolResult.success()` 仅是派生便利方法；dispatcher 与 `ToolInvocation` 不再维护另一套 complete/fail 布尔分支 |
+| 分发合同 | dispatcher 输入有序 request，输出等长、有序、全部 terminal 的 `ToolResultMessage` | unknown tool、参数解析、permission、listener、工具异常和取消都独立结算；单个 worker 不能击穿整批 |
+| 预算拒绝 | assistant tool-use 已写入后发生预算拒绝时，整批写入 `BUDGET_EXHAUSTED`，随后才继续或结束 run | maxToolCalls/input token 超限不再制造孤儿 tool-use |
+| Provider 映射 | LangChain4j 升级到 1.18；粗粒度错误写 `isError`，详细 status 与 metadata 写 message attributes | Anthropic/OpenAI adapter 保留通用错误语义，不需要解析错误文本 |
+| 会话兼容 | JSONL 新记录持久化 status/metadata；旧 tool-result 缺 status 时明确默认为 SUCCESS | 已有 session 可继续读取，新会话可无损恢复工具终态 |
+
+listener 是观察者：其异常只记录日志，不改变工具协议结果。若未来引入可阻断 interceptor，必须通过明确的 `ToolResultStatus` 结算，而不能通过抛异常绕开 batch。
 
 ---
 

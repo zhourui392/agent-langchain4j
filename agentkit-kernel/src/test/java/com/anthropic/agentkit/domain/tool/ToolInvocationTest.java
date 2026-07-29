@@ -15,40 +15,43 @@ class ToolInvocationTest {
     }
 
     @Test
-    void transitionsAllowedToCompleted() {
+    void transitionsAllowedToSettled() {
         ToolInvocation inv = pendingBash();
         inv.allow();
         assertThat(inv.state()).isEqualTo(InvocationState.ALLOWED);
 
-        inv.complete(ToolResult.ok("done"));
-        assertThat(inv.state()).isEqualTo(InvocationState.COMPLETED);
+        inv.settle(ToolResult.ok("done"));
+        assertThat(inv.state()).isEqualTo(InvocationState.SETTLED);
         assertThat(inv.result()).isEqualTo(ToolResult.ok("done"));
     }
 
     @Test
     void cannotCompleteWithoutPermissionDecision() {
         ToolInvocation inv = pendingBash();
-        assertThatThrownBy(() -> inv.complete(ToolResult.ok("done")))
+        assertThatThrownBy(() -> inv.settle(ToolResult.ok("done")))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("PENDING");
     }
 
     @Test
-    void deniedIsTerminalAndProducesError() {
+    void deniedSettlesWithoutAllowingExecution() {
         ToolInvocation inv = pendingBash();
-        inv.deny();
-        assertThat(inv.state()).isEqualTo(InvocationState.DENIED);
+        ToolResult denied = ToolResult.of(ToolResultStatus.DENIED, "denied");
 
+        inv.settle(denied);
+
+        assertThat(inv.state()).isEqualTo(InvocationState.SETTLED);
+        assertThat(inv.result()).isEqualTo(denied);
         assertThatThrownBy(inv::allow)
                 .isInstanceOf(IllegalStateException.class);
     }
 
     @Test
-    void failTransitionsFromAllowed() {
+    void errorTransitionsFromAllowedToSettled() {
         ToolInvocation inv = pendingBash();
         inv.allow();
-        inv.fail(ToolResult.error("boom"));
-        assertThat(inv.state()).isEqualTo(InvocationState.FAILED);
+        inv.settle(ToolResult.error("boom"));
+        assertThat(inv.state()).isEqualTo(InvocationState.SETTLED);
         assertThat(inv.result()).isEqualTo(ToolResult.error("boom"));
     }
 
@@ -61,18 +64,18 @@ class ToolInvocationTest {
     }
 
     @Test
-    void cannotFailFromPending() {
+    void executionErrorCannotSettleFromPending() {
         ToolInvocation inv = pendingBash();
-        assertThatThrownBy(() -> inv.fail(ToolResult.error("boom")))
+        assertThatThrownBy(() -> inv.settle(ToolResult.error("boom")))
                 .isInstanceOf(IllegalStateException.class);
     }
 
     @Test
-    void completedIsTerminal() {
+    void settledInvocationRejectsAnotherOutcome() {
         ToolInvocation inv = pendingBash();
         inv.allow();
-        inv.complete(ToolResult.ok("done"));
-        assertThatThrownBy(() -> inv.fail(ToolResult.error("late")))
+        inv.settle(ToolResult.ok("done"));
+        assertThatThrownBy(() -> inv.settle(ToolResult.error("late")))
                 .isInstanceOf(IllegalStateException.class);
     }
 

@@ -36,21 +36,14 @@ public final class ToolInvocation {
         state = InvocationState.ALLOWED;
     }
 
-    public void deny() {
-        requireState(InvocationState.PENDING, "deny");
-        state = InvocationState.DENIED;
-    }
-
-    public void complete(ToolResult result) {
-        requireState(InvocationState.ALLOWED, "complete");
-        this.result = Objects.requireNonNull(result, "result");
-        state = InvocationState.COMPLETED;
-    }
-
-    public void fail(ToolResult result) {
-        requireState(InvocationState.ALLOWED, "fail");
-        this.result = Objects.requireNonNull(result, "result");
-        state = InvocationState.FAILED;
+    public void settle(ToolResult outcome) {
+        Objects.requireNonNull(outcome, "outcome");
+        InvocationState expected = outcome.status().canSettleWithoutPermission()
+                ? InvocationState.PENDING
+                : InvocationState.ALLOWED;
+        requireState(expected, "settle as " + outcome.status());
+        result = outcome;
+        state = InvocationState.SETTLED;
     }
 
     private void requireState(InvocationState expected, String action) {
