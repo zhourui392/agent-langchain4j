@@ -135,7 +135,10 @@ class AgentExecutorBoundedOperationsTest {
         AgentRunContext parent = runContext(conversation, new CancellationToken(), budget);
         com.anthropic.agentkit.infrastructure.tools.SubAgentTool child =
                 new com.anthropic.agentkit.infrastructure.tools.SubAgentTool(
-                        llm, new ToolRegistry().register(immediateTool("Inspect")));
+                        llm, new ToolRegistry().register(immediateTool("Inspect")),
+                        AgentBudget.unlimited(), new AgentRunLimits(
+                        RunDeadline.after(Duration.ofSeconds(2)),
+                        Duration.ofSeconds(2), Duration.ofSeconds(2)));
 
         ToolResult result = child.execute(
                 ToolArguments.of(java.util.Map.of("prompt", "inspect")), parent.executionContext());
@@ -154,7 +157,10 @@ class AgentExecutorBoundedOperationsTest {
                 .withLimits(limits(Duration.ofMillis(30)));
         com.anthropic.agentkit.infrastructure.tools.SubAgentTool child =
                 new com.anthropic.agentkit.infrastructure.tools.SubAgentTool(
-                        llm, new ToolRegistry());
+                        llm, new ToolRegistry(), AgentBudget.unlimited(),
+                        new AgentRunLimits(
+                                RunDeadline.after(Duration.ofSeconds(2)),
+                                Duration.ofSeconds(2), Duration.ofSeconds(2)));
 
         ToolResult result = child.execute(
                 ToolArguments.of(java.util.Map.of("prompt", "wait")), parent.executionContext());

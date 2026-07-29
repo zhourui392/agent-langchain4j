@@ -1,6 +1,6 @@
 # AgentKit Kernel：高优先级 Agent Runtime 补齐任务
 
-> 状态：执行中；已纳入 `TASKLIST.md` S9，#40–#43 已完成
+> 状态：执行中；已纳入 `TASKLIST.md` S9，#40–#44 已完成
 >
 > 审计日期：2026-07-29
 >
@@ -41,7 +41,7 @@
 | Run 作用域 | `AgentRunContext` 统一 run/workspace/session/cancel/budget/secret provider，executor 可重入 | 工作区、审批、会话、沙箱、取消均绑定一次运行 | 已补齐 L0 运行作用域与文件边界 |
 | 权限与隔离 | 默认交互授权；cache 绑定 run/workspace/tool/完整参数；文件工具强制 real-path boundary | 两者都把审批与 sandbox/workspace policy 分开处理 | L0 文件与审批边界已补齐；Bash 仍非 sandbox |
 | 运行结果 | executor 返回 `AgentRunResult`，含 stop reason、payload、usage 和预算消费 | stop reason、usage、取消、超时、任务结果都是一等运行结果 | 基础终态已补齐，主动取消/超时见 #44 |
-| LLM 取消 | stream callback 中检查 token；provider 等待固定 90 秒 | 运行取消应终止正在进行的模型/工具 I/O | 未闭环 |
+| LLM 取消 | `LlmCall` 提供 completion/cancel；deadline、provider/tool timeout、late callback 隔离均由 run scope 统一控制 | 运行取消应终止正在进行的模型/工具 I/O | 已补齐 kernel 终态与 best-effort provider 取消；SDK 无原生 cancel handle 的限制已记录 |
 | 上下文 | 有压缩服务，但只有 diagnosis 在 run 前显式调用 | 成熟 runtime 在每轮调用前治理上下文，并可从 overflow 恢复 | 接线分散 |
 | 会话恢复 | 保存消息投影，整文件原子重写 | 支持 resume/fork/checkpoint，并区分已完成和 in-flight action | 仅有消息恢复 |
 | 子 Agent | 有同步、只读、文本返回的 `SubAgentTool` | 支持角色、模型、预算、取消、跟进和独立生命周期 | 可用原型，后续任务 |
@@ -492,6 +492,8 @@ record PermissionRule(
 
 ### #44 [Kernel-TDD] 可取消 `LlmCall` + run-scoped timeout/output budget
 
+**状态**：已完成（2026-07-29）。
+
 **Goal**
 
 让取消和超时能终止正在进行的 LLM I/O，而不只是等下一段 token；统一模型、工具和子 Agent 的 run-scoped 限制。
@@ -546,6 +548,15 @@ interface LlmClient {
 - 无 token 输出的挂起模型调用可在 deadline 内被取消。
 - timeout 后不会出现第二次完成、late event 污染已结束 run 或未释放 latch/thread。
 - 所有等待均来自 context/config，不存在不可配置的 runtime 魔法常量。
+
+**完成结果**
+
+- domain port 现在返回具备 `completion()` / 幂等 `cancel()` 的 `LlmCall`；complete、error、cancel 只有一个原子终态，取消后 provider 的 partial/usage/complete/error callback 均被隔离。
+- `LangChain4jLlmClient` 删除内部固定 90 秒 latch 等待并立即返回 call。LangChain4j 1.18 的 `StreamingChatModel.chat` 返回 `void`、不暴露原生 request handle，因此 adapter 只能 best-effort 结束 kernel call 并忽略迟到 callback，不能虚构底层 HTTP 已被 SDK 取消。
+- `AgentRunLimits` 把单调 run deadline、provider timeout 和 tool timeout 放进显式 run scope；diagnosis 的 timeout 也改为同一 deadline，不再另起 scheduler 把 timeout 伪装成普通 stop。
+- `AgentBudget` 增加 output token/character 上限；stream characters 与 provider usage 分开记账且各只计一次。`AgentBudgetState` 由 parent/child 共享，child 即使请求 unlimited 也会被 parent budget/deadline 取最小值。
+- dispatcher 的必经工具执行路径应用 run-scoped timeout，超时写 `ToolResultStatus.TIMEOUT`；若 run 在 tool batch 内取消或超时，所有 tool-use 仍先完整有序 settle，再返回 `CANCELLED` / `TIMED_OUT`。
+- `AgentRunResult` 保留 provider error detail，调用方不需要恢复成异常文本分支即可同时判断 `PROVIDER_ERROR` 和诊断信息。
 
 **blockedBy**：#40、#42。
 

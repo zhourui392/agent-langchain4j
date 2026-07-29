@@ -5,7 +5,6 @@ import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Registry of in-flight runs keyed by host session id, so {@code stop} and
@@ -50,7 +49,6 @@ final class RunningSessions {
     static final class RunControl {
 
         private final CancellationToken token = new CancellationToken();
-        private final AtomicBoolean timedOut = new AtomicBoolean();
 
         CancellationToken token() {
             return token;
@@ -60,17 +58,9 @@ final class RunningSessions {
             return token.isCancelled();
         }
 
-        boolean isTimedOut() {
-            return timedOut.get();
-        }
-
         void cancel() {
             token.cancel();
         }
 
-        void timeout() {
-            timedOut.set(true);
-            token.cancel();
-        }
     }
 }

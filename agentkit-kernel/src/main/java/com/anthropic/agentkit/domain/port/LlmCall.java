@@ -17,9 +17,16 @@ public interface LlmCall {
 
     static LlmCall start(LlmClient.StreamHandler handler,
                          Consumer<LlmClient.StreamHandler> starter) {
+        return start(handler, starter, () -> { });
+    }
+
+    static LlmCall start(LlmClient.StreamHandler handler,
+                         Consumer<LlmClient.StreamHandler> starter,
+                         Runnable cancelAction) {
         Objects.requireNonNull(handler, "handler");
         Objects.requireNonNull(starter, "starter");
-        ManagedCall call = new ManagedCall(handler);
+        Objects.requireNonNull(cancelAction, "cancelAction");
+        ManagedCall call = new ManagedCall(handler, cancelAction);
         try {
             starter.accept(call.guardedHandler());
         } catch (Throwable failure) {
@@ -34,13 +41,15 @@ public interface LlmCall {
 
     final class ManagedCall implements LlmCall {
         private final LlmClient.StreamHandler downstream;
+        private final Runnable cancelAction;
         private final CompletableFuture<AiMessage> completion = new CompletableFuture<>();
         private final Object lifecycleLock = new Object();
         private boolean terminal;
         private final LlmClient.StreamHandler guarded = new GuardedHandler();
 
-        private ManagedCall(LlmClient.StreamHandler downstream) {
+        private ManagedCall(LlmClient.StreamHandler downstream, Runnable cancelAction) {
             this.downstream = downstream;
+            this.cancelAction = cancelAction;
         }
 
         private LlmClient.StreamHandler guardedHandler() {
@@ -60,7 +69,16 @@ public interface LlmCall {
                 }
                 terminal = true;
                 completion.cancel(false);
-                return true;
+            }
+            runCancelAction();
+            return true;
+        }
+
+        private void runCancelAction() {
+            try {
+                cancelAction.run();
+            } catch (RuntimeException ignored) {
+                // The kernel terminal outcome already won; provider cancellation is best effort.
             }
         }
 

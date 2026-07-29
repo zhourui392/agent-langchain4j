@@ -384,18 +384,25 @@ class DefaultDiagnoseEngineTest {
         final CountDownLatch entered = new CountDownLatch(1);
         final CountDownLatch release = new CountDownLatch(1);
         final AtomicInteger calls = new AtomicInteger();
+        final AtomicReference<Thread> worker = new AtomicReference<>();
 
         @Override
         public LlmCall streamChat(ChatRequest request, StreamHandler handler) {
             calls.incrementAndGet();
             entered.countDown();
-            return LlmCall.start(handler, guarded -> Thread.startVirtualThread(() -> {
-                for (int i = 0; i < 2000 && release.getCount() > 0; i++) {
+            return LlmCall.start(handler, guarded -> worker.set(Thread.startVirtualThread(() -> {
+                for (int i = 0; i < 2000 && release.getCount() > 0
+                        && !Thread.currentThread().isInterrupted(); i++) {
                     guarded.onPartialText(".");
                     sleepQuietly();
                 }
                 guarded.onComplete(AiMessage.text("done"));
-            }));
+            })), () -> {
+                Thread running = worker.get();
+                if (running != null) {
+                    running.interrupt();
+                }
+            });
         }
 
         private static void sleepQuietly() {

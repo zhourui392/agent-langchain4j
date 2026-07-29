@@ -204,7 +204,7 @@ public final class AgentExecutor {
             return LlmTurnOutcome.failed(StopReason.PROVIDER_ERROR, messageOf(failure));
         }
         try {
-            LlmTurnOutcome result = awaitLlm(call, context, budgetGuard);
+            LlmTurnOutcome result = awaitLlm(call, context);
             log.info("llm request finished: durationMs={}, stopReason={}",
                     elapsedMs(startNs), result.stopReason().orElse(null));
             return result;
@@ -213,8 +213,7 @@ public final class AgentExecutor {
         }
     }
 
-    private LlmTurnOutcome awaitLlm(
-            LlmCall call, AgentRunContext context, AgentBudgetGuard budgetGuard) {
+    private LlmTurnOutcome awaitLlm(LlmCall call, AgentRunContext context) {
         long waitNanos = context.limits().providerWait().toNanos();
         if (waitNanos <= 0) {
             call.cancel();
@@ -263,11 +262,11 @@ public final class AgentExecutor {
     }
 
     private static Optional<StopReason> boundedStop(AgentRunContext context) {
-        if (context.cancellation().isCancelled()) {
-            return Optional.of(StopReason.CANCELLED);
-        }
         if (context.limits().deadline().isExpired()) {
             return Optional.of(StopReason.TIMED_OUT);
+        }
+        if (context.cancellation().isCancelled()) {
+            return Optional.of(StopReason.CANCELLED);
         }
         return Optional.empty();
     }

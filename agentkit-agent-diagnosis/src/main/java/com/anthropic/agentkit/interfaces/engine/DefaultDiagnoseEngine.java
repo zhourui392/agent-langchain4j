@@ -182,9 +182,6 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
     }
 
     private static ExitReason exitReason(RunningSessions.RunControl control) {
-        if (control.isTimedOut()) {
-            return ExitReason.TIMEOUT;
-        }
         if (control.isCancelled()) {
             return ExitReason.STOPPED;
         }

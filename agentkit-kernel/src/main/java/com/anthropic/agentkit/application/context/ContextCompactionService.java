@@ -3,7 +3,6 @@ package com.anthropic.agentkit.application.context;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
 import com.anthropic.agentkit.domain.conversation.TokenBudget;
-import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.ChatMessage;
 import com.anthropic.agentkit.domain.message.Role;
 import com.anthropic.agentkit.domain.message.ToolResultMessage;

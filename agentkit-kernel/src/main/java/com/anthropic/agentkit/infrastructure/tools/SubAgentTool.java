@@ -6,6 +6,8 @@ import com.anthropic.agentkit.application.InteractivePrompter;
 import com.anthropic.agentkit.application.PermissionService;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.agent.AgentRunResult;
+import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.AgentRunLimits;
 import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
@@ -45,10 +47,23 @@ public final class SubAgentTool implements Tool {
 
     private final LlmClient llm;
     private final ToolRegistry childTools;
+    private final AgentBudget childBudget;
+    private final AgentRunLimits childLimits;
 
     public SubAgentTool(LlmClient llm, ToolRegistry childTools) {
+        this(llm, childTools, null, null);
+    }
+
+    public SubAgentTool(LlmClient llm, ToolRegistry childTools,
+                        AgentBudget childBudget, AgentRunLimits childLimits) {
         this.llm = Objects.requireNonNull(llm, "llm");
         this.childTools = Objects.requireNonNull(childTools, "childTools");
+        if ((childBudget == null) != (childLimits == null)) {
+            throw new IllegalArgumentException(
+                    "childBudget and childLimits must be configured together");
+        }
+        this.childBudget = childBudget;
+        this.childLimits = childLimits;
     }
 
     @Override
@@ -105,8 +120,11 @@ public final class SubAgentTool implements Tool {
         return new AgentExecutor(llm, childTools, permissions);
     }
 
-    private static AgentRunContext childContext(ExecutionContext parent, SessionId childSession) {
-        return AgentRunContext.childOf(parent, childSession);
+    private AgentRunContext childContext(ExecutionContext parent, SessionId childSession) {
+        if (childBudget == null || childLimits == null) {
+            return AgentRunContext.childOf(parent, childSession);
+        }
+        return AgentRunContext.childOf(parent, childSession, childBudget, childLimits);
     }
 
     private static String failureMessage(ExecutionContext ctx, CompletionException ex) {

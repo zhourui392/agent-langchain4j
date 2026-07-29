@@ -1,7 +1,6 @@
 package com.anthropic.agentkit.application;
 
 import com.anthropic.agentkit.domain.agent.AgentBudget;
-import com.anthropic.agentkit.domain.agent.AgentBudgetExceededException;
 import com.anthropic.agentkit.domain.agent.AgentBudgetState;
 import com.anthropic.agentkit.domain.agent.AgentUsage;
 import com.anthropic.agentkit.domain.agent.BudgetConsumption;

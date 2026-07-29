@@ -11,17 +11,18 @@ public final class AgentBudgetState {
     private long cacheReadInputTokens;
 
     public synchronized void reserveTurn(AgentBudget budget) {
-        if (budget.exceedsTurns(turns + 1)) {
+        if (turns == Integer.MAX_VALUE || budget.exceedsTurns(turns + 1)) {
             throw exceeded("maxTurns", budget.maxTurns());
         }
         turns++;
     }
 
     public synchronized void reserveToolCalls(AgentBudget budget, int requested) {
-        if (budget.exceedsToolCalls(toolCalls + requested)) {
+        long next = (long) toolCalls + requested;
+        if (next > Integer.MAX_VALUE || budget.exceedsToolCalls((int) next)) {
             throw exceeded("maxToolCalls", budget.maxToolCalls());
         }
-        toolCalls += requested;
+        toolCalls = (int) next;
     }
 
     public synchronized void recordUsage(int input, int output, int cacheReadInput) {

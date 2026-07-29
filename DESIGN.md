@@ -685,6 +685,24 @@ L0 单用户/worktree 运行时必须同时具备两种性质不同的控制：p
 
 ---
 
+### 16.12 可取消 LLM 调用、run deadline 与共享预算（2026-07-29）
+
+取消、超时和预算耗尽是一次 run 的正式终态，不再依靠“下一段 token 到达时顺便检查”或 provider adapter 内部固定等待。所有模型、工具和子 Agent 操作从同一个 `AgentRunContext` 取得限制，先赢得终态竞争的一方是唯一结果。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| LLM port | `LlmClient.streamChat` 返回 `LlmCall`，暴露 completion 与幂等 cancel；受控 handler 线性化 COMPLETE / ERROR / CANCEL | 首 token 前也能取消；完成、错误和取消至多一个生效；run 结束后的 partial/usage/terminal callback 不再污染 listener、usage 或 conversation |
+| LangChain4j 边界 | 删除 adapter 内固定 90 秒 `CountDownLatch`；timeout 由调用 context 决定 | LangChain4j 1.18 的 streaming API 返回 `void` 且无原生 cancel handle，当前 cancel 是 kernel 终态与 callback 隔离层面的 best effort；不能声称 SDK 已终止底层 HTTP 请求 |
+| 时间限制 | `AgentRunLimits` 明确区分单调 run deadline、单次 provider timeout 和单次 tool timeout；实际等待始终取 operation timeout 与 deadline 剩余时间的较小值 | 默认值是命名配置，不再散落 runtime 魔法常量；diagnosis request timeout 直接物化为 run deadline，`TIMED_OUT` 与用户 `CANCELLED` 可稳定区分 |
+| 输出预算 | `AgentBudget` 增加 max output tokens 与 max output characters；provider usage 只累计 token，stream delta 只累计 characters | 不重复用最终 message 再计量；字符上限可在 streaming 中主动终止，token 上限在 provider usage 到达后以 `BUDGET_EXHAUSTED` 结束 |
+| 父子配额 | `AgentBudgetState` 是 parent/child 共享的线程安全 ledger；child budget/limits 与 parent 逐项取最小值 | child 的 turn、tool、token、character 消费计入同一总账；child 可以收紧限制，但请求 unlimited 不能放大 parent 能力 |
+| 工具终态 | dispatcher 必经路径对每个工具应用 run-scoped timeout/cancel，governance decorator 只能进一步收紧 | TIMEOUT/CANCELLED 都形成结构化 result；即使 deadline 在 batch 内到达，也先按 §16.9 完整有序 settle，再停止 run |
+| Provider 错误 | `AgentRunResult` 为 provider failure 保留可选 error detail，同时以 `PROVIDER_ERROR` 表达机器可判定终态 | diagnosis/coding/CLI 可按 stop reason 分支并展示诊断信息，不需要重新依赖 exceptional future 或解析日志 |
+
+`LlmCall` 的实现必须迅速返回 handle，且 cancel 之后不得再向下游投递 callback。某个 provider SDK 将来若暴露真实 request cancel handle，adapter 应把同一个 cancel 动作继续下传；kernel 合同和调用方无需改变。
+
+---
+
 ## 17. 下一步
 
 1. agent-web 切换依赖 `agentkit-agent-diagnosis`，通过 `DiagnoseEngineBuilder` 组装。
