@@ -113,12 +113,12 @@ interfaces/cli  →  application  →  domain  ←  infrastructure
 > 扩展方向原则。`agentkit-kernel` 是基座（agent 运行时 + SPI），每个 agent 是 kernel 之上的一个**包**。`agentkit-agent-diagnosis` 是第一个 agent 包；"Devin 式多角色协作开发" 不是独立产品，而是**另一个平级的 agent 包**（会编排子 Agent 的 coding agent），复用同一套 kernel。
 
 ### 职责边界
-- **kernel 提供（领域无关、稳定）**：`AgentExecutor` 回合循环、`ParallelToolDispatcher`；扩展点 SPI —— `Tool`、context-aware `ToolCatalog`、`SubAgentTool`（起隔离子 Agent）、`StructuredOutputTool`（终结工具/结构化交接）、typed `AgentInterceptor`（进程内生命周期策略）、`ContextProvider`、`PermissionPolicy`、`RunSuspensionStore`、`SessionBranchStore`、`FileCheckpointProvider`、`BackgroundTaskLauncher`、`ArtifactStore`；provider-neutral `ModelPolicy`/`RetryPolicy`/`ModelIdentity`、`ToolSafety`/`ToolSideEffect`、`AgentBudget`（含 LLM attempt 配额）、`RunSuspension`/`ResumeCommand`、`SessionBranch`/`RewindResult`、`TaskHandle`/output cursor、`governance/`（审计/脱敏）及 scope-keyed MCP lifecycle。
-- **每个 agent 包提供（领域特定）**：领域工具（`DubboInvokeTool`/`EsReadTool`…）、终结工具 schema、领域 VO（交接载体，如 `DiagnosisPlan`，未来 `Patch`/`ReviewVerdict`）、payload→VO 映射、**自己的 orchestrator**。
+- **kernel 提供（领域无关、稳定）**：`AgentExecutor` 回合循环、`ParallelToolDispatcher`；扩展点 SPI —— `AgentManifest`/`AgentEntryPoint`、`Tool`、context-aware `ToolCatalog`、`SubAgentTool`（起隔离子 Agent）、`StructuredOutputTool`（终结工具/结构化交接）、typed `AgentInterceptor`（进程内生命周期策略）、`ContextProvider`、`PermissionPolicy`、`RunSuspensionStore`、`SessionBranchStore`、`FileCheckpointProvider`、`BackgroundTaskLauncher`、`ArtifactStore`；provider-neutral `ModelPolicy`/`RetryPolicy`/`ModelIdentity`、`ToolSafety`/`ToolSideEffect`、`AgentBudget`（含 LLM attempt 配额）、`RunSuspension`/`ResumeCommand`、`SessionBranch`/`RewindResult`、`TaskHandle`/output cursor、`governance/`（审计/脱敏）及 scope-keyed MCP lifecycle。
+- **每个 agent 包提供（领域特定）**：自己的 concrete manifest/typed entry point、领域工具（`DubboInvokeTool`/`EsReadTool`…）、终结工具 schema、领域 VO（交接载体，如 `DiagnosisPlan`，未来 `Patch`/`ReviewVerdict`）、payload→VO 映射、**自己的 orchestrator**。
 - **编排不下沉 kernel**：诊断循环（假设→取证→更新计划）与写码循环（拆任务→改→评审→打回）是不同领域工作流 = 业务规则，按分层纪律留在各包 application 层。kernel 只给积木（`SubAgentTool`/`StructuredOutputTool`），不给工作流——内置某种编排会被某个领域的形状污染。
 
 ### 依赖纪律（单向）
-- agent 包 **只能单向依赖 kernel，kernel 绝不反向依赖任何 agent 包**。Maven 模块边界 + ArchUnit `kernelHasNoDiagnosisDependency` 已强制；新加 coding 包同此规则。
+- agent 包 **只能单向依赖 kernel，kernel 绝不反向依赖任何 agent 包**。Maven 模块边界 + ArchUnit `kernelHasNoAgentModuleDependency` 已强制；diagnosis/coding 包之间另有双向禁止规则。
 - 领域概念不准漏进 kernel：`Evidence`/`Hypothesis`/`DiagnosisPlan` 留诊断包，`Patch`/`ReviewVerdict` 留 coding 包。`SubAgentTool` 的描述和 javadoc 已保持领域中立；后续不得重新引入 diagnosis/coding 术语。
 
 ### kernel 扩展基座状态（让"加 agent"变薄）
@@ -129,4 +129,4 @@ interfaces/cli  →  application  →  domain  ←  infrastructure
 5. **resumable run suspension（S10 #51，已完成）**：`RunSuspension`/`ResumeCommand` 是 CLI/Web 共用 typed contract；完整 permission batch 在执行前一次规划，ASK 持久化后返回 waiting。token 以 digest 定位并原子 single-use claim，approval 首段不污染 Conversation，input answer 作为新 event/message；CLI 在首段结束后提示并以新 RunId 恢复。
 6. **append-only session branch（S10 #52，已完成）**：fork/rewind 引用 immutable run event pointer 并只创建 child branch；`FileWrite`/`FileEdit` 写前捕获 owner-scoped checkpoint，rewind 逆序补偿且显式返回 unrestored/residual。一般 mutating、Bash/MCP 默认 non-reversible，worktree/通用事务不下沉 kernel。
 7. **provider-neutral model/retry policy（S10 #53，已完成）**：逻辑 turn 与物理 LLM attempt 分账；只有 typed transient/rate-limit failure 可在完整 assistant turn 前有限重试。fallback 默认关闭，实际 provider/model 与 attempt/token usage 进入 `RunStopped` 审计；authentication/schema/context overflow 不混入通用 retry，工具和外部副作用不 replay。
-8. **`AgentManifest`（S10 #54）**：agent 自描述（id / description / entryPoint / requiredConfigKeys），让运行时/CLI 发现与派发，取代 `AgentKitApplication.main` 手工 wiring。等 #47–#53 基座稳定后实施，不引入反射扫描或插件子系统。
+8. **typed `AgentManifest`（S10 #54，已完成）**：kernel 只提供泛型 manifest/entry-point/config/capability SPI；agent 包各自提供 manifest 和强类型请求/结果，platform `AgentRegistry` 显式注册、拒绝 duplicate ID，并在调用前校验 required config 与 request/result type。coding 由 `CodingEngineBuilder` 封装三角色装配；不使用反射扫描、Spring/Guice 或插件子系统。

@@ -37,7 +37,7 @@ public final class StructuredCodingPlanner implements CodingPlanner {
 
     private static final Logger log = LoggerFactory.getLogger(StructuredCodingPlanner.class);
 
-    private static final String TOOL_NAME = "update_plan";
+    static final String TOOL_NAME = "update_plan";
     private static final String PLAN_SCHEMA = """
             {"type":"object","properties":{\
             "problemStatement":{"type":"string"},\

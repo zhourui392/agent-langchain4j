@@ -1,6 +1,6 @@
 # AgentKit Kernel：非高优先级与后续 Agent Runtime 任务
 
-> 状态：`#47–#53` 已完成，下一项为 `#54`；随后按 `#55` 继续交付，`#56` 保持条件触发候选
+> 状态：`#47–#54` 已完成，下一项为 `#55`；`#56` 保持条件触发候选
 >
 > 审计日期：2026-07-29
 >
@@ -56,7 +56,7 @@
                  └─→ #55 CLI composition cleanup
 ```
 
-建议交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`；当前 `#47–#53` 已完成，下一项为 `#54`。`#56` 独立按日志规模或多 writer 需求触发，不为“对齐产品功能表”提前实现没有消费方的扩展。
+建议交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`；当前 `#47–#54` 已完成，下一项为 `#55`。`#56` 独立按日志规模或多 writer 需求触发，不为“对齐产品功能表”提前实现没有消费方的扩展。
 
 ## 4. 变化点地图
 
@@ -69,7 +69,7 @@
 | 用户问题和计划批准 | typed suspension、完整 permission preflight、单次 token claim 与 CLI host adapter 已落地 | `RunSuspension` + `RunSuspensionStore` + `ResumeCommand` | #51（已完成） |
 | fork/rewind/checkpoint | immutable parent pointer、append-only branch journal、typed side effect 与文件补偿已落地 | `SessionBranchService` + `FileCheckpointProvider` | #52（已完成） |
 | provider retry/fallback | typed failure、有限退避、attempt budget、实际 model usage 已落地 | `ModelPolicy` / `RetryPolicy` | #53（已完成） |
-| Agent 发现与派发 | 手工 wiring、模块专属 builder | `AgentManifest`/registry（平台层） | #54 |
+| Agent 发现与派发 | typed manifest/SPI、显式 platform registry、diagnosis/coding 正式入口已落地 | `AgentManifest` + `AgentRegistry` | #54（已完成） |
 | CLI 命令和取消接线 | `AgentKitApplication.main`、slash commands | CLI composition root | #55 |
 | 事件日志规模与多 writer | 文件 append 前全量读取校验、实例内同步、无 retention | tail index + writer fencing + retention/rotation policy | #56 |
 
@@ -593,7 +593,7 @@ sealed interface RunSuspension {
 
 ### #54 [Platform-Infra/TDD, P3] `AgentManifest` + coding 正式入口
 
-**状态**：进行中（Green；2026-07-29）。typed manifest/SPI、显式宿主 registry、required-config preflight、diagnosis manifest 与 coding engine/builder 已通过五模块单测。
+**状态**：已完成（2026-07-29）；Red/Green/Refactor 三提交交付，实施状态以 `TASKLIST.md` 为准。
 
 **Goal**
 
@@ -602,23 +602,23 @@ sealed interface RunSuspension {
 **为什么现在已满足触发条件**
 
 - `AGENTS.md` 原定“第二个 agent 真要插入时再上”。当前仓库已有 `agentkit-agent-diagnosis` 和 `agentkit-agent-coding` 两个平级 agent 包。
-- coding 目前只有 [`CodingPipeline.java`](../agentkit-agent-coding/src/main/java/com/anthropic/agentkit/application/coding/CodingPipeline.java)，没有与 diagnosis `DiagnoseEngine/Builder` 对等的正式入口。
-- `DESIGN.md §16.7` 第 616 行仍写“等第二个 agent 真要插入”，文档条件已经过期。
+- 立项时 coding 只有 [`CodingPipeline.java`](../agentkit-agent-coding/src/main/java/com/anthropic/agentkit/application/coding/CodingPipeline.java)，没有与 diagnosis `DiagnoseEngine/Builder` 对等的正式入口。
+- 立项时 `DESIGN.md §16.7` 仍写“等第二个 agent 真要插入”，条件已经过期；完成后的推翻决定见 `DESIGN.md §16.22`。
 
 **建议 manifest**
 
 ```java
-record AgentManifest(
+record AgentManifest<I, O>(
         AgentId id,
         String description,
-        AgentEntryPoint entryPoint,
+        AgentEntryPoint<I, O> entryPoint,
         Set<ConfigKey> requiredConfigKeys,
         CapabilityDescriptor capabilities) {}
 ```
 
 **边界**
 
-- Manifest/registry 属于 platform/composition，不应让 kernel 反向依赖 diagnosis/coding。
+- kernel 只提供领域无关 manifest/entry-point SPI；registry 属于 platform/composition，不让 kernel 反向依赖 diagnosis/coding。
 - agent 模块提供 manifest；平台加载并派发。
 - 先用显式注册，除非有真实插件需求，不引入反射 classpath scanning、Spring/DI 或插件子系统。
 
@@ -631,6 +631,25 @@ record AgentManifest(
 - ArchUnit 保证 kernel 不依赖任何 agent 包，agent 包之间也不互相依赖。
 
 **blockedBy**：#42、#47；至少有一个真实统一派发入口。
+
+**完成后领域建模复核（2026-07-29）**
+
+- Summary：统一宿主只收敛 manifest 选择、配置 preflight、request/result 类型边界与 entry-point lifecycle；diagnosis/coding 的请求、结果和工作流仍由各自 agent 包拥有。kernel 提供领域无关 SPI，但 registry 明确保留在 platform application 层。
+- Domain Concept Map：`AgentManifest<I,O>` 是一个 agent 包的不可变自描述；`AgentId`、`ConfigKey`、`CapabilityDescriptor` 是 VO；`AgentEntryPoint<I,O>` 是 agent-to-host port；`AgentRegistry` 是 platform application service；`DiagnoseEngine` 与 `CodingEngine` 是两个独立 bounded context 的强类型入口。
+- Aggregate Boundary：registry 注册时只原子建立 `AgentId → AgentManifest` 不可变索引；单次 dispatch 的一致性边界是“找到 manifest → 校验 selected agent required keys → 校验 request/result type → invoke”。agent 的内部 run/aggregate 完全在 dispatch 边界之外，不由 registry 接管或回滚。
+- Invariants：ID 不能为空且 registry 内唯一；description/config/capability 集合不可变；普通工具与 terminal tool 不得重名；缺配置、错误 request type 或错误 result type 必须在 entry point 调用前失败；entry point 必须声明非空 request/result class；kernel 不得依赖 agent 模块，agent 模块不得互相依赖。
+- Variation Point Map：agent 元数据由 `AgentManifest` 收敛；宿主选择/配置可用性由 `AgentRegistry` 收敛；diagnosis streaming/stop 与 coding plan→patch→review 分别由自己的 engine 收敛；coding manifest capability 由与实际角色 `AgentSpec` 共用的 `CodingCapabilities` 生成，避免第二份手写清单漂移。
+- Refactor Signals：`CodingEngineBuilder` 已取代宿主直接拼 Planner/Patcher/Reviewer；`DiagnoseEngine` 在不破坏原 stream API 的情况下适配 typed invoke；旧 ArchUnit `kernelHasNoDiagnosisDependency` 已改成覆盖 diagnosis/coding 的通用规则，并在两个 agent 包内增加互斥依赖门禁。
+- Remaining Limitations：registry 是 in-process 显式注册，不是插件 ABI、网络协议或 classpath discovery；required config 只保存 logical key，不保存/解析 secret；动态 MCP catalog 无法被静态 manifest 穷举；CLI 的 agent 选择、错误展示、命令与 SIGINT/session UX 按边界留 #55。
+
+| 评分维度 | 完成后 | 证据 |
+|---|---:|---|
+| 聚合边界是否清晰 | 3/3 | manifest 索引/dispatch 与两个 agent 的内部 run 边界分离 |
+| 变化是否被收敛 | 3/3 | 元数据、注册、配置、角色装配与业务工作流各有唯一归属 |
+| 不变量是否可被模型守护 | 3/3 | typed VO、duplicate/config/type preflight、capability collision 与 ArchUnit |
+| 行为是否与模型一致 | 3/3 | 同一 registry 已真实派发 diagnosis/coding，宿主不装配领域角色 |
+| 设计是否支持下一轮需求变化 | 3/3 | 新 agent 只需依赖 kernel 并显式提供 manifest，CLI/Web 可复用同一 port |
+| **合计** | **15/15** | 领域工作流未下沉，扩展方式显式且有硬边界 |
 
 ---
 
@@ -725,7 +744,7 @@ record AgentManifest(
 | #51 Waiting states | Web 宿主需要异步 ASK，或 coding plan 需要跨请求批准 |
 | #52 Checkpoint | 用户明确需要 rewind/fork，且接受非文件副作用不可回滚 |
 | #53 Retry/Model policy | provider rate-limit/瞬态错误达到可观测频率，或 child model tier 有成本需求 |
-| #54 Manifest | diagnosis/coding 需要由同一入口真实派发；当前已接近满足 |
+| #54 Manifest | diagnosis/coding 需要由同一入口真实派发；条件已满足并于 2026-07-29 完成 |
 | #55 CLI cleanup | CLI 重新成为交付面，或用于验证统一 runtime |
 | #56 Event scaling | 单 run 日志达到可测性能瓶颈、同一 RunId 出现多进程 writer，或宿主提出 retention/归档要求 |
 

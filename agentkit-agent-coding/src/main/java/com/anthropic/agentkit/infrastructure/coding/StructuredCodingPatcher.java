@@ -41,7 +41,7 @@ public final class StructuredCodingPatcher implements CodingPatcher {
 
     private static final Logger log = LoggerFactory.getLogger(StructuredCodingPatcher.class);
 
-    private static final String TOOL_NAME = "submit_patch";
+    static final String TOOL_NAME = "submit_patch";
     private static final String PATCH_SCHEMA = """
             {"type":"object","properties":{\
             "summary":{"type":"string"},\

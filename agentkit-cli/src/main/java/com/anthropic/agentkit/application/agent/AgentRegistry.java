@@ -52,7 +52,8 @@ public final class AgentRegistry {
         LinkedHashSet<ConfigKey> missing = new LinkedHashSet<>(manifest.requiredConfigKeys());
         missing.removeAll(configuredKeys);
         if (!missing.isEmpty()) {
-            String names = missing.stream().map(ConfigKey::value).collect(Collectors.joining(", "));
+            String names = missing.stream().map(ConfigKey::value).sorted()
+                    .collect(Collectors.joining(", "));
             throw new AgentConfigurationException(
                     "agent " + manifest.id() + " missing required config: " + names);
         }

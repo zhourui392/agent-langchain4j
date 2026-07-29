@@ -613,7 +613,7 @@ agentkit/
 | 重试/转人工 | 单趟作用域：任何非 ACCEPT 的 verdict 即终止（REJECTED）；重试循环与 NEEDS_HUMAN 非终结留聚合根的未来增量 | pipeline 不写 `if (retryCount < n)` |
 | Reviewer 兜底 | `decision` 非 schema 必填，缺省由映射兜底 `NEEDS_HUMAN` | 判定不清晰时升级人工而非崩溃 |
 
-**暂不做**：`AgentManifest` / CLI 派发（等第二个可派发 agent 入口真要插入）、容器沙箱（L2 拐点）。
+**当时暂不做**：`AgentManifest` / CLI 派发（等第二个可派发 agent 入口真要插入）、容器沙箱（L2 拐点）。第二个入口形成后，前一项已由 §16.22 / #54 推翻并实施；容器沙箱仍保持原决定。
 
 ### 16.8 AgentRunContext 单一运行作用域（2026-07-29）
 
@@ -869,7 +869,24 @@ session rewind 是从不可变 run fact 创建新分支并选择性补偿 kernel
 
 ---
 
+### 16.22 Typed AgentManifest、显式注册与 agent-owned entry point（2026-07-29）
+
+diagnosis 与 coding 已成为两个真实、平级的 agent 包。宿主需要按稳定 ID 发现并派发它们，但统一派发只统一“选择、配置前置校验、类型边界与生命周期”，不统一两个领域不同的请求、结果或工作流。
+
+| 决策面 | 选型 | 不变量 / 后果 |
+|---|---|---|
+| Manifest SPI | kernel domain 提供泛型 `AgentEntryPoint<I,O>`、`AgentManifest<I,O>`、`ConfigKey` 与 `CapabilityDescriptor`；entry point 显式声明 request/result class，并提供默认无操作 `close` | kernel 只拥有领域无关契约，绝不 import diagnosis/coding；agent 自己拥有请求/结果 DTO 与真实入口实现；宿主可在调用前校验类型，并统一释放有生命周期的入口 |
+| 发现方式 | CLI/platform application 层 `AgentRegistry` 接受显式 manifest 列表，按 `AgentId` 构造不可变索引 | duplicate ID 在注册阶段失败；无 classpath scanning、ServiceLoader 隐式发现、反射 DI、Spring/Guice 或插件系统 |
+| 配置前置校验 | manifest 只声明 logical required keys；registry 只接收“已配置 key”集合，在选中 agent 的 entry point 执行前计算缺项 | 错误稳定列出缺失 key，且不会先产生 agent 副作用；manifest 不保存 secret value，真正配置解析与依赖注入仍归宿主组合根 |
+| 能力描述 | `CapabilityDescriptor` 分开保存 ordinary allowed tools 与 terminal tools，并禁止命名碰撞 | coding 的描述由 `CodingCapabilities` 从三个角色实际使用的 terminal 常量和注入 coding tools 生成；Reviewer 仍没有普通写工具；manifest 不成为第二套手写 capability 真相 |
+| Agent 入口 | diagnosis 的现有 `DiagnoseEngine` 适配 typed entry point，保留 stream/stop/close API；coding 新增 `CodingRequest`、`CodingEngine`、`CodingEngineBuilder`，builder 内部装配 Planner/Patcher/Reviewer | 宿主不再直接拼领域角色；`CodingPipeline` 与 `CodingTask` 状态机仍完全留 coding 包，diagnosis orchestration 仍完全留 diagnosis 包 |
+| 模块依赖 | agent 包只依赖 kernel，互不依赖；platform registry 依赖 kernel contract，真实宿主测试显式带入两个 agent 包 | ArchUnit 分别守 kernel→agent 禁止和 diagnosis↔coding 禁止；统一入口不会演化成 kernel 反向依赖或共享领域“大一统”模型 |
+
+registry 的 typed dispatch 是 in-process host contract，不是网络协议或插件 ABI；跨进程/Web transport 仍应由宿主把自己的 DTO 映射到对应 agent request。#54 也不选择 CLI 命令、SIGINT 或 session UX，这些产品接线继续由 #55 完成。
+
+---
+
 ## 17. 下一步
 
-1. 用 #54 manifest 建立 diagnosis/coding 的统一派发入口。
-2. 最后以 #55 清理 slash command、run recovery、branch host UX 与每轮 SIGINT/context 接线。
+1. 以 #55 清理 slash command、run recovery、branch host UX、agent 选择与每轮 SIGINT/context 接线。
+2. #56 仅在事件日志规模、多 writer 或 retention 需求真实触发时立项。

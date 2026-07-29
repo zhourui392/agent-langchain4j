@@ -20,7 +20,7 @@
 | S8 持久化 | #36–38 | 0.5d | JSONL store + /resume + SessionId |
 | MVP-Gate | #39 | — | 端到端冒烟，打 `v0.1.0-mvp` |
 | S9 Runtime Hardening | #40–46 | 已完成（7/7） | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
-| S10 Runtime Extensions | #47–55 | 进行中（7/9） | 子 Agent、interceptor、MCP、后台任务、暂停恢复、分支、模型策略、manifest、CLI |
+| S10 Runtime Extensions | #47–55 | 进行中（8/9） | 子 Agent、interceptor、MCP、后台任务、暂停恢复、分支、模型策略、manifest、CLI |
 | **MVP 合计** | — | **≈8 人天** | — |
 
 ## 依赖图
@@ -863,7 +863,7 @@ S0 (1→2→3)
 
 ### #54 [S10-Platform-Infra-TDD] AgentManifest + coding 正式入口 （blockedBy: 42, 47）
 
-**状态**：进行中（Green；2026-07-29）。
+**状态**：已完成（2026-07-29）。
 
 **Red**：duplicate agent id 启动失败；缺 required config 在运行前失败；manifest capability 与实际 AgentSpec/tool boundary 一致；模块依赖单向。
 

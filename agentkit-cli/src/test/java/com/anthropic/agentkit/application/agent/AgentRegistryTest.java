@@ -42,6 +42,19 @@ class AgentRegistryTest {
     }
 
     @Test
+    void reportsMissingConfigInDeterministicOrder() {
+        AgentManifest<Request, Result> manifest = manifest(
+                "configured", Set.of(ConfigKey.of("z.key"), ConfigKey.of("a.key")),
+                new EchoEntryPoint());
+        AgentRegistry registry = new AgentRegistry(List.of(manifest), Set.of());
+
+        assertThatThrownBy(() -> registry.dispatch(
+                AgentId.of("configured"), new Request("hello"), Result.class))
+                .isInstanceOf(AgentConfigurationException.class)
+                .hasMessageContaining("a.key, z.key");
+    }
+
+    @Test
     void dispatchesRegisteredEntryPointWithCheckedResultType() {
         AgentManifest<Request, Result> manifest = manifest(
                 "echo", Set.of(ConfigKey.of("service.url")), new EchoEntryPoint());

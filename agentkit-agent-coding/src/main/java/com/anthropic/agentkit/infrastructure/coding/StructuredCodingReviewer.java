@@ -39,7 +39,7 @@ public final class StructuredCodingReviewer implements CodingReviewer {
 
     private static final Logger log = LoggerFactory.getLogger(StructuredCodingReviewer.class);
 
-    private static final String TOOL_NAME = "submit_review";
+    static final String TOOL_NAME = "submit_review";
     private static final String REVIEW_SCHEMA = """
             {"type":"object","properties":{\
             "decision":{"type":"string","enum":["ACCEPT","REJECT","NEEDS_HUMAN"]},\
