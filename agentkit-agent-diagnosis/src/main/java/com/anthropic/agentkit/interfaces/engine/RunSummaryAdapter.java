@@ -26,7 +26,9 @@ final class RunSummaryAdapter {
                     WAITING_FOR_APPROVAL, BUDGET_EXHAUSTED -> ExitReason.SUCCESS;
             case CANCELLED, CONTEXT_EXHAUSTED -> ExitReason.STOPPED;
             case TIMED_OUT -> ExitReason.TIMEOUT;
-            case PROVIDER_ERROR, PERSISTENCE_ERROR, TOOL_PROTOCOL_ERROR -> ExitReason.ERROR;
+            case INTERCEPTOR_DENIED -> ExitReason.REJECTED;
+            case PROVIDER_ERROR, INTERCEPTOR_ERROR, PERSISTENCE_ERROR,
+                    TOOL_PROTOCOL_ERROR -> ExitReason.ERROR;
         };
     }
 

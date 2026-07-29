@@ -1,6 +1,7 @@
 package com.anthropic.agentkit.infrastructure.agent;
 
 import com.anthropic.agentkit.application.PermissionService;
+import com.anthropic.agentkit.application.interception.AgentInterceptors;
 import com.anthropic.agentkit.domain.agent.AgentSpec;
 import com.anthropic.agentkit.domain.agent.SubAgentExecutionScope;
 import com.anthropic.agentkit.domain.agent.SubAgentHandle;
@@ -25,14 +26,23 @@ public final class DefaultSubAgentRuntime implements SubAgentRuntime {
     private final PermissionService permissions;
     private final SubAgentLimits limits;
     private final SubAgentExecutionScope rootScope;
+    private final AgentInterceptors interceptors;
 
     public DefaultSubAgentRuntime(
             LlmClientSelector clients, ToolRegistry authorizedTools,
             PermissionService permissions, SubAgentLimits limits) {
+        this(clients, authorizedTools, permissions, limits, AgentInterceptors.none());
+    }
+
+    public DefaultSubAgentRuntime(
+            LlmClientSelector clients, ToolRegistry authorizedTools,
+            PermissionService permissions, SubAgentLimits limits,
+            AgentInterceptors interceptors) {
         this.clients = Objects.requireNonNull(clients, "clients");
         this.authorizedTools = Objects.requireNonNull(authorizedTools, "authorizedTools");
         this.permissions = Objects.requireNonNull(permissions, "permissions");
         this.limits = Objects.requireNonNull(limits, "limits");
+        this.interceptors = Objects.requireNonNull(interceptors, "interceptors");
         this.rootScope = SubAgentExecutionScope.root(limits);
     }
 
@@ -59,7 +69,7 @@ public final class DefaultSubAgentRuntime implements SubAgentRuntime {
         Conversation conversation = new Conversation(SessionId.fresh());
         DefaultSubAgentHandle handle = new DefaultSubAgentHandle(
                 spec, parentContext, conversation, buildTools(spec),
-                clients, permissions, scope);
+                clients, permissions, scope, interceptors);
         handle.start(task, lease);
         return handle;
     }

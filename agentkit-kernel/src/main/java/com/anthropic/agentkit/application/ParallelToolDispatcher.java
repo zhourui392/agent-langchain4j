@@ -1,5 +1,10 @@
 package com.anthropic.agentkit.application;
 
+import com.anthropic.agentkit.application.interception.AgentInterceptorException;
+import com.anthropic.agentkit.application.interception.AgentInterceptors;
+import com.anthropic.agentkit.application.interception.ToolDispatchContext;
+import com.anthropic.agentkit.application.interception.ToolDispatchDecision;
+import com.anthropic.agentkit.application.interception.ToolSettled;
 import com.anthropic.agentkit.application.tool.ToolOutputPolicy;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.ToolResultMessage;
@@ -17,6 +22,7 @@ import com.anthropic.agentkit.domain.tool.UnknownToolException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -38,6 +44,7 @@ final class ParallelToolDispatcher {
     private final PermissionService permissions;
     private final ToolOutputPolicy outputPolicy;
     private final RunEventRecorder eventRecorder;
+    private final AgentInterceptors interceptors;
 
     ParallelToolDispatcher(ToolRegistry tools, ExecutionContext executionContext,
                            PermissionService permissions) {
@@ -52,11 +59,20 @@ final class ParallelToolDispatcher {
     ParallelToolDispatcher(ToolRegistry tools, ExecutionContext executionContext,
                            PermissionService permissions, ToolOutputPolicy outputPolicy,
                            RunEventRecorder eventRecorder) {
+        this(tools, executionContext, permissions, outputPolicy,
+                eventRecorder, AgentInterceptors.none());
+    }
+
+    ParallelToolDispatcher(ToolRegistry tools, ExecutionContext executionContext,
+                           PermissionService permissions, ToolOutputPolicy outputPolicy,
+                           RunEventRecorder eventRecorder,
+                           AgentInterceptors interceptors) {
         this.tools = tools;
         this.executionContext = executionContext;
         this.permissions = permissions;
         this.outputPolicy = outputPolicy;
         this.eventRecorder = eventRecorder;
+        this.interceptors = interceptors;
     }
 
     List<ToolResultMessage> dispatch(AiMessage aiMessage) {
@@ -64,29 +80,35 @@ final class ParallelToolDispatcher {
     }
 
     List<ToolResultMessage> dispatch(AiMessage aiMessage, AgentEventListener listener) {
+        return dispatchOutcome(aiMessage, listener).results();
+    }
+
+    ToolDispatchBatch dispatchOutcome(
+            AiMessage aiMessage, AgentEventListener listener) {
         AgentEventListener safeListener = SafeAgentEventListener.protect(listener);
         List<ToolUseRequest> requests = aiMessage.toolUseRequests();
         requests.forEach(safeListener::onToolUseStart);
         log.info("dispatching tools: names={}, concurrency={}", toolNames(requests), requests.size());
         if (requests.size() == 1) {
-            return List.of(executeSingle(requests.get(0), safeListener));
+            return ToolDispatchBatch.from(List.of(
+                    executeSingle(requests.get(0), safeListener)));
         }
-        return executeAll(requests, safeListener);
+        return ToolDispatchBatch.from(executeAll(requests, safeListener));
     }
 
-    private ToolResultMessage executeSingle(ToolUseRequest request, AgentEventListener listener) {
+    private SettledTool executeSingle(ToolUseRequest request, AgentEventListener listener) {
         Map<String, String> parentMdc = MDC.getCopyOfContextMap();
-        return withMdc(parentMdc, request,
-                () -> ToolResultMessage.from(request.id(), runWithEvents(request, listener)));
+        return withMdc(parentMdc, request, () -> runWithEvents(request, listener));
     }
 
-    private List<ToolResultMessage> executeAll(List<ToolUseRequest> requests, AgentEventListener listener) {
+    private List<SettledTool> executeAll(
+            List<ToolUseRequest> requests, AgentEventListener listener) {
         try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
-            List<Future<ToolResultMessage>> futures = new ArrayList<>(requests.size());
+            List<Future<SettledTool>> futures = new ArrayList<>(requests.size());
             for (ToolUseRequest req : requests) {
                 Map<String, String> parentMdc = MDC.getCopyOfContextMap();
                 futures.add(pool.submit(() -> withMdc(parentMdc, req,
-                        () -> ToolResultMessage.from(req.id(), runWithEvents(req, listener)))));
+                        () -> runWithEvents(req, listener))));
             }
             return awaitAll(requests, futures);
         }
@@ -106,35 +128,62 @@ final class ParallelToolDispatcher {
         return ToolResultMessage.from(request.id(), result);
     }
 
-    private ToolResult runWithEvents(ToolUseRequest request, AgentEventListener listener) {
+    private SettledTool runWithEvents(
+            ToolUseRequest request, AgentEventListener listener) {
         long startNs = System.nanoTime();
-        ToolResult result = safeOutcome(request);
+        ToolExecutionOutcome outcome = safeOutcome(request);
+        ToolResult result = outcome.result();
         eventRecorder.toolInvocationSettled(request.id(), result);
         long durationMs = (System.nanoTime() - startNs) / 1_000_000L;
         listener.onToolUseEnd(request, result, durationMs);
-        return result;
+        outcome.dispatch().ifPresent(context ->
+                interceptors.afterToolSettled(new ToolSettled(context, result)));
+        return new SettledTool(
+                ToolResultMessage.from(request.id(), result), outcome.interceptorFailure());
     }
 
-    private ToolResult safeOutcome(ToolUseRequest request) {
+    private ToolExecutionOutcome safeOutcome(ToolUseRequest request) {
         Tool tool;
         try {
             tool = tools.find(request.toolName());
         } catch (UnknownToolException ex) {
-            return failure(ToolResultStatus.UNKNOWN_TOOL, ex, "lookup");
+            return ToolExecutionOutcome.completed(
+                    failure(ToolResultStatus.UNKNOWN_TOOL, ex, "lookup"));
         }
         ToolInvocation invocation;
         try {
             invocation = InvocationFactory.from(request);
         } catch (IllegalArgumentException ex) {
-            return failure(ToolResultStatus.INVALID_ARGUMENTS, ex, "arguments");
+            return ToolExecutionOutcome.completed(
+                    failure(ToolResultStatus.INVALID_ARGUMENTS, ex, "arguments"));
         }
+        ToolDispatchContext dispatch = ToolDispatchContext.from(
+                executionContext, invocation, tool);
         try {
-            return runWithPermission(tool, invocation);
+            ToolDispatchDecision decision = interceptors.beforeToolDispatch(dispatch);
+            if (decision instanceof ToolDispatchDecision.Deny denial) {
+                ToolResult denied = ToolResult.of(
+                        ToolResultStatus.DENIED, denial.reason(),
+                        Map.of("stage", "interceptor"));
+                return ToolExecutionOutcome.completed(
+                        governAndSettle(invocation, denied), dispatch);
+            }
+            return ToolExecutionOutcome.completed(
+                    runWithPermission(tool, invocation), dispatch);
+        } catch (AgentInterceptorException failure) {
+            ToolResult result = ToolResult.of(
+                    ToolResultStatus.INTERCEPTOR_ERROR, failure.getMessage(),
+                    Map.of("stage", "interceptor",
+                            "hook", failure.hook().methodName()));
+            return ToolExecutionOutcome.interceptorFailed(
+                    governAndSettle(invocation, result), dispatch, failure);
         } catch (CancellationException ex) {
-            return failure(ToolResultStatus.CANCELLED, ex, "permission");
+            return ToolExecutionOutcome.completed(
+                    failure(ToolResultStatus.CANCELLED, ex, "permission"));
         } catch (RuntimeException ex) {
             rethrowPersistence(ex);
-            return failure(ToolResultStatus.ERROR, ex, "permission");
+            return ToolExecutionOutcome.completed(
+                    failure(ToolResultStatus.ERROR, ex, "permission"));
         }
     }
 
@@ -231,18 +280,20 @@ final class ParallelToolDispatcher {
                 "tool timed out after " + timeoutMs + "ms");
     }
 
-    private static List<ToolResultMessage> awaitAll(
-            List<ToolUseRequest> requests, List<Future<ToolResultMessage>> futures) {
-        List<ToolResultMessage> results = new ArrayList<>(futures.size());
+    private static List<SettledTool> awaitAll(
+            List<ToolUseRequest> requests, List<Future<SettledTool>> futures) {
+        List<SettledTool> results = new ArrayList<>(futures.size());
         for (int index = 0; index < futures.size(); index++) {
             try {
                 results.add(futures.get(index).get());
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
-                results.add(cancelled(requests.get(index), ie));
+                results.add(new SettledTool(
+                        cancelled(requests.get(index), ie), Optional.empty()));
             } catch (ExecutionException ee) {
                 rethrowPersistence(ee.getCause());
-                results.add(failed(requests.get(index), ee.getCause()));
+                results.add(new SettledTool(
+                        failed(requests.get(index), ee.getCause()), Optional.empty()));
             }
         }
         return List.copyOf(results);
@@ -312,5 +363,59 @@ final class ParallelToolDispatcher {
 
     private static long elapsedMs(long startNs) {
         return (System.nanoTime() - startNs) / 1_000_000L;
+    }
+
+    record ToolDispatchBatch(
+            List<ToolResultMessage> results,
+            Optional<AgentInterceptorException> interceptorFailure) {
+
+        ToolDispatchBatch {
+            results = List.copyOf(results);
+            interceptorFailure = java.util.Objects.requireNonNull(
+                    interceptorFailure, "interceptorFailure");
+        }
+
+        private static ToolDispatchBatch from(List<SettledTool> settled) {
+            List<ToolResultMessage> results = settled.stream()
+                    .map(SettledTool::message).toList();
+            Optional<AgentInterceptorException> failure = settled.stream()
+                    .map(SettledTool::interceptorFailure)
+                    .flatMap(Optional::stream).findFirst();
+            return new ToolDispatchBatch(results, failure);
+        }
+    }
+
+    private record SettledTool(
+            ToolResultMessage message,
+            Optional<AgentInterceptorException> interceptorFailure) {
+
+        private SettledTool {
+            java.util.Objects.requireNonNull(message, "message");
+            java.util.Objects.requireNonNull(interceptorFailure, "interceptorFailure");
+        }
+    }
+
+    private record ToolExecutionOutcome(
+            ToolResult result,
+            Optional<ToolDispatchContext> dispatch,
+            Optional<AgentInterceptorException> interceptorFailure) {
+
+        private static ToolExecutionOutcome completed(ToolResult result) {
+            return new ToolExecutionOutcome(
+                    result, Optional.empty(), Optional.empty());
+        }
+
+        private static ToolExecutionOutcome completed(
+                ToolResult result, ToolDispatchContext dispatch) {
+            return new ToolExecutionOutcome(
+                    result, Optional.of(dispatch), Optional.empty());
+        }
+
+        private static ToolExecutionOutcome interceptorFailed(
+                ToolResult result, ToolDispatchContext dispatch,
+                AgentInterceptorException failure) {
+            return new ToolExecutionOutcome(
+                    result, Optional.of(dispatch), Optional.of(failure));
+        }
     }
 }

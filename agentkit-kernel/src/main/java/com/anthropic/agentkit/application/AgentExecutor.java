@@ -2,6 +2,17 @@ package com.anthropic.agentkit.application;
 
 import com.anthropic.agentkit.application.context.ContextDecision;
 import com.anthropic.agentkit.application.context.ContextPolicy;
+import com.anthropic.agentkit.application.interception.AgentInterceptorException;
+import com.anthropic.agentkit.application.interception.AgentInterceptors;
+import com.anthropic.agentkit.application.interception.CompactionCause;
+import com.anthropic.agentkit.application.interception.CompactionCompleted;
+import com.anthropic.agentkit.application.interception.CompactionContext;
+import com.anthropic.agentkit.application.interception.CompactionDecision;
+import com.anthropic.agentkit.application.interception.LlmCallCompleted;
+import com.anthropic.agentkit.application.interception.LlmCallContext;
+import com.anthropic.agentkit.application.interception.LlmCallDecision;
+import com.anthropic.agentkit.application.interception.RunStopContext;
+import com.anthropic.agentkit.application.interception.RunStopDecision;
 import com.anthropic.agentkit.application.tool.ToolOutputPolicy;
 import com.anthropic.agentkit.domain.agent.AgentBudgetExceededException;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
@@ -48,33 +59,51 @@ public final class AgentExecutor {
     private final ContextPolicy contextPolicy;
     private final ToolOutputPolicy toolOutputPolicy;
     private final RunEventStore eventStore;
+    private final AgentInterceptors interceptors;
 
     public AgentExecutor(LlmClient llm, ToolRegistry tools, PermissionService permissions) {
         this(llm, tools, permissions,
                 ContextPolicy.standard(llm), ToolOutputPolicy.defaultLimited(),
-                RunEventStore.none());
+                RunEventStore.none(), AgentInterceptors.none());
     }
 
     public AgentExecutor(LlmClient llm, ToolRegistry tools, PermissionService permissions,
                          RunEventStore eventStore) {
         this(llm, tools, permissions,
-                ContextPolicy.standard(llm), ToolOutputPolicy.defaultLimited(), eventStore);
+                ContextPolicy.standard(llm), ToolOutputPolicy.defaultLimited(), eventStore,
+                AgentInterceptors.none());
+    }
+
+    public AgentExecutor(LlmClient llm, ToolRegistry tools, PermissionService permissions,
+                         AgentInterceptors interceptors) {
+        this(llm, tools, permissions,
+                ContextPolicy.standard(llm), ToolOutputPolicy.defaultLimited(),
+                RunEventStore.none(), interceptors);
     }
 
     public AgentExecutor(LlmClient llm, ToolRegistry tools, PermissionService permissions,
                          ContextPolicy contextPolicy, ToolOutputPolicy toolOutputPolicy) {
-        this(llm, tools, permissions, contextPolicy, toolOutputPolicy, RunEventStore.none());
+        this(llm, tools, permissions, contextPolicy, toolOutputPolicy,
+                RunEventStore.none(), AgentInterceptors.none());
     }
 
     public AgentExecutor(LlmClient llm, ToolRegistry tools, PermissionService permissions,
                          ContextPolicy contextPolicy, ToolOutputPolicy toolOutputPolicy,
                          RunEventStore eventStore) {
+        this(llm, tools, permissions, contextPolicy, toolOutputPolicy,
+                eventStore, AgentInterceptors.none());
+    }
+
+    public AgentExecutor(LlmClient llm, ToolRegistry tools, PermissionService permissions,
+                         ContextPolicy contextPolicy, ToolOutputPolicy toolOutputPolicy,
+                         RunEventStore eventStore, AgentInterceptors interceptors) {
         this.llm = Objects.requireNonNull(llm, "llm");
         this.tools = Objects.requireNonNull(tools, "tools");
         this.permissions = Objects.requireNonNull(permissions, "permissions");
         this.contextPolicy = Objects.requireNonNull(contextPolicy, "contextPolicy");
         this.toolOutputPolicy = Objects.requireNonNull(toolOutputPolicy, "toolOutputPolicy");
         this.eventStore = Objects.requireNonNull(eventStore, "eventStore");
+        this.interceptors = Objects.requireNonNull(interceptors, "interceptors");
     }
 
     public CompletableFuture<AgentRunResult> run(Conversation conversation, AgentRunContext context) {
@@ -105,7 +134,7 @@ public final class AgentExecutor {
         MDC.put("session", conversation.sessionId().value());
         MDC.put("run", context.runId().value());
         AgentRunState state = AgentRunState.create(
-                context, tools, permissions, toolOutputPolicy, eventStore);
+                context, tools, permissions, toolOutputPolicy, eventStore, interceptors);
         try {
             state.recorder().runStarted(conversation);
             listener.onRunStart(context);
@@ -113,6 +142,7 @@ public final class AgentExecutor {
                     context.runId(), context.workspaceId(), conversation.messages().size(), systemPrompt.length());
             AgentRunResult result = runWithBudgetHandling(
                     conversation, state, listener, systemPrompt);
+            result = interceptRunStop(context, result);
             state.recorder().runStopped(result);
             return result;
         } catch (RunEventPersistenceException ex) {
@@ -130,6 +160,28 @@ public final class AgentExecutor {
             MDC.remove("run");
             MDC.remove("session");
         }
+    }
+
+    private AgentRunResult interceptRunStop(
+            AgentRunContext context, AgentRunResult proposed) {
+        try {
+            RunStopDecision decision = interceptors.beforeRunStop(
+                    new RunStopContext(context, proposed));
+            if (decision instanceof RunStopDecision.Deny denial) {
+                return rejectedStop(proposed, StopReason.INTERCEPTOR_DENIED, denial.reason());
+            }
+            return proposed;
+        } catch (AgentInterceptorException failure) {
+            return rejectedStop(
+                    proposed, StopReason.INTERCEPTOR_ERROR, failure.getMessage());
+        }
+    }
+
+    private static AgentRunResult rejectedStop(
+            AgentRunResult proposed, StopReason reason, String detail) {
+        return new AgentRunResult(
+                proposed.runId(), reason, proposed.finalMessage(), Optional.empty(),
+                proposed.usage(), proposed.consumption(), Optional.of(detail));
     }
 
     private AgentRunResult runWithBudgetHandling(
@@ -182,7 +234,9 @@ public final class AgentExecutor {
                 appendMessage(conversation, result, "tool result");
             }
             if (outcome.stopReason().isPresent()) {
-                return state.finish(outcome.stopReason().orElseThrow(), outcome.structuredOutput());
+                return state.finish(
+                        outcome.stopReason().orElseThrow(), outcome.structuredOutput(),
+                        outcome.errorDetail());
             }
             log.info("turn {} completed: toolResults={}", turn, aiMessage.toolUseRequests().size());
         }
@@ -199,8 +253,14 @@ public final class AgentExecutor {
         try {
             state.budget().ensureInputTokensWithinBudget();
             state.budget().reserveToolCalls(message.toolUseRequests().size());
-            List<ToolResultMessage> results = state.dispatcher().dispatch(message, listener);
-            return terminalOutcome(message, results);
+            ParallelToolDispatcher.ToolDispatchBatch batch =
+                    state.dispatcher().dispatchOutcome(message, listener);
+            if (batch.interceptorFailure().isPresent()) {
+                return ToolBatchOutcome.stopped(
+                        batch.results(), StopReason.INTERCEPTOR_ERROR,
+                        batch.interceptorFailure().orElseThrow().getMessage());
+            }
+            return terminalOutcome(message, batch.results());
         } catch (AgentBudgetExceededException ex) {
             log.warn("tool batch rejected by budget: {}", ex.getMessage());
             List<ToolResultMessage> results = state.dispatcher().settleWithoutExecution(
@@ -270,42 +330,76 @@ public final class AgentExecutor {
 
     private ContextDecision prepareContext(
             Conversation conversation, AgentRunContext context, RunEventRecorder recorder) {
-        Optional<CompactionBoundary> before = conversation.lastCompaction();
-        ContextDecision decision = contextPolicy.beforeLlmCall(conversation, context);
-        recordCompaction(before, conversation, recorder);
-        return decision;
+        return applyContextPolicy(
+                conversation, context, recorder, CompactionCause.BEFORE_LLM_CALL,
+                () -> contextPolicy.beforeLlmCall(conversation, context));
     }
 
     private ContextDecision recoverContext(
             Conversation conversation, Throwable failure, AgentRunContext context,
             RunEventRecorder recorder) {
-        Optional<CompactionBoundary> before = conversation.lastCompaction();
-        ContextDecision decision = contextPolicy.recoverFromOverflow(
-                conversation, failure, context);
-        recordCompaction(before, conversation, recorder);
+        return applyContextPolicy(
+                conversation, context, recorder,
+                CompactionCause.CONTEXT_OVERFLOW_RECOVERY,
+                () -> contextPolicy.recoverFromOverflow(conversation, failure, context));
+    }
+
+    private ContextDecision applyContextPolicy(
+            Conversation conversation, AgentRunContext context,
+            RunEventRecorder recorder, CompactionCause cause,
+            java.util.function.Supplier<ContextDecision> policy) {
+        CompactionContext attempt = new CompactionContext(
+                context, conversation.messages(), conversation.lastCompaction(), cause);
+        ContextDecision blocked = interceptCompaction(attempt);
+        if (blocked != null) {
+            return blocked;
+        }
+        ContextDecision decision = policy.get();
+        newCompaction(attempt.previousBoundary(), conversation, recorder)
+                .ifPresent(boundary -> interceptors.afterCompaction(
+                        new CompactionCompleted(attempt, boundary)));
         return decision;
     }
 
-    private void recordCompaction(
+    private ContextDecision interceptCompaction(CompactionContext attempt) {
+        try {
+            CompactionDecision decision = interceptors.beforeCompaction(attempt);
+            if (decision instanceof CompactionDecision.Deny denial) {
+                return ContextDecision.stopped(
+                        StopReason.INTERCEPTOR_DENIED, denial.reason());
+            }
+            return null;
+        } catch (AgentInterceptorException failure) {
+            return ContextDecision.stopped(
+                    StopReason.INTERCEPTOR_ERROR, failure.getMessage());
+        }
+    }
+
+    private Optional<CompactionBoundary> newCompaction(
             Optional<CompactionBoundary> before,
             Conversation conversation, RunEventRecorder recorder) {
-        conversation.lastCompaction()
-                .filter(boundary -> before.filter(boundary::equals).isEmpty())
-                .ifPresent(boundary -> recorder.compactionCompleted(conversation, boundary));
+        Optional<CompactionBoundary> installed = conversation.lastCompaction()
+                .filter(boundary -> before.filter(boundary::equals).isEmpty());
+        installed.ifPresent(boundary ->
+                recorder.compactionCompleted(conversation, boundary));
+        return installed;
     }
 
     private LlmTurnOutcome requestLlm(Conversation conversation, AgentRunContext context,
                                       AgentEventListener listener, AgentBudgetGuard budgetGuard,
                                       RunEventRecorder recorder, String systemPrompt) {
+        ChatRequest proposed = buildChatRequest(conversation, systemPrompt);
+        LlmRequestPlan plan = interceptLlmCall(context, proposed);
+        if (plan.stopReason().isPresent()) {
+            return LlmTurnOutcome.failed(
+                    plan.stopReason().orElseThrow(), plan.errorDetail().orElseThrow());
+        }
+        ChatRequest request = plan.request().orElseThrow();
         long startNs = System.nanoTime();
-        log.info("llm request started: messages={}, tools={}", conversation.messages().size(), tools.specs().size());
-        recorder.llmCallStarted(conversation.messages().size());
+        log.info("llm request started: messages={}, tools={}",
+                request.messages().size(), request.tools().size());
+        recorder.llmCallStarted(request.messages().size());
         listener.onLlmRequestStart();
-        ChatRequest.Builder builder = ChatRequest.builder()
-                .systemPrompt(systemPrompt)
-                .messages(conversation.messages());
-        tools.specs().forEach(builder::tool);
-        ChatRequest request = builder.build();
         RunStreamHandler handler = new RunStreamHandler(context, listener, budgetGuard);
         LlmCall call;
         try {
@@ -313,16 +407,55 @@ public final class AgentExecutor {
         } catch (RuntimeException failure) {
             handler.close();
             log.error("llm request failed before call handle was returned", failure);
-            return LlmTurnOutcome.providerFailure(failure);
+            return observeLlmCall(
+                    context, request, LlmTurnOutcome.providerFailure(failure));
         }
         try {
-            LlmTurnOutcome result = awaitLlm(call, context);
+            LlmTurnOutcome result = observeLlmCall(
+                    context, request, awaitLlm(call, context));
             log.info("llm request finished: durationMs={}, stopReason={}",
                     elapsedMs(startNs), result.stopReason().orElse(null));
             return result;
         } finally {
             handler.close();
         }
+    }
+
+    private ChatRequest buildChatRequest(
+            Conversation conversation, String systemPrompt) {
+        ChatRequest.Builder builder = ChatRequest.builder()
+                .systemPrompt(systemPrompt)
+                .messages(conversation.messages());
+        tools.specs().forEach(builder::tool);
+        return builder.build();
+    }
+
+    private LlmRequestPlan interceptLlmCall(
+            AgentRunContext context, ChatRequest proposed) {
+        try {
+            LlmCallDecision decision = interceptors.beforeLlmCall(
+                    new LlmCallContext(context, proposed));
+            if (decision instanceof LlmCallDecision.Deny denial) {
+                return LlmRequestPlan.stopped(
+                        StopReason.INTERCEPTOR_DENIED, denial.reason());
+            }
+            if (decision instanceof LlmCallDecision.ReplaceContext replacement) {
+                return LlmRequestPlan.ready(new ChatRequest(
+                        proposed.systemPrompt(), replacement.messages(), proposed.tools()));
+            }
+            return LlmRequestPlan.ready(proposed);
+        } catch (AgentInterceptorException failure) {
+            return LlmRequestPlan.stopped(
+                    StopReason.INTERCEPTOR_ERROR, failure.getMessage());
+        }
+    }
+
+    private LlmTurnOutcome observeLlmCall(
+            AgentRunContext context, ChatRequest request, LlmTurnOutcome outcome) {
+        interceptors.afterLlmCall(new LlmCallCompleted(
+                new LlmCallContext(context, request), outcome.message(),
+                outcome.stopReason(), outcome.errorDetail()));
+        return outcome;
     }
 
     private LlmTurnOutcome awaitLlm(LlmCall call, AgentRunContext context) {
@@ -415,12 +548,14 @@ public final class AgentExecutor {
 
         private static AgentRunState create(
                 AgentRunContext context, ToolRegistry tools, PermissionService permissions,
-                ToolOutputPolicy toolOutputPolicy, RunEventStore eventStore) {
+                ToolOutputPolicy toolOutputPolicy, RunEventStore eventStore,
+                AgentInterceptors interceptors) {
             AgentBudgetGuard budget = new AgentBudgetGuard(
                     context.budget(), context.budgetState());
             RunEventRecorder recorder = RunEventRecorder.forRun(eventStore, context);
             ParallelToolDispatcher dispatcher = new ParallelToolDispatcher(
-                    tools, context.executionContext(), permissions, toolOutputPolicy, recorder);
+                    tools, context.executionContext(), permissions, toolOutputPolicy,
+                    recorder, interceptors);
             return new AgentRunState(context, budget, dispatcher, recorder);
         }
 
@@ -445,33 +580,66 @@ public final class AgentExecutor {
 
         private AgentRunResult finish(
                 StopReason reason, Optional<Map<String, Object>> structuredOutput) {
+            return finish(reason, structuredOutput, Optional.empty());
+        }
+
+        private AgentRunResult finish(
+                StopReason reason, Optional<Map<String, Object>> structuredOutput,
+                Optional<String> errorDetail) {
             return new AgentRunResult(context.runId(), reason, lastMessage,
-                    structuredOutput, budget.usage(), budget.consumption(), Optional.empty());
+                    structuredOutput, budget.usage(), budget.consumption(), errorDetail);
         }
     }
 
     private record ToolBatchOutcome(
             List<ToolResultMessage> results,
             Optional<StopReason> stopReason,
-            Optional<Map<String, Object>> structuredOutput) {
+            Optional<Map<String, Object>> structuredOutput,
+            Optional<String> errorDetail) {
 
         private ToolBatchOutcome {
             results = List.copyOf(results);
             structuredOutput = structuredOutput.map(Map::copyOf);
+            errorDetail = Objects.requireNonNull(errorDetail, "errorDetail");
         }
 
         private static ToolBatchOutcome continuing(List<ToolResultMessage> results) {
-            return new ToolBatchOutcome(results, Optional.empty(), Optional.empty());
+            return new ToolBatchOutcome(
+                    results, Optional.empty(), Optional.empty(), Optional.empty());
         }
 
         private static ToolBatchOutcome stopped(List<ToolResultMessage> results, StopReason reason) {
-            return new ToolBatchOutcome(results, Optional.of(reason), Optional.empty());
+            return new ToolBatchOutcome(
+                    results, Optional.of(reason), Optional.empty(), Optional.empty());
+        }
+
+        private static ToolBatchOutcome stopped(
+                List<ToolResultMessage> results, StopReason reason, String detail) {
+            return new ToolBatchOutcome(
+                    results, Optional.of(reason), Optional.empty(), Optional.of(detail));
         }
 
         private static ToolBatchOutcome terminal(
                 List<ToolResultMessage> results, Map<String, Object> payload) {
             return new ToolBatchOutcome(
-                    results, Optional.of(StopReason.TERMINAL_TOOL), Optional.of(payload));
+                    results, Optional.of(StopReason.TERMINAL_TOOL),
+                    Optional.of(payload), Optional.empty());
+        }
+    }
+
+    private record LlmRequestPlan(
+            Optional<ChatRequest> request,
+            Optional<StopReason> stopReason,
+            Optional<String> errorDetail) {
+
+        private static LlmRequestPlan ready(ChatRequest request) {
+            return new LlmRequestPlan(
+                    Optional.of(request), Optional.empty(), Optional.empty());
+        }
+
+        private static LlmRequestPlan stopped(StopReason reason, String detail) {
+            return new LlmRequestPlan(
+                    Optional.empty(), Optional.of(reason), Optional.of(detail));
         }
     }
 

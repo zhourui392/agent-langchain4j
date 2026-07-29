@@ -3,6 +3,8 @@ package com.anthropic.agentkit.infrastructure.agent;
 import com.anthropic.agentkit.application.AgentEventListener;
 import com.anthropic.agentkit.application.AgentExecutor;
 import com.anthropic.agentkit.application.PermissionService;
+import com.anthropic.agentkit.application.interception.AgentInterceptors;
+import com.anthropic.agentkit.application.interception.SubAgentLifecycleEvent;
 import com.anthropic.agentkit.domain.agent.AgentId;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.agent.AgentRunResult;
@@ -22,6 +24,7 @@ import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -36,6 +39,7 @@ final class DefaultSubAgentHandle implements SubAgentHandle {
     private final LlmClientSelector clients;
     private final PermissionService permissions;
     private final SubAgentExecutionScope scope;
+    private final AgentInterceptors interceptors;
     private volatile AgentRunState state = AgentRunState.STARTING;
     private volatile RunId childRunId;
     private volatile CompletableFuture<AgentRunResult> currentResult;
@@ -45,7 +49,8 @@ final class DefaultSubAgentHandle implements SubAgentHandle {
     DefaultSubAgentHandle(
             AgentSpec spec, ExecutionContext parent, Conversation conversation,
             ToolRegistry tools, LlmClientSelector clients,
-            PermissionService permissions, SubAgentExecutionScope scope) {
+            PermissionService permissions, SubAgentExecutionScope scope,
+            AgentInterceptors interceptors) {
         this.spec = Objects.requireNonNull(spec, "spec");
         this.parent = Objects.requireNonNull(parent, "parent");
         this.conversation = Objects.requireNonNull(conversation, "conversation");
@@ -53,6 +58,7 @@ final class DefaultSubAgentHandle implements SubAgentHandle {
         this.clients = Objects.requireNonNull(clients, "clients");
         this.permissions = Objects.requireNonNull(permissions, "permissions");
         this.scope = Objects.requireNonNull(scope, "scope");
+        this.interceptors = Objects.requireNonNull(interceptors, "interceptors");
     }
 
     void start(String task, SubAgentExecutionScope.Lease lease) {
@@ -129,6 +135,8 @@ final class DefaultSubAgentHandle implements SubAgentHandle {
         childRunId = RunId.fresh();
         activeCancellation = new CancellationToken();
         AgentRunContext context = childContext();
+        interceptors.onSubAgentSpawned(lifecycleEvent(
+                AgentRunState.RUNNING, Optional.empty()));
         CancellationToken.Registration propagation = parent.cancellation()
                 .onCancel(this::cancelFromParent);
         try {
@@ -141,6 +149,8 @@ final class DefaultSubAgentHandle implements SubAgentHandle {
             propagation.close();
             lease.close();
             state = AgentRunState.FAILED;
+            interceptors.onSubAgentStopped(lifecycleEvent(
+                    AgentRunState.FAILED, Optional.empty()));
             throw failure;
         }
     }
@@ -154,7 +164,7 @@ final class DefaultSubAgentHandle implements SubAgentHandle {
     private AgentExecutor executor() {
         LlmClient client = Objects.requireNonNull(
                 clients.select(spec.modelTier()), "selected LLM client");
-        return new AgentExecutor(client, tools, permissions);
+        return new AgentExecutor(client, tools, permissions, interceptors);
     }
 
     private void cancelFromParent() {
@@ -181,6 +191,16 @@ final class DefaultSubAgentHandle implements SubAgentHandle {
                 state = AgentRunState.COMPLETED;
             }
         }
+        Optional<StopReason> stopReason = result == null
+                ? Optional.empty() : Optional.of(result.stopReason());
+        interceptors.onSubAgentStopped(lifecycleEvent(state, stopReason));
+    }
+
+    private SubAgentLifecycleEvent lifecycleEvent(
+            AgentRunState lifecycleState, Optional<StopReason> stopReason) {
+        return new SubAgentLifecycleEvent(
+                spec.id(), parent.runId(), childRunId, conversation.sessionId(),
+                lifecycleState, stopReason);
     }
 
     private static boolean completedNormally(AgentRunResult result) {

@@ -7,6 +7,7 @@ public enum ToolResultStatus {
     DENIED,
     CANCELLED,
     TIMEOUT,
+    INTERCEPTOR_ERROR,
     UNKNOWN,
     UNKNOWN_TOOL,
     INVALID_ARGUMENTS,
@@ -22,7 +23,8 @@ public enum ToolResultStatus {
 
     public boolean canSettleWithoutPermission() {
         return switch (this) {
-            case DENIED, UNKNOWN, UNKNOWN_TOOL, INVALID_ARGUMENTS, BUDGET_EXHAUSTED -> true;
+            case DENIED, INTERCEPTOR_ERROR, UNKNOWN, UNKNOWN_TOOL,
+                    INVALID_ARGUMENTS, BUDGET_EXHAUSTED -> true;
             case SUCCESS, ERROR, CANCELLED, TIMEOUT -> false;
         };
     }
