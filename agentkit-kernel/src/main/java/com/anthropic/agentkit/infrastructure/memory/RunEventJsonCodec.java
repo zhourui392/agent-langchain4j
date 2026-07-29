@@ -5,6 +5,7 @@ import com.anthropic.agentkit.domain.agent.BudgetConsumption;
 import com.anthropic.agentkit.domain.agent.RunId;
 import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.agent.WorkspaceId;
+import com.anthropic.agentkit.domain.checkpoint.CheckpointId;
 import com.anthropic.agentkit.domain.conversation.CompactionBoundary;
 import com.anthropic.agentkit.domain.conversation.SessionId;
 import com.anthropic.agentkit.domain.message.AiMessage;
@@ -16,6 +17,7 @@ import com.anthropic.agentkit.domain.suspension.InputAnswer;
 import com.anthropic.agentkit.domain.suspension.RunSuspension;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.domain.tool.ToolResultStatus;
+import com.anthropic.agentkit.domain.tool.ToolSideEffect;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -57,6 +59,8 @@ final class RunEventJsonCodec {
                 root.put("type", "tool_invocation_started");
                 root.put("toolUseId", started.toolUseId().value());
             }
+            case RunEvent.ToolSideEffectObserved observed ->
+                    writeSideEffect(root, observed);
             case RunEvent.ToolInvocationSettled settled -> writeSettled(root, settled);
             case RunEvent.CompactionCompleted compacted -> writeCompaction(root, compacted);
             case RunEvent.RunSuspended suspended -> {
@@ -84,6 +88,7 @@ final class RunEventJsonCodec {
                     metadata, (AiMessage) readMessage(required(root, "message")));
             case "tool_invocation_started" -> new RunEvent.ToolInvocationStarted(
                     metadata, new ToolUseId(requiredText(root, "toolUseId")));
+            case "tool_side_effect_observed" -> readSideEffect(root, metadata);
             case "tool_invocation_settled" -> new RunEvent.ToolInvocationSettled(
                     metadata, new ToolUseId(requiredText(root, "toolUseId")),
                     readToolResult(required(root, "result")));
@@ -142,6 +147,39 @@ final class RunEventJsonCodec {
         root.put("type", "tool_invocation_settled");
         root.put("toolUseId", event.toolUseId().value());
         root.set("result", toolResultNode(event.result()));
+    }
+
+    private static void writeSideEffect(
+            ObjectNode root, RunEvent.ToolSideEffectObserved event) {
+        root.put("type", "tool_side_effect_observed");
+        root.put("toolUseId", event.toolUseId().value());
+        ObjectNode effect = root.putObject("sideEffect");
+        switch (event.sideEffect()) {
+            case ToolSideEffect.CheckpointedFile checkpointed -> {
+                effect.put("kind", "checkpointed_file");
+                effect.put("checkpointId", checkpointed.checkpointId().value());
+            }
+            case ToolSideEffect.NonReversible residual -> {
+                effect.put("kind", "non_reversible");
+                effect.put("toolName", residual.toolName());
+                effect.put("detail", residual.detail());
+            }
+        }
+    }
+
+    private static RunEvent.ToolSideEffectObserved readSideEffect(
+            JsonNode root, RunEventMetadata metadata) throws IOException {
+        JsonNode node = required(root, "sideEffect");
+        ToolSideEffect sideEffect = switch (requiredText(node, "kind")) {
+            case "checkpointed_file" -> new ToolSideEffect.CheckpointedFile(
+                    CheckpointId.of(requiredText(node, "checkpointId")));
+            case "non_reversible" -> new ToolSideEffect.NonReversible(
+                    requiredText(node, "toolName"), requiredText(node, "detail"));
+            default -> throw new IOException(
+                    "unknown tool side effect kind: " + node.path("kind").asText());
+        };
+        return new RunEvent.ToolSideEffectObserved(
+                metadata, new ToolUseId(requiredText(root, "toolUseId")), sideEffect);
     }
 
     private static void writeCompaction(

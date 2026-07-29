@@ -14,6 +14,7 @@ import com.anthropic.agentkit.domain.suspension.ApprovalDecision;
 import com.anthropic.agentkit.domain.suspension.InputAnswer;
 import com.anthropic.agentkit.domain.suspension.RunSuspension;
 import com.anthropic.agentkit.domain.tool.ToolResult;
+import com.anthropic.agentkit.domain.tool.ToolSideEffect;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
 
 import java.time.Instant;
@@ -41,6 +42,9 @@ interface RunEventRecorder {
     default void assistantTurnReceived(AiMessage message) { }
 
     default void toolInvocationStarted(ToolUseId toolUseId) { }
+
+    default void toolSideEffectObserved(
+            ToolUseId toolUseId, ToolSideEffect sideEffect) { }
 
     default void toolInvocationSettled(ToolUseId toolUseId, ToolResult result) { }
 
@@ -89,6 +93,13 @@ interface RunEventRecorder {
         @Override
         public void toolInvocationStarted(ToolUseId toolUseId) {
             append(new RunEvent.ToolInvocationStarted(metadata(), toolUseId));
+        }
+
+        @Override
+        public void toolSideEffectObserved(
+                ToolUseId toolUseId, ToolSideEffect sideEffect) {
+            append(new RunEvent.ToolSideEffectObserved(
+                    metadata(), toolUseId, sideEffect));
         }
 
         @Override

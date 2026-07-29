@@ -5,6 +5,7 @@ import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.domain.tool.ToolArguments;
 import com.anthropic.agentkit.domain.tool.ToolOutputMetadata;
 import com.anthropic.agentkit.domain.tool.ToolResult;
+import com.anthropic.agentkit.domain.tool.ToolSafety;
 import com.anthropic.agentkit.infrastructure.tools.support.ToolResultTruncator;
 
 import java.util.Objects;
@@ -52,6 +53,11 @@ public final class TruncatingTool implements Tool {
     @Override
     public boolean isReadOnly() {
         return delegate.isReadOnly();
+    }
+
+    @Override
+    public ToolSafety safety() {
+        return delegate.safety();
     }
 
     @Override

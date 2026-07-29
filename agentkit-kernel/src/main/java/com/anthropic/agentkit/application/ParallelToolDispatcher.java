@@ -8,6 +8,8 @@ import com.anthropic.agentkit.application.interception.ToolSettled;
 import com.anthropic.agentkit.application.tool.ToolOutputPolicy;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.ToolResultMessage;
+import com.anthropic.agentkit.domain.checkpoint.CheckpointId;
+import com.anthropic.agentkit.domain.checkpoint.FileCheckpointMetadata;
 import com.anthropic.agentkit.domain.permission.Decision;
 import com.anthropic.agentkit.domain.port.RunEventPersistenceException;
 import com.anthropic.agentkit.domain.suspension.ApprovalDecision;
@@ -19,6 +21,8 @@ import com.anthropic.agentkit.domain.tool.ToolInvocation;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.domain.tool.ToolResultStatus;
+import com.anthropic.agentkit.domain.tool.ToolReversibility;
+import com.anthropic.agentkit.domain.tool.ToolSideEffect;
 import com.anthropic.agentkit.domain.tool.ToolUseRequest;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
 import com.anthropic.agentkit.domain.tool.UnknownToolException;
@@ -266,22 +270,56 @@ final class ParallelToolDispatcher {
         try {
             eventRecorder.toolInvocationStarted(invocation.id());
             ToolResult result = executeBounded(tool, invocation);
-            result = governAndSettle(invocation, result);
+            result = settleExecuted(tool, invocation, result);
             log.info("tool completed: tool={}, success={}, durationMs={}",
                     tool.name(), result.success(), elapsedMs(startNs));
             return result;
         } catch (CancellationException ex) {
             ToolResult cancelled = failure(ToolResultStatus.CANCELLED, ex, "execution");
-            return governAndSettle(invocation, cancelled);
+            return settleExecuted(tool, invocation, cancelled);
         } catch (RuntimeException ex) {
             rethrowPersistence(ex);
             ToolResult failure = failure(ToolResultStatus.ERROR, ex, "execution");
-            failure = governAndSettle(invocation, failure);
+            failure = settleExecuted(tool, invocation, failure);
             log.error("tool failed: tool={}, errorType={}, message={}",
                     tool.name(), ex.getClass().getSimpleName(), ex.getMessage());
             log.debug("tool failure stack", ex);
             return failure;
         }
+    }
+
+    private ToolResult settleExecuted(
+            Tool tool, ToolInvocation invocation, ToolResult raw) {
+        ToolResult result = governAndSettle(invocation, raw);
+        observeSideEffect(tool, invocation.id(), result);
+        return result;
+    }
+
+    private void observeSideEffect(
+            Tool tool, ToolUseId toolUseId, ToolResult result) {
+        ToolReversibility reversibility = tool.safety().reversibility();
+        switch (reversibility) {
+            case NONE -> { }
+            case NON_REVERSIBLE -> eventRecorder.toolSideEffectObserved(
+                    toolUseId, nonReversible(tool, "external side effects are not reversible"));
+            case CHECKPOINTED_FILE -> eventRecorder.toolSideEffectObserved(
+                    toolUseId, checkpointEffect(tool, result));
+        }
+    }
+
+    private static ToolSideEffect checkpointEffect(Tool tool, ToolResult result) {
+        String checkpointId = result.metadata().get(
+                FileCheckpointMetadata.CHECKPOINT_ID_KEY);
+        if (checkpointId == null || checkpointId.isBlank()) {
+            return nonReversible(tool,
+                    "file checkpoint was unavailable after execution");
+        }
+        return new ToolSideEffect.CheckpointedFile(CheckpointId.of(checkpointId));
+    }
+
+    private static ToolSideEffect.NonReversible nonReversible(
+            Tool tool, String detail) {
+        return new ToolSideEffect.NonReversible(tool.name(), detail);
     }
 
     private ToolResult governAndSettle(ToolInvocation invocation, ToolResult raw) {

@@ -75,6 +75,7 @@ public final class RunEventProjector {
                 case RunEvent.LlmCallStarted ignored -> { }
                 case RunEvent.AssistantTurnReceived received -> receive(received.message());
                 case RunEvent.ToolInvocationStarted started -> started(started.toolUseId());
+                case RunEvent.ToolSideEffectObserved ignored -> { }
                 case RunEvent.ToolInvocationSettled settled -> settled(settled);
                 case RunEvent.CompactionCompleted compacted -> compact(compacted);
                 case RunEvent.RunSuspended suspended -> suspend(suspended.suspension());

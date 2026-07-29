@@ -4,6 +4,12 @@ import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.domain.tool.ToolArguments;
 import com.anthropic.agentkit.domain.tool.ToolResult;
+import com.anthropic.agentkit.domain.tool.ToolSafety;
+import com.anthropic.agentkit.domain.checkpoint.CheckpointId;
+import com.anthropic.agentkit.domain.checkpoint.FileCheckpointException;
+import com.anthropic.agentkit.domain.checkpoint.FileCheckpointMetadata;
+import com.anthropic.agentkit.domain.checkpoint.FileCheckpointScope;
+import com.anthropic.agentkit.domain.port.FileCheckpointProvider;
 import com.anthropic.agentkit.infrastructure.tools.support.DiffRenderer;
 import com.anthropic.agentkit.infrastructure.tools.support.FileStateCache;
 import com.anthropic.agentkit.infrastructure.tools.support.RequireReadGuard;
@@ -18,6 +24,8 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,21 +44,30 @@ public final class FileEditTool implements Tool {
     private final FileStateCache fileStateCache;
     private final RequireReadGuard requireReadGuard;
     private final WorkspaceBoundary boundary;
+    private final FileCheckpointProvider checkpoints;
 
     public FileEditTool(FileStateCache fileStateCache) {
         this(fileStateCache, new WorkspaceBoundary());
     }
 
     public FileEditTool(FileStateCache fileStateCache, WorkspaceBoundary boundary) {
+        this(fileStateCache, boundary, FileCheckpointProvider.none());
+    }
+
+    public FileEditTool(
+            FileStateCache fileStateCache, WorkspaceBoundary boundary,
+            FileCheckpointProvider checkpoints) {
         this.fileStateCache = Objects.requireNonNull(fileStateCache, "fileStateCache");
         this.requireReadGuard = new RequireReadGuard(fileStateCache);
         this.boundary = Objects.requireNonNull(boundary, "boundary");
+        this.checkpoints = Objects.requireNonNull(checkpoints, "checkpoints");
     }
 
     @Override public String name() { return "Edit"; }
     @Override public String description() { return "Replace an exact string in a file"; }
     @Override public String inputSchema() { return INPUT_SCHEMA; }
     @Override public boolean isReadOnly() { return false; }
+    @Override public ToolSafety safety() { return ToolSafety.checkpointedFileMutation(); }
 
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
@@ -79,6 +96,9 @@ public final class FileEditTool implements Tool {
         } catch (WorkspaceBoundaryViolationException ex) {
             log.warn("file edit blocked: path={}, reason=workspace_boundary", requested);
             return ToolResult.error(ex.getMessage());
+        } catch (FileCheckpointException ex) {
+            log.error("file checkpoint failed: path={}", requested, ex);
+            return ToolResult.error("checkpoint error: " + ex.getMessage());
         } catch (IOException ex) {
             log.error("file edit failed: path={}", requested, ex);
             return ToolResult.error("edit error: " + ex.getMessage());
@@ -99,12 +119,26 @@ public final class FileEditTool implements Tool {
                     + " times; pass replace_all=true or add more context to make it unique");
         }
         String updated = replacement.applyTo(original);
+        Optional<CheckpointId> checkpoint = checkpoints.capture(
+                FileCheckpointScope.from(context), file);
         Files.writeString(file, updated, StandardCharsets.UTF_8);
         fileStateCache.recordRead(context, file);
         String diff = DiffRenderer.unifiedDiff(original, updated, file.toString());
         log.info("file edit completed: path={}, replacements={}, durationMs={}",
                 file, occurrences, elapsedMs(startNs));
-        return ToolResult.ok("edited " + file + "\n" + diff);
+        return checkpointed(
+                ToolResult.ok("edited " + file + "\n" + diff), checkpoint);
+    }
+
+    private static ToolResult checkpointed(
+            ToolResult result, Optional<CheckpointId> checkpoint) {
+        if (checkpoint.isEmpty()) {
+            return result;
+        }
+        Map<String, String> metadata = new LinkedHashMap<>(result.metadata());
+        metadata.put(FileCheckpointMetadata.CHECKPOINT_ID_KEY,
+                checkpoint.orElseThrow().value());
+        return ToolResult.of(result.status(), result.content(), metadata);
     }
 
     private static long elapsedMs(long startNs) {

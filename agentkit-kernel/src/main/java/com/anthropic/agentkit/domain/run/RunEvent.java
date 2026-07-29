@@ -11,6 +11,7 @@ import com.anthropic.agentkit.domain.suspension.ApprovalDecision;
 import com.anthropic.agentkit.domain.suspension.InputAnswer;
 import com.anthropic.agentkit.domain.suspension.RunSuspension;
 import com.anthropic.agentkit.domain.tool.ToolResult;
+import com.anthropic.agentkit.domain.tool.ToolSideEffect;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
 
 import java.util.List;
@@ -24,6 +25,7 @@ public sealed interface RunEvent permits
         RunEvent.LlmCallStarted,
         RunEvent.AssistantTurnReceived,
         RunEvent.ToolInvocationStarted,
+        RunEvent.ToolSideEffectObserved,
         RunEvent.ToolInvocationSettled,
         RunEvent.CompactionCompleted,
         RunEvent.RunSuspended,
@@ -72,6 +74,17 @@ public sealed interface RunEvent permits
         public ToolInvocationStarted {
             requireMetadata(metadata);
             Objects.requireNonNull(toolUseId, "toolUseId");
+        }
+    }
+
+    record ToolSideEffectObserved(
+            RunEventMetadata metadata,
+            ToolUseId toolUseId,
+            ToolSideEffect sideEffect) implements RunEvent {
+        public ToolSideEffectObserved {
+            requireMetadata(metadata);
+            Objects.requireNonNull(toolUseId, "toolUseId");
+            Objects.requireNonNull(sideEffect, "sideEffect");
         }
     }
 

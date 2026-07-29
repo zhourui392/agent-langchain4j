@@ -5,6 +5,7 @@ import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.domain.tool.ToolArguments;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.domain.tool.ToolResultStatus;
+import com.anthropic.agentkit.domain.tool.ToolSafety;
 
 import java.util.Objects;
 import java.util.concurrent.ExecutionException;
@@ -53,6 +54,11 @@ public final class GovernedTool implements Tool {
     @Override
     public boolean isReadOnly() {
         return delegate.isReadOnly();
+    }
+
+    @Override
+    public ToolSafety safety() {
+        return delegate.safety();
     }
 
     @Override

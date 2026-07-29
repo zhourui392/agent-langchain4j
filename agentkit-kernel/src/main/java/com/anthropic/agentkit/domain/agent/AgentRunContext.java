@@ -70,7 +70,7 @@ public record AgentRunContext(
 
     public ExecutionContext executionContext() {
         return ExecutionContext.of(
-                runId, workspaceId, workspaceRoot, cancellation, budget,
+                runId, sessionId, workspaceId, workspaceRoot, cancellation, budget,
                 secretProvider, limits, budgetState, subAgentScope);
     }
 
