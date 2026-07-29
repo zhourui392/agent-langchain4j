@@ -7,6 +7,8 @@ import com.anthropic.agentkit.domain.message.ToolResultMessage;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
 import com.anthropic.agentkit.domain.tool.ToolUseRequest;
+import com.anthropic.agentkit.domain.tool.ToolResultStatus;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -58,6 +60,21 @@ class MessageMapperTest {
         ToolResultMessage tr = (ToolResultMessage) back;
         assertThat(tr.toolUseId().value()).isEqualTo("u1");
         assertThat(tr.text()).isEqualTo("ok");
+    }
+
+    @Test
+    void toolErrorStatusSurvivesConversationAndProviderMapping() {
+        ToolResultMessage source = ToolResultMessage.of(
+                new ToolUseId("denied-1"), ToolResultStatus.DENIED,
+                "permission denied", java.util.Map.of("policy", "readonly"));
+
+        ToolExecutionResultMessage providerMessage =
+                (ToolExecutionResultMessage) MessageMapper.toLc(source);
+        ToolResultMessage back = (ToolResultMessage) MessageMapper.toDomain(providerMessage);
+
+        assertThat(providerMessage).extracting("isError").isEqualTo(true);
+        assertThat(back.status()).isEqualTo(ToolResultStatus.DENIED);
+        assertThat(back.metadata()).containsEntry("policy", "readonly");
     }
 
     @Test

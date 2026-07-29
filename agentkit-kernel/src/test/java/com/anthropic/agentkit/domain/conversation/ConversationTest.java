@@ -69,6 +69,52 @@ class ConversationTest {
     }
 
     @Test
+    void rejectsDuplicateToolUseIdWithinAssistantTurn() {
+        Conversation conv = new Conversation(session);
+        ToolUseId duplicate = new ToolUseId("duplicate");
+        AiMessage assistant = AiMessage.of("calling", List.of(
+                new ToolUseRequest(duplicate, "Read", "{}"),
+                new ToolUseRequest(duplicate, "Grep", "{}")));
+
+        assertThatThrownBy(() -> conv.append(assistant))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("duplicate");
+        assertThat(conv.messages()).isEmpty();
+    }
+
+    @Test
+    void rejectsNextAssistantMessageWhileToolBatchPending() {
+        Conversation conv = conversationWithPendingToolUse();
+
+        assertThatThrownBy(() -> conv.append(AiMessage.text("too early")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("pending");
+    }
+
+    @Test
+    void rejectsNextUserMessageWhileToolBatchPending() {
+        Conversation conv = conversationWithPendingToolUse();
+
+        assertThatThrownBy(() -> conv.append(UserMessage.of("too early")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("pending");
+    }
+
+    @Test
+    void rejectsToolResultsOutsideOriginalBatchOrder() {
+        Conversation conv = new Conversation(session);
+        ToolUseId first = new ToolUseId("first");
+        ToolUseId second = new ToolUseId("second");
+        conv.append(AiMessage.of("calling", List.of(
+                new ToolUseRequest(first, "Read", "{}"),
+                new ToolUseRequest(second, "Grep", "{}"))));
+
+        assertThatThrownBy(() -> conv.append(ToolResultMessage.of(second, "out of order")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("order");
+    }
+
+    @Test
     void exposesSessionId() {
         Conversation conv = new Conversation(session);
         assertThat(conv.sessionId()).isEqualTo(session);
@@ -82,5 +128,12 @@ class ConversationTest {
 
         assertThatThrownBy(() -> snapshot.add(UserMessage.of("nope")))
                 .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    private Conversation conversationWithPendingToolUse() {
+        Conversation conv = new Conversation(session);
+        conv.append(AiMessage.of("calling", List.of(new ToolUseRequest(
+                new ToolUseId("pending"), "Read", "{}"))));
+        return conv;
     }
 }

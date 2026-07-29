@@ -6,11 +6,13 @@ import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
 import com.anthropic.agentkit.domain.message.AiMessage;
+import com.anthropic.agentkit.domain.message.ToolResultMessage;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
 import com.anthropic.agentkit.domain.tool.ToolUseRequest;
+import com.anthropic.agentkit.domain.tool.ToolResultStatus;
 import com.anthropic.agentkit.testsupport.FakeTool;
 import com.anthropic.agentkit.testsupport.StubLlmClient;
 import org.junit.jupiter.api.Test;
@@ -39,16 +41,25 @@ class AgentExecutorBudgetTest {
     }
 
     @Test
-    void rejectsToolCallsWhenMaxToolCallsReached() {
+    void budgetExhaustionSettlesEveryToolUseInOrder() {
         StubLlmClient llm = new StubLlmClient()
-                .enqueue(new AiMessage("", List.of(new ToolUseRequest(new ToolUseId("t-1"), "Read", "{}"))));
-        AgentExecutor executor = new AgentExecutor(llm, tools(), allowAll());
+                .enqueue(new AiMessage("", List.of(
+                        new ToolUseRequest(new ToolUseId("t-1"), "Read", "{}"),
+                        new ToolUseRequest(new ToolUseId("t-2"), "Read", "{}"))))
+                .enqueue(AiMessage.text("budget handled"));
+        FakeTool read = FakeTool.readOnlyReturning("Read", "must not execute");
+        AgentExecutor executor = new AgentExecutor(
+                llm, new ToolRegistry().register(read), allowAll());
         Conversation conversation = conversation();
 
-        assertThatThrownBy(() -> executor.run(conversation, runContext(
-                conversation, new CancellationToken(), AgentBudget.of(5, 0, 10_000))).join())
-                .hasRootCauseInstanceOf(AgentBudgetExceededException.class)
-                .hasMessageContaining("maxToolCalls");
+        AiMessage result = executor.run(conversation, runContext(
+                conversation, new CancellationToken(), AgentBudget.of(2, 0, 10_000))).join();
+
+        assertThat(result.text()).isEqualTo("budget handled");
+        assertThat(read.callCount()).isZero();
+        assertThat(conversation.messages()).filteredOn(ToolResultMessage.class::isInstance)
+                .extracting(message -> ((ToolResultMessage) message).status())
+                .containsExactly(ToolResultStatus.BUDGET_EXHAUSTED, ToolResultStatus.BUDGET_EXHAUSTED);
     }
 
     @Test

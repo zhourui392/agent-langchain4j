@@ -8,6 +8,7 @@ import com.anthropic.agentkit.domain.message.ToolResultMessage;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
 import com.anthropic.agentkit.domain.tool.ToolUseRequest;
+import com.anthropic.agentkit.domain.tool.ToolResultStatus;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -79,6 +80,32 @@ class FileChatMemoryStoreTest {
         List<ChatMessage> loaded = store.load(id);
 
         assertThat(loaded).containsExactlyElementsOf(messages);
+    }
+
+    @Test
+    void roundTripsToolResultStatusAndMetadata(@TempDir Path dir) {
+        FileChatMemoryStore store = new FileChatMemoryStore(dir);
+        SessionId id = SessionId.of("status-session");
+        ToolResultMessage result = ToolResultMessage.of(
+                new ToolUseId("u-status"), ToolResultStatus.TIMEOUT,
+                "timed out", java.util.Map.of("timeoutMs", "25"));
+
+        store.save(id, List.of(result));
+
+        assertThat(store.load(id)).containsExactly(result);
+    }
+
+    @Test
+    void oldToolResultWithoutStatusDefaultsToSuccess(@TempDir Path dir) throws IOException {
+        FileChatMemoryStore store = new FileChatMemoryStore(dir);
+        SessionId id = SessionId.of("legacy-session");
+        Files.writeString(store.pathFor(id),
+                "{\"type\":\"toolResult\",\"toolUseId\":\"old-1\",\"text\":\"legacy\"}\n");
+
+        ToolResultMessage loaded = (ToolResultMessage) store.load(id).getFirst();
+
+        assertThat(loaded.status()).isEqualTo(ToolResultStatus.SUCCESS);
+        assertThat(loaded.metadata()).isEmpty();
     }
 
     @Test
