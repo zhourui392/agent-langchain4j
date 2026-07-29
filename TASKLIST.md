@@ -877,7 +877,7 @@ S0 (1→2→3)
 
 ### #55 [S10-CLI-Platform-TDD] 组合根、slash command 与 SIGINT 接线清理 （blockedBy: 40, 46, 54）
 
-**状态**：待开始。
+**状态**：进行中（Red；2026-07-29）。
 
 **Red**：help 只列真实注册命令；`/clear` 重置 active conversation；`/resume` 走 event recovery；第一次 SIGINT 只取消 active run且不污染下一轮；agent 选择/配置错误可见。
 

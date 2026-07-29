@@ -4,16 +4,20 @@ import com.anthropic.agentkit.application.io.TerminalIo.PromptAnswer;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReader;
 import org.jline.reader.UserInterruptException;
+import org.jline.terminal.Terminal;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class JLineTerminalIoTest {
@@ -112,6 +116,27 @@ class JLineTerminalIoTest {
         JLineTerminalIo io = newIo(reader);
 
         assertThat(io.promptYesNoAlways("Allow Bash?")).isEqualTo(PromptAnswer.DENY);
+    }
+
+    @Test
+    void registersRealTerminalSigintHandler() {
+        LineReader reader = mock(LineReader.class);
+        Terminal terminal = mock(Terminal.class);
+        AtomicBoolean called = new AtomicBoolean();
+        JLineTerminalIo io = new JLineTerminalIo(
+                reader, new PrintStream(new ByteArrayOutputStream()),
+                new PrintStream(new ByteArrayOutputStream()), terminal);
+        when(terminal.handle(eq(Terminal.Signal.INT), any()))
+                .thenAnswer(invocation -> {
+                    Terminal.SignalHandler handler = invocation.getArgument(1);
+                    handler.handle(Terminal.Signal.INT);
+                    return Terminal.SignalHandler.SIG_DFL;
+                });
+
+        io.onSigint(() -> called.set(true));
+
+        verify(terminal).handle(eq(Terminal.Signal.INT), any());
+        assertThat(called).isTrue();
     }
 
     private static JLineTerminalIo newIo(LineReader reader) {

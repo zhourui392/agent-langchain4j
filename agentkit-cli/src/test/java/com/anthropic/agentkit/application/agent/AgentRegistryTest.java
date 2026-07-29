@@ -88,6 +88,32 @@ class AgentRegistryTest {
         assertThat(counted.characters()).isEqualTo(5);
     }
 
+    @Test
+    void selectsTypedEntryPointAfterConfigurationPreflight() {
+        EchoEntryPoint entryPoint = new EchoEntryPoint();
+        AgentManifest<Request, Result> manifest = manifest(
+                "echo", Set.of(ConfigKey.of("service.url")), entryPoint);
+        AgentRegistry registry = new AgentRegistry(
+                List.of(manifest), Set.of(ConfigKey.of("service.url")));
+
+        AgentEntryPoint<Request, Result> selected = registry.select(
+                AgentId.of("echo"), Request.class, Result.class);
+
+        assertThat(selected).isSameAs(entryPoint);
+    }
+
+    @Test
+    void unknownSelectionReportsAvailableAgentIds() {
+        AgentRegistry registry = new AgentRegistry(List.of(
+                manifest("echo", Set.of(), new EchoEntryPoint()),
+                manifest("other", Set.of(), new EchoEntryPoint())), Set.of());
+
+        assertThatThrownBy(() -> registry.select(
+                AgentId.of("missing"), Request.class, Result.class))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("missing", "available", "echo", "other");
+    }
+
     private static AgentManifest<Request, Result> manifest(
             String id, Set<ConfigKey> config, EchoEntryPoint entryPoint) {
         return new AgentManifest<>(AgentId.of(id), "Echo agent", entryPoint,

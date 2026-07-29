@@ -12,9 +12,9 @@ class SigintHandlerTest {
 
     @Test
     void firstSigintCancelsCurrentTurn() {
-        CancellationToken token = new CancellationToken();
         AtomicBoolean exited = new AtomicBoolean(false);
-        SigintHandler handler = new SigintHandler(token, () -> exited.set(true));
+        SigintHandler handler = new SigintHandler(() -> exited.set(true));
+        CancellationToken token = handler.turnStarted();
 
         handler.onSigint();
 
@@ -25,9 +25,9 @@ class SigintHandlerTest {
 
     @Test
     void secondSigintExitsProcess() {
-        CancellationToken token = new CancellationToken();
         AtomicBoolean exited = new AtomicBoolean(false);
-        SigintHandler handler = new SigintHandler(token, () -> exited.set(true));
+        SigintHandler handler = new SigintHandler(() -> exited.set(true));
+        handler.turnStarted();
 
         handler.onSigint();
         handler.onSigint();
@@ -38,26 +38,40 @@ class SigintHandlerTest {
 
     @Test
     void turnFinishedReturnsToIdle() {
-        CancellationToken token = new CancellationToken();
-        SigintHandler handler = new SigintHandler(token, () -> {});
+        SigintHandler handler = new SigintHandler(() -> {});
+        CancellationToken token = handler.turnStarted();
 
         handler.onSigint();
-        handler.turnFinished();
+        handler.turnFinished(token);
 
         assertThat(handler.state()).isEqualTo(State.IDLE);
     }
 
     @Test
-    void sigintAfterTurnFinishedFiresFreshCancel() {
-        CancellationToken token = new CancellationToken();
+    void nextTurnReceivesFreshUncancelledToken() {
         AtomicBoolean exited = new AtomicBoolean(false);
-        SigintHandler handler = new SigintHandler(token, () -> exited.set(true));
+        SigintHandler handler = new SigintHandler(() -> exited.set(true));
+        CancellationToken first = handler.turnStarted();
 
         handler.onSigint();
-        handler.turnFinished();
-        handler.onSigint();
+        handler.turnFinished(first);
+        CancellationToken second = handler.turnStarted();
 
-        assertThat(handler.state()).isEqualTo(State.CANCELLING);
+        assertThat(second).isNotSameAs(first);
+        assertThat(second.isCancelled()).isFalse();
+        assertThat(handler.state()).isEqualTo(State.IDLE);
+    }
+
+    @Test
+    void idleSigintDoesNotPolluteNextRun() {
+        AtomicBoolean exited = new AtomicBoolean(false);
+        SigintHandler handler = new SigintHandler(() -> exited.set(true));
+
+        handler.onSigint();
+        CancellationToken token = handler.turnStarted();
+
+        assertThat(handler.state()).isEqualTo(State.IDLE);
+        assertThat(token.isCancelled()).isFalse();
         assertThat(exited).isFalse();
     }
 }
