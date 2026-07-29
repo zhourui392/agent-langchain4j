@@ -1,11 +1,14 @@
 package com.anthropic.agentkit.application.task;
 
 import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.AgentRunLimits;
+import com.anthropic.agentkit.domain.agent.RunDeadline;
 import com.anthropic.agentkit.domain.agent.RunId;
 import com.anthropic.agentkit.domain.agent.WorkspaceId;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.port.ArtifactStore;
 import com.anthropic.agentkit.domain.port.BackgroundTaskLauncher;
+import com.anthropic.agentkit.domain.port.SecretProvider;
 import com.anthropic.agentkit.domain.task.ArtifactId;
 import com.anthropic.agentkit.domain.task.ArtifactReference;
 import com.anthropic.agentkit.domain.task.BackgroundTaskRequest;
@@ -125,6 +128,29 @@ class BackgroundTaskServiceTest {
         }
     }
 
+    @Test
+    void taskTimeoutCannotExceedRunLimitAndRunCancellationPropagates() {
+        ControlledLauncher launcher = new ControlledLauncher();
+        CancellationToken cancellation = new CancellationToken();
+        ExecutionContext base = ExecutionContext.of(
+                RunId.of("run-a"), WorkspaceId.of("workspace-a"), workspace,
+                cancellation, AgentBudget.unlimited());
+        AgentRunLimits limits = new AgentRunLimits(
+                RunDeadline.unlimited(), Duration.ofSeconds(1), Duration.ofMillis(25));
+        ExecutionContext limited = ExecutionContext.of(
+                base.runId(), base.workspaceId(), base.cwd(), cancellation, base.budget(),
+                SecretProvider.none(), limits, base.budgetState());
+
+        try (BackgroundTaskService service = service(
+                launcher, new MemoryArtifactStore(), 128)) {
+            service.start(request(), limited);
+            cancellation.cancel();
+
+            assertThat(launcher.spec.timeout()).isEqualTo(Duration.ofMillis(25));
+            assertThat(launcher.handle.cancelled).isTrue();
+        }
+    }
+
     private BackgroundTaskService service(
             BackgroundTaskLauncher launcher, ArtifactStore artifacts, int preview) {
         return new BackgroundTaskService(
@@ -145,9 +171,11 @@ class BackgroundTaskServiceTest {
 
     private static final class ControlledLauncher implements BackgroundTaskLauncher {
         private ControlledHandle handle;
+        private TaskLaunchSpec spec;
 
         @Override
         public TaskHandle launch(TaskLaunchSpec spec) {
+            this.spec = spec;
             handle = new ControlledHandle(spec.id(), spec.scope());
             return handle;
         }
