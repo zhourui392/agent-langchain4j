@@ -32,12 +32,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,6 +48,7 @@ import org.slf4j.MDC;
 final class ParallelToolDispatcher {
 
     private static final Logger log = LoggerFactory.getLogger(ParallelToolDispatcher.class);
+    private static final long TOOL_TERMINATION_GRACE_MILLIS = 250;
 
     private final ToolRegistry tools;
     private final ExecutionContext executionContext;
@@ -340,10 +343,18 @@ final class ParallelToolDispatcher {
 
     private ToolResult executeBounded(Tool tool, ToolInvocation invocation) {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+        AtomicBoolean toolStarted = new AtomicBoolean();
+        CountDownLatch toolStopped = new CountDownLatch(1);
         Map<String, String> parentMdc = MDC.getCopyOfContextMap();
-        Future<ToolResult> future = executor.submit(() -> withMdc(
-                parentMdc, invocation.id(),
-                () -> tool.execute(invocation.args(), executionContext)));
+        Future<ToolResult> future = executor.submit(() -> {
+            toolStarted.set(true);
+            try {
+                return withMdc(parentMdc, invocation.id(),
+                        () -> tool.execute(invocation.args(), executionContext));
+            } finally {
+                toolStopped.countDown();
+            }
+        });
         try (var ignored = executionContext.cancellation().onCancel(
                 () -> future.cancel(true))) {
             long waitNanos = executionContext.limits().toolWait().toNanos();
@@ -365,7 +376,25 @@ final class ParallelToolDispatcher {
             }
             return ToolResult.of(ToolResultStatus.ERROR, messageOf(ex.getCause()));
         } finally {
-            executor.shutdownNow();
+            stopExecutor(executor, tool.name(), toolStarted.get(), toolStopped);
+        }
+    }
+
+    private static void stopExecutor(
+            ExecutorService executor, String toolName,
+            boolean toolStarted, CountDownLatch toolStopped) {
+        executor.shutdownNow();
+        if (!toolStarted) {
+            return;
+        }
+        try {
+            if (!toolStopped.await(
+                    TOOL_TERMINATION_GRACE_MILLIS, TimeUnit.MILLISECONDS)) {
+                log.warn("tool execution outlived cancellation grace: tool={}", toolName);
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            log.warn("interrupted while awaiting tool termination: tool={}", toolName);
         }
     }
 
