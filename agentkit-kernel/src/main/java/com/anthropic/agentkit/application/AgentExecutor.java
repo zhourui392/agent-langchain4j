@@ -8,6 +8,7 @@ import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.agent.AgentRunResult;
 import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
+import com.anthropic.agentkit.domain.conversation.CompactionBoundary;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.ToolResultMessage;
@@ -94,7 +95,9 @@ public final class AgentExecutor {
         if (!conversation.sessionId().equals(context.sessionId())) {
             throw new IllegalArgumentException("run context session does not match conversation");
         }
-        return CompletableFuture.supplyAsync(() -> loop(conversation, context, listener, systemPrompt));
+        AgentEventListener safeListener = SafeAgentEventListener.protect(listener);
+        return CompletableFuture.supplyAsync(
+                () -> loop(conversation, context, safeListener, systemPrompt));
     }
 
     private AgentRunResult loop(Conversation conversation, AgentRunContext context,
@@ -267,8 +270,7 @@ public final class AgentExecutor {
 
     private ContextDecision prepareContext(
             Conversation conversation, AgentRunContext context, RunEventRecorder recorder) {
-        Optional<com.anthropic.agentkit.domain.conversation.CompactionBoundary> before =
-                conversation.lastCompaction();
+        Optional<CompactionBoundary> before = conversation.lastCompaction();
         ContextDecision decision = contextPolicy.beforeLlmCall(conversation, context);
         recordCompaction(before, conversation, recorder);
         return decision;
@@ -277,8 +279,7 @@ public final class AgentExecutor {
     private ContextDecision recoverContext(
             Conversation conversation, Throwable failure, AgentRunContext context,
             RunEventRecorder recorder) {
-        Optional<com.anthropic.agentkit.domain.conversation.CompactionBoundary> before =
-                conversation.lastCompaction();
+        Optional<CompactionBoundary> before = conversation.lastCompaction();
         ContextDecision decision = contextPolicy.recoverFromOverflow(
                 conversation, failure, context);
         recordCompaction(before, conversation, recorder);
@@ -286,7 +287,7 @@ public final class AgentExecutor {
     }
 
     private void recordCompaction(
-            Optional<com.anthropic.agentkit.domain.conversation.CompactionBoundary> before,
+            Optional<CompactionBoundary> before,
             Conversation conversation, RunEventRecorder recorder) {
         conversation.lastCompaction()
                 .filter(boundary -> before.filter(boundary::equals).isEmpty())

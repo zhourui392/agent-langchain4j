@@ -19,7 +19,7 @@
 | S7 中断 + 流式渲染 | #33–35 | 0.5d | CancellationToken + SIGINT + 实时 token 输出 |
 | S8 持久化 | #36–38 | 0.5d | JSONL store + /resume + SessionId |
 | MVP-Gate | #39 | — | 端到端冒烟，打 `v0.1.0-mvp` |
-| S9 Runtime Hardening | #40–46 | 进行中（6/7） | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
+| S9 Runtime Hardening | #40–46 | 已完成（7/7） | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
 | **MVP 合计** | — | **≈8 人天** | — |
 
 ## 依赖图
@@ -739,13 +739,13 @@ S0 (1→2→3)
 
 ### #46 [S9-Kernel-TDD] append-only RunEventStore 与安全 resume （blockedBy: 41, 42, 45）
 
-**状态**：待开始。
+**状态**：已完成（2026-07-29）。
 
 **Red**：append-only、event projection、settled 不重放、in-flight 标 UNKNOWN、terminal/usage/compaction 可恢复、尾记录容错。
 
-**Green**：定义版本化 `RunEvent`/`RunEventStore` port 与文件实现；Conversation/RunResult 从事件重建。
+**Green**：定义版本化 `RunEvent`/`RunEventStore` port 与 append-only 文件实现；Conversation/RunResult 从事件重建；started-but-unsettled 恢复为 UNKNOWN，且恢复路径不持有工具执行能力。
 
-**Refactor**：事实存储与 listener 分离；旧 ChatMemoryStore/session 提供兼容迁移路径。
+**Refactor**：事实存储与 listener 分离；listener 失败不影响 run/event；落盘敏感字段递归脱敏且文本有界；schema v1/未来版本/必要字段/尾截断兼容测试齐全；旧 ChatMemoryStore/session 保持可读兼容路径。
 
 **DoD**：kill/restart 不重复已完成工具；终态可完整恢复；不猜测外部副作用；全量 verify 通过。
 

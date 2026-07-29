@@ -1,6 +1,6 @@
 # AgentKit Kernel：高优先级 Agent Runtime 补齐任务
 
-> 状态：执行中；已纳入 `TASKLIST.md` S9，#40–#45 已完成
+> 状态：已完成；已纳入 `TASKLIST.md` S9，#40–#46 全部完成
 >
 > 审计日期：2026-07-29
 >
@@ -12,7 +12,7 @@
 
 `agentkit-kernel` 已经完成一个可用的 MVP happy path：模型流式输出、多轮 tool-use、权限检查、并发工具执行且保序回填、取消令牌、预算、上下文压缩服务、JSONL 会话、prompt cache、知识型 Skill、`SubAgentTool`、`StructuredAgent`、结构化输出工具以及 OpenAI/Anthropic provider 都已存在。
 
-当前与 Claude Code / Codex 成熟 Agent 流程的首要差距，不是再增加几个工具，而是补齐 **Agent 运行控制面**：一次 run 的作用域、tool-use 生命周期、可靠终态、安全边界、可取消 I/O、上下文策略和可恢复事件。若先做 MCP、后台任务或更复杂的多 Agent 编排，现有的 cwd/cancellation 分裂、悬空 tool-use、伪 terminal 和安全默认值会被复制到每一个新入口。
+本轮与 Claude Code / Codex 成熟 Agent 流程对照后识别出的首要差距，是 **Agent 运行控制面**：一次 run 的作用域、tool-use 生命周期、可靠终态、安全边界、可取消 I/O、上下文策略和可恢复事件。`#40–#46` 已按依赖顺序完成，这些语义现在成为 MCP、后台任务和更通用子 Agent 的共同基座；后续能力仍按真实消费方触发，不因功能表对齐而自动进入 kernel。
 
 本文件把高优先级任务定义为：
 
@@ -21,7 +21,7 @@
 3. 是 MCP、通用子 Agent、checkpoint、后台任务等后续能力的共同前置抽象；
 4. 可以在不把领域工作流下沉 kernel 的前提下完成。
 
-建议先完成 `#40 → #41 → #42`，再并行推进 `#43/#44`，最后完成 `#45/#46`。在这批任务完成前，不建议把 kernel 宣称为与 Claude Code / Codex 同等级的通用 Agent runtime。
+实际完成顺序为 `#40 → #41 → #42 → #43 → #44 → #45 → #46`。本轮关闭的是高风险 runtime 不变量，不代表 AgentKit 与 Claude Code / Codex 在产品 UI、插件生态、托管隔离、MCP 或后台任务上等价。
 
 ## 2. 文档与任务编号约定
 
@@ -43,11 +43,11 @@
 | 运行结果 | executor 返回 `AgentRunResult`，含 stop reason、payload、usage 和预算消费 | stop reason、usage、取消、超时、任务结果都是一等运行结果 | 基础终态已补齐，主动取消/超时见 #44 |
 | LLM 取消 | `LlmCall` 提供 completion/cancel；deadline、provider/tool timeout、late callback 隔离均由 run scope 统一控制 | 运行取消应终止正在进行的模型/工具 I/O | 已补齐 kernel 终态与 best-effort provider 取消；SDK 无原生 cancel handle 的限制已记录 |
 | 上下文 | executor 每次主 LLM 调用前统一执行策略；显式边界、单次 overflow 恢复与全局工具输出限制已落地 | 成熟 runtime 在每轮调用前治理上下文，并可从 overflow 恢复 | 已补齐运行期治理；事件恢复见 #46 |
-| 会话恢复 | 保存消息投影，整文件原子重写 | 支持 resume/fork/checkpoint，并区分已完成和 in-flight action | 仅有消息恢复 |
+| 会话恢复 | per-run append-only `RunEventStore`；settled 不重放、in-flight 标 UNKNOWN；终态/usage/compaction 可投影 | 支持 resume/fork/checkpoint，并区分已完成和 in-flight action | 安全 run resume 已补齐；fork/rewind 与 CLI 新入口后置 |
 | 子 Agent | 有同步、只读、文本返回的 `SubAgentTool` | 支持角色、模型、预算、取消、跟进和独立生命周期 | 可用原型，后续任务 |
 | MCP / hooks / background | MCP 只有空 package；listener 只观察；Bash 同步 | 两者均提供 MCP、生命周期扩展及长任务管理能力 | 非首批，见后续文档 |
 
-成熟度是定性判断，不是兼容性百分比承诺：正常成功路径已经比较完整；异常、scope、安全、恢复和多 Agent 控制面仍处于原型阶段。按本次审计维度，整体约为成熟 Claude Code / Codex runtime 的 **55%–65%**。
+成熟度是定性判断，不是兼容性百分比承诺。审计开始时的估计约为成熟 Claude Code / Codex runtime 的 **55%–65%**；完成 `#40–#46` 后，异常、scope、安全、取消、上下文和恢复这组首要控制面缺口已关闭。本文不重新给出百分比，因为剩余差异主要是 MCP、后台任务、可等待运行态、fork/rewind、通用子 Agent 和宿主产品能力，是否实现取决于项目边界而非单一“完成度”。
 
 ## 4. 领域模型审计
 
@@ -694,6 +694,19 @@ RunStopped
 - run 的 stop reason、usage、terminal payload 和 compaction 信息可完整恢复。
 - event log 持续 append，不因消息数增长反复重写全部历史。
 - 明确记录“不可判断是否完成”的副作用，而不是静默重试。
+
+**完成结果**
+
+- domain 新增版本化 sealed `RunEvent` 与 `RunEventStore` port；当前 schema v1 覆盖 `RunStarted`、`LlmCallStarted`、`AssistantTurnReceived`、工具 started/settled、`CompactionCompleted` 和 `RunStopped`。每条事件携带 `RunId`、`SessionId`、`WorkspaceId`、单调 sequence 与时间戳。
+- `FileRunEventStore` 以每个 run 一个 owner-only JSONL 文件持续 append，并在写入后 `force(true)`；文件名由 URL-safe Base64 编码的 RunId 生成。load/append 校验连续 sequence 和稳定 scope，不会为新增事件重写旧前缀。
+- 尾容错只接受“无换行且解析命中 JSON EOF”的最后一条；中间损坏、完整但缺字段的记录、未知未来 schema、scope 漂移和 sequence 缺口均 fail-fast。schema v1 的全部事件类型有显式 round-trip 测试。
+- `RunEventProjector` 可重建 Conversation、compaction boundary、终态 `AgentRunResult`、usage、预算消费与非敏感 terminal payload。`RunEventResumer` 只依赖 store/projector，不持有 `ToolRegistry` 或任何执行入口，因此结构上不会重跑工具。
+- settled invocation 只恢复已记录结果；started-but-unsettled 恢复为 `UNKNOWN + agentkit.recovery=needs_reconciliation`；assistant 已声明但从未 started 的调用恢复为 `CANCELLED + agentkit.recovery=not_started`。并行 batch 仍按原 tool-use 顺序投影。
+- executor 在外部工具执行前先持久化 `ToolInvocationStarted`，执行并 settle 后再持久化 `ToolInvocationSettled`。事件写失败以 `PERSISTENCE_ERROR` 结束；若 settled 事实未能持久化，恢复只得到 UNKNOWN，不会用自动重试猜测副作用结果。
+- `SafeAgentEventListener` 统一隔离所有 observer callback；listener 失败不会阻止工具、conversation、event append 或最终 `RunStopped`。事实 recorder 使用独立 sequence，no-op recorder 不再依赖分散的 enabled guard。
+- 文件 codec 在 durable boundary 递归脱敏 password/secret/token/api-key/authorization/credential 字段，专门解析并治理 `argumentsJson`；terminal payload 同样治理。持久文本上限为 32,000 characters，大工具结果增加 persistence truncation metadata 且明确 `artifact=omitted`，不伪造 URI。
+- CLI 组合根已同时写入新的 run event store，但旧 `FileChatMemoryStore` 与 `/resume <sessionId>` 读取路径保持兼容。安全 run 恢复 API 当前是 `RunEventResumer.resume(RunId)`；新的 CLI run-resume 命令留给后续组合根任务。
+- 本任务不承诺 Bash、MCP、远端数据库等外部副作用的通用 rollback，也不把 worktree 当作多用户 sandbox。文件日志索引、rotation/retention 与多进程 writer fencing 属于后续规模化任务。
 
 **blockedBy**：#41、#42、#45。
 

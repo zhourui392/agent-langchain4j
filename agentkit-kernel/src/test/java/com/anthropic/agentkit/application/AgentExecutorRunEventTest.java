@@ -1,19 +1,26 @@
 package com.anthropic.agentkit.application;
 
 import com.anthropic.agentkit.application.context.ContextPolicy;
+import com.anthropic.agentkit.application.context.ContextCompactionService;
 import com.anthropic.agentkit.application.recovery.RunEventProjector;
 import com.anthropic.agentkit.application.tool.ToolOutputPolicy;
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.agent.AgentRunResult;
 import com.anthropic.agentkit.domain.agent.RunId;
 import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
+import com.anthropic.agentkit.domain.conversation.TokenBudget;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.UserMessage;
+import com.anthropic.agentkit.domain.port.ChatRequest;
+import com.anthropic.agentkit.domain.port.LlmCall;
+import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.port.RunEventPersistenceException;
 import com.anthropic.agentkit.domain.port.RunEventStore;
 import com.anthropic.agentkit.domain.run.RunEvent;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
+import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
 import com.anthropic.agentkit.domain.tool.ToolUseRequest;
 import com.anthropic.agentkit.testsupport.FakeTool;
@@ -65,8 +72,43 @@ class AgentExecutorRunEventTest {
         assertThat(store.events).hasSize(3);
     }
 
+    @Test
+    void listenerFailureDoesNotPreventRunStoppedFact() {
+        MemoryStore store = new MemoryStore();
+        FakeTool read = FakeTool.readOnlyReturning("Read", "body");
+        StubLlmClient llm = new StubLlmClient()
+                .enqueue(toolTurn()).enqueue(AiMessage.text("done"));
+        Conversation conversation = conversation("broken-listener");
+
+        AgentRunResult result = executor(llm, new ToolRegistry().register(read), store)
+                .run(conversation, runContext(conversation), failingListener()).join();
+
+        assertThat(result.stopReason()).isEqualTo(StopReason.MODEL_COMPLETED);
+        assertThat(read.callCount()).isOne();
+        assertThat(store.events.getLast()).isInstanceOf(RunEvent.RunStopped.class);
+    }
+
+    @Test
+    void executorPersistsCompactionCompleted() {
+        MemoryStore store = new MemoryStore();
+        CompactingLlm llm = new CompactingLlm();
+        Conversation conversation = longConversation("compaction-event");
+        ContextPolicy policy = new ContextCompactionService(llm, TokenBudget.of(40), 1);
+        AgentExecutor executor = new AgentExecutor(
+                llm, new ToolRegistry(), PermissionService.bypassing(), policy,
+                ToolOutputPolicy.defaultLimited(), store);
+
+        AgentRunResult result = executor.run(
+                conversation, runContext(conversation)).join();
+
+        assertThat(result.stopReason()).isEqualTo(StopReason.MODEL_COMPLETED);
+        assertThat(store.events).anyMatch(RunEvent.CompactionCompleted.class::isInstance);
+        assertThat(new RunEventProjector().project(store.events).conversation().messages())
+                .containsExactlyElementsOf(conversation.messages());
+    }
+
     private static AgentExecutor executor(
-            StubLlmClient llm, ToolRegistry tools, RunEventStore store) {
+            LlmClient llm, ToolRegistry tools, RunEventStore store) {
         return new AgentExecutor(
                 llm, tools, PermissionService.bypassing(), ContextPolicy.none(),
                 ToolOutputPolicy.defaultLimited(), store);
@@ -85,6 +127,38 @@ class AgentExecutorRunEventTest {
     private static AiMessage toolTurn(String name) {
         return AiMessage.of("calling", List.of(new ToolUseRequest(
                 new ToolUseId("tool-1"), name, "{}")));
+    }
+
+    private static Conversation longConversation(String session) {
+        Conversation conversation = conversation(session);
+        for (int index = 0; index < 5; index++) {
+            conversation.append(UserMessage.of("history-" + index + "-" + "x".repeat(80)));
+        }
+        return conversation;
+    }
+
+    private static AgentEventListener failingListener() {
+        return new AgentEventListener() {
+            @Override public void onRunStart(
+                    AgentRunContext context) { fail(); }
+            @Override public void onLlmRequestStart() { fail(); }
+            @Override public void onAssistantTextDelta(String delta) { fail(); }
+            @Override public void onToolUseStart(ToolUseRequest request) { fail(); }
+            @Override public void onToolUseEnd(ToolUseRequest request,
+                                                ToolResult result,
+                                                long durationMs) { fail(); }
+            @Override public void onTurnComplete(AiMessage finalMessage) { fail(); }
+            private void fail() { throw new IllegalStateException("observer unavailable"); }
+        };
+    }
+
+    private static final class CompactingLlm implements LlmClient {
+        @Override
+        public LlmCall streamChat(ChatRequest request, StreamHandler handler) {
+            String text = request.systemPrompt().contains("compress conversation")
+                    ? "durable summary" : "done";
+            return LlmCall.start(handler, sink -> sink.onComplete(AiMessage.text(text)));
+        }
     }
 
     private static class MemoryStore implements RunEventStore {

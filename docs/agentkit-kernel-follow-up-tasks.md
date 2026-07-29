@@ -1,6 +1,6 @@
 # AgentKit Kernel：非高优先级与后续 Agent Runtime 任务
 
-> 状态：审计结论 / 待纳入 `TASKLIST.md`
+> 状态：候选 backlog / 待按真实需求纳入 `TASKLIST.md`；高优先级 Gate A–C 已完成
 >
 > 审计日期：2026-07-29
 >
@@ -12,7 +12,7 @@
 
 本文件覆盖 Claude Code / Codex 成熟流程中确实存在、且 AgentKit 未来大概率需要的能力：通用子 Agent runtime、可干预 lifecycle、MCP、后台任务、人机等待态、高级 checkpoint、model/retry policy、Agent 发现和 CLI 组合根修复。
 
-它们没有进入首批高优先级，原因只有一个：都依赖高优先级文档中尚未稳定的运行时语义。若直接实现：
+它们没有进入首批高优先级，原因只有一个：审计时都依赖尚未稳定的运行时语义。若当时直接实现：
 
 - 通用子 Agent 会继承错误的 cwd/cancellation，并可绕过 parent budget；
 - MCP 会把未知工具、timeout 和 permission 异常放大为悬空 tool-use；
@@ -21,11 +21,11 @@
 - checkpoint 会持久化一个无法区分 completed/in-flight 的消息快照；
 - AgentManifest 会把当前组合根缺陷扩散到更多 agent。
 
-因此本文件所有 kernel 任务默认 blockedBy 高优先级 Gate A；涉及外部 I/O、安全或恢复的任务还必须等待 Gate B/C。
+`#40–#46` 已于 2026-07-29 完成，Gate A–C 的技术依赖现在均已满足。本文任务仍不自动升级为高优先级：是否立项改由真实宿主、第二个消费方、可观测故障频率或规模瓶颈触发；各任务保留 `blockedBy` 作为已满足的历史依赖与回归门禁。
 
 ## 2. 编号与优先级
 
-- `#47`–`#55` 是候选 ID，尚未写入 `TASKLIST.md`。
+- `#47`–`#56` 是候选 ID，尚未写入 `TASKLIST.md`。
 - `P2`：高优先级 Gate A–C 完成后，能明显提升通用 Agent runtime 能力。
 - `P3`：平台/产品成熟度任务，需有真实宿主或第二种接入需求再实施。
 - 所有 `[TDD]` 任务继续执行 Red → Green → Refactor 三提交。
@@ -46,14 +46,16 @@
         │
         ├─→ #52 Advanced checkpoint/fork/rewind
         │
-        └─→ #53 Model/Retry policy
+        ├─→ #53 Model/Retry policy
+        │
+        └─→ #56 Event index/retention/writer fencing
 
 #47 + 第二个可派发 agent 入口
         └─→ #54 AgentManifest / coding entry point
                  └─→ #55 CLI composition cleanup
 ```
 
-建议交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`。如果近期没有 MCP 宿主，可先做 `#47`，不要为了“对齐产品功能表”提前实现没有消费方的扩展。
+建议交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`；`#56` 独立按日志规模或多 writer 需求触发。如果近期没有 MCP 宿主，可先做 `#47`，不要为了“对齐产品功能表”提前实现没有消费方的扩展。
 
 ## 4. 变化点地图
 
@@ -68,6 +70,7 @@
 | provider retry/fallback | provider factory、异常文本、调用入口 | `ModelPolicy` / `RetryPolicy` | #53 |
 | Agent 发现与派发 | 手工 wiring、模块专属 builder | `AgentManifest`/registry（平台层） | #54 |
 | CLI 命令和取消接线 | `AgentKitApplication.main`、slash commands | CLI composition root | #55 |
+| 事件日志规模与多 writer | 文件 append 前全量读取校验、实例内同步、无 retention | tail index + writer fencing + retention/rotation policy | #56 |
 
 ## 5. 后续任务详情
 
@@ -483,6 +486,40 @@ record AgentManifest(
 
 **blockedBy**：#40、#46、#54。
 
+---
+
+### #56 [Kernel-Infra/TDD, P3] `RunEventStore` 索引、retention 与多进程 writer fencing
+
+**Goal**
+
+在单个 run 事件量或并发宿主规模真实增长后，为 append-only 事实日志增加有界查找成本、明确保留策略和跨实例 writer 排他，同时保持 `#46` 的序列、scope、崩溃尾记录与不重放语义。
+
+**当前边界**
+
+- `FileRunEventStore.append` 为验证下一 sequence 会读取并解码该 run 的完整日志；不会重写旧前缀，但长期 run 的累计读成本为 O(n²)。
+- `synchronized` 只保护一个 store 实例；当前 L0 组合根是单进程、单实例 writer，尚未承诺多个 JVM/worker 同时写同一 RunId。
+- 每个 run 一个 JSONL 文件，没有 size/time retention、rotation、冷归档或可重建 tail index。
+- load 的严格全量校验适合恢复与审计，但不等于面向大量事件的分页查询接口。
+
+**建议范围**
+
+- 可重建 tail index：至少记录最后 sequence、文件长度和已验证 schema/scope；index 损坏时从 JSONL 事实重建，不能反客为主。
+- writer fencing：同一 RunId 同时只允许一个合法 writer；文件锁或宿主 lease 的失败语义必须明确，不允许两个 writer 都自认为成功。
+- retention/rotation：必须保留审计与恢复所需边界；删除/归档是显式 policy，不得在 append 路径静默丢事件。
+- paged read/tail API 与完整 `load` 分离；`RunEventResumer` 仍得到一条连续、已校验的事实流。
+
+**Red/DoD**
+
+- `appendCostDoesNotGrowWithEntireValidatedPrefix`
+- `rejectsConcurrentWriterForSameRun`
+- `rebuildsTailIndexAfterCrashOrDeletion`
+- `rotationPreservesContiguousProjection`
+- `retentionNeverDeletesActiveOrUnsettledRun`
+- `corruptIndexCannotHideCorruptEventLog`
+- Windows/Linux 文件锁或 lease 合同均有平台测试；不把数据库或分布式队列提前下沉 kernel。
+
+**blockedBy**：#46（已满足）；只有长 run 事件量、多个 JVM writer 或磁盘保留需求出现时立项。
+
 ## 6. 暂不建议立项的能力
 
 下列能力在 Claude Code/Codex 产品中可能存在，但当前项目没有足够需求或与既定边界冲突：
@@ -512,6 +549,7 @@ record AgentManifest(
 | #53 Retry/Model policy | provider rate-limit/瞬态错误达到可观测频率，或 child model tier 有成本需求 |
 | #54 Manifest | diagnosis/coding 需要由同一入口真实派发；当前已接近满足 |
 | #55 CLI cleanup | CLI 重新成为交付面，或用于验证统一 runtime |
+| #56 Event scaling | 单 run 日志达到可测性能瓶颈、同一 RunId 出现多进程 writer，或宿主提出 retention/归档要求 |
 
 ## 8. 与高优先级任务的边界复核
 

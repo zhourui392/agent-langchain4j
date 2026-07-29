@@ -4,6 +4,8 @@ import com.anthropic.agentkit.domain.agent.RunId;
 import com.anthropic.agentkit.domain.port.RunEventPersistenceException;
 import com.anthropic.agentkit.domain.port.RunEventStore;
 import com.anthropic.agentkit.domain.run.RunEvent;
+import com.anthropic.agentkit.domain.run.RunEventMetadata;
+import com.fasterxml.jackson.core.io.JsonEOFException;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -84,7 +86,7 @@ public final class FileRunEventStore implements RunEventStore {
             try {
                 events.add(RunEventJsonCodec.fromJson(lines[index]));
             } catch (IOException | RuntimeException failure) {
-                if (index == lastRecord && !terminated) {
+                if (index == lastRecord && !terminated && causedByJsonEof(failure)) {
                     break;
                 }
                 throw corruption(index, failure);
@@ -102,18 +104,44 @@ public final class FileRunEventStore implements RunEventStore {
                             + event.metadata().runId() + " but got "
                             + event.metadata().sequence());
         }
+        if (!existing.isEmpty() && !sameScope(
+                existing.getFirst().metadata(), event.metadata())) {
+            throw new IllegalArgumentException("run event scope changed within stream");
+        }
     }
 
     private void validateStream(RunId runId, List<RunEvent> events) {
         long expected = 1;
+        RunEventMetadata first = events.isEmpty() ? null : events.getFirst().metadata();
         for (RunEvent event : events) {
             if (!event.metadata().runId().equals(runId)) {
                 throw new RunEventCorruptionException("run id changed within event log");
+            }
+            if (!sameScope(first, event.metadata())) {
+                throw new RunEventCorruptionException("run event scope changed within stream");
             }
             if (event.metadata().sequence() != expected++) {
                 throw new RunEventCorruptionException("event sequence is not monotonic per run");
             }
         }
+    }
+
+    private static boolean sameScope(
+            RunEventMetadata first, RunEventMetadata candidate) {
+        return first == null || first.runId().equals(candidate.runId())
+                && first.sessionId().equals(candidate.sessionId())
+                && first.workspaceId().equals(candidate.workspaceId());
+    }
+
+    private static boolean causedByJsonEof(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof JsonEOFException) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private void appendLine(Path file, String line) throws IOException {

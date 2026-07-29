@@ -33,6 +33,7 @@ final class RunEventJsonCodec {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final TypeReference<Map<String, Object>> OBJECT_MAP = new TypeReference<>() { };
+    private static final RunEventDataPolicy DATA_POLICY = new RunEventDataPolicy(JSON);
 
     private RunEventJsonCodec() {
     }
@@ -57,7 +58,7 @@ final class RunEventJsonCodec {
             case RunEvent.CompactionCompleted compacted -> writeCompaction(root, compacted);
             case RunEvent.RunStopped stopped -> writeStopped(root, stopped);
         }
-        return root.toString();
+        return DATA_POLICY.govern(root).toString();
     }
 
     static RunEvent fromJson(String line) throws IOException {

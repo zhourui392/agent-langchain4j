@@ -721,6 +721,25 @@ diagnosis 的 `TruncatingTool` 仍可作为领域特定的更严格 head/tail �
 
 ---
 
+### 16.14 append-only RunEventStore 与安全恢复（2026-07-29）
+
+Conversation 是消息投影，不再承担一次 run 的全部事实记录。kernel 以版本化、append-only 的 `RunEvent` 表达运行生命周期，并通过 projection 恢复 Conversation、工具状态和 `AgentRunResult`；恢复代码只读事实，不获得工具执行能力。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| 事件事实 | schema v1 的事件包含 run/session/workspace scope、连续 sequence 与时间戳，覆盖 run start、LLM request、assistant turn、工具 started/settled、compaction 和 run stop | 终态、usage、预算消费、terminal payload 与 compaction 不再只能从消息、listener 或日志文本推断 |
+| 持久化顺序 | 外部工具执行前必须先 append `ToolInvocationStarted`；settle 后 append `ToolInvocationSettled`；event store 写失败以 `PERSISTENCE_ERROR` 停止 | start 写失败时无未记录副作用；settled 写失败时恢复为 UNKNOWN，绝不因缺 result 自动重放工具 |
+| 恢复语义 | settled 只恢复结果；started-but-unsettled 标 `UNKNOWN/needs_reconciliation`；已声明但未 started 标 `CANCELLED/not_started` | kernel 不猜测 Bash、MCP、数据库或远端系统副作用是否成功；并行 batch 仍按原请求顺序形成完整消息投影 |
+| 文件合同 | `FileRunEventStore` 每个 RunId 一个 append-only JSONL，scope/sequence 连续校验，写后 fsync，POSIX 尝试 owner-only `0600` | 新事件不重写旧前缀；当前实现面向 L0 单进程 writer，索引、rotation/retention 与多进程 fencing 后置 |
+| 尾记录与版本 | 只忽略无结尾换行且 JSON 解析命中 EOF 的最后一条；中间损坏、完整语义错误、缺必要字段和未知未来 schema 均拒绝 | crash 截断可以读取最后一个完整事实，但版本不兼容不会伪装成截断而静默丢失 |
+| Observer 边界 | `AgentEventListener` 经安全 decorator 调用，所有 callback 都只是可失败投影；`RunEventRecorder` 独立维护事实 sequence | listener 故障不改变工具执行、Conversation、持久事实或 `RunStopped`；需要阻断的扩展必须使用未来 typed interceptor |
+| Durable data policy | 敏感 key 与 `argumentsJson` 在 codec 边界递归脱敏；持久文本限制 32,000 characters，截断标 `artifact=omitted` | owner-only 权限不是脱敏替代品；非敏感 payload 无损恢复，大/敏感 payload 按明确 policy 治理且不伪造 artifact URI |
+| 兼容路径 | 旧 `ChatMemoryStore`/session 文件继续可读，CLI 旧 `/resume <sessionId>` 不改变；新安全恢复入口为 `RunEventResumer.resume(RunId)` | 已有用户会话不会突然失效；CLI 的 run-resume 展示与命令接线留在 interfaces/composition 后续任务 |
+
+`RunEventStore` 提供的是可审计事实与“绝不盲目重放”的恢复语义，不是通用事务系统。kernel 不承诺回滚 Bash、MCP、数据库或远端 API；未来文件 checkpoint、fork/rewind 也必须显式说明只覆盖哪些资源。
+
+---
+
 ## 17. 下一步
 
 1. agent-web 切换依赖 `agentkit-agent-diagnosis`，通过 `DiagnoseEngineBuilder` 组装。

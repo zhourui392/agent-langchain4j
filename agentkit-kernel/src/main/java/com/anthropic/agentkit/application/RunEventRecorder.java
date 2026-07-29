@@ -5,6 +5,7 @@ import com.anthropic.agentkit.domain.agent.AgentRunResult;
 import com.anthropic.agentkit.domain.conversation.CompactionBoundary;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.message.AiMessage;
+import com.anthropic.agentkit.domain.message.ChatMessage;
 import com.anthropic.agentkit.domain.port.RunEventPersistenceException;
 import com.anthropic.agentkit.domain.port.RunEventStore;
 import com.anthropic.agentkit.domain.run.RunEvent;
@@ -18,90 +19,103 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Required fact writer for one configured run; sequencing is independent from observers. */
-final class RunEventRecorder {
+interface RunEventRecorder {
 
-    private final RunEventStore store;
-    private final AgentRunContext context;
-    private final AtomicLong sequence = new AtomicLong();
-    private final boolean enabled;
-
-    private RunEventRecorder(
-            RunEventStore store, AgentRunContext context, boolean enabled) {
-        this.store = Objects.requireNonNull(store, "store");
-        this.context = context;
-        this.enabled = enabled;
-    }
+    RunEventRecorder NO_OP = new RunEventRecorder() { };
 
     static RunEventRecorder forRun(RunEventStore store, AgentRunContext context) {
-        return new RunEventRecorder(store, Objects.requireNonNull(context, "context"), true);
+        return new PersistingRunEventRecorder(store, context);
     }
 
     static RunEventRecorder disabled() {
-        return new RunEventRecorder(RunEventStore.none(), null, false);
+        return NO_OP;
     }
 
-    void runStarted(Conversation conversation) {
-        if (!enabled) { return; }
-        append(new RunEvent.RunStarted(
-                metadata(), conversation.messages(), conversation.lastCompaction()));
-    }
+    default void runStarted(Conversation conversation) { }
 
-    void llmCallStarted(int messageCount) {
-        if (!enabled) { return; }
-        append(new RunEvent.LlmCallStarted(metadata(), messageCount));
-    }
+    default void llmCallStarted(int messageCount) { }
 
-    void assistantTurnReceived(AiMessage message) {
-        if (!enabled) { return; }
-        append(new RunEvent.AssistantTurnReceived(metadata(), message));
-    }
+    default void assistantTurnReceived(AiMessage message) { }
 
-    void toolInvocationStarted(ToolUseId toolUseId) {
-        if (!enabled) { return; }
-        append(new RunEvent.ToolInvocationStarted(metadata(), toolUseId));
-    }
+    default void toolInvocationStarted(ToolUseId toolUseId) { }
 
-    void toolInvocationSettled(ToolUseId toolUseId, ToolResult result) {
-        if (!enabled) { return; }
-        append(new RunEvent.ToolInvocationSettled(metadata(), toolUseId, result));
-    }
+    default void toolInvocationSettled(ToolUseId toolUseId, ToolResult result) { }
 
-    void compactionCompleted(Conversation conversation, CompactionBoundary boundary) {
-        if (!enabled) { return; }
-        List<com.anthropic.agentkit.domain.message.ChatMessage> messages = conversation.messages();
-        append(new RunEvent.CompactionCompleted(
-                metadata(), boundary, messages.subList(1, messages.size())));
-    }
+    default void compactionCompleted(
+            Conversation conversation, CompactionBoundary boundary) { }
 
-    void runStopped(AgentRunResult result) {
-        if (!enabled) { return; }
-        append(new RunEvent.RunStopped(
-                metadata(), result.stopReason(), result.finalMessage(),
-                result.structuredOutput(), result.usage(), result.consumption(),
-                result.errorDetail()));
-    }
+    default void runStopped(AgentRunResult result) { }
 
-    private RunEventMetadata metadata() {
-        if (!enabled) {
-            return null;
+    final class PersistingRunEventRecorder implements RunEventRecorder {
+        private final RunEventStore store;
+        private final AgentRunContext context;
+        private final AtomicLong sequence = new AtomicLong();
+
+        private PersistingRunEventRecorder(
+                RunEventStore store, AgentRunContext context) {
+            this.store = Objects.requireNonNull(store, "store");
+            this.context = Objects.requireNonNull(context, "context");
         }
-        return new RunEventMetadata(
-                RunEvent.CURRENT_SCHEMA_VERSION,
-                context.runId(), context.sessionId(), context.workspaceId(),
-                sequence.incrementAndGet(), Instant.now());
-    }
 
-    private void append(RunEvent event) {
-        if (!enabled) {
-            return;
+        @Override
+        public void runStarted(Conversation conversation) {
+            append(new RunEvent.RunStarted(
+                    metadata(), conversation.messages(), conversation.lastCompaction()));
         }
-        try {
-            store.append(event);
-        } catch (RunEventPersistenceException failure) {
-            throw failure;
-        } catch (RuntimeException failure) {
-            throw new RunEventPersistenceException(
-                    "failed to persist run event sequence " + event.metadata().sequence(), failure);
+
+        @Override
+        public void llmCallStarted(int messageCount) {
+            append(new RunEvent.LlmCallStarted(metadata(), messageCount));
+        }
+
+        @Override
+        public void assistantTurnReceived(AiMessage message) {
+            append(new RunEvent.AssistantTurnReceived(metadata(), message));
+        }
+
+        @Override
+        public void toolInvocationStarted(ToolUseId toolUseId) {
+            append(new RunEvent.ToolInvocationStarted(metadata(), toolUseId));
+        }
+
+        @Override
+        public void toolInvocationSettled(ToolUseId toolUseId, ToolResult result) {
+            append(new RunEvent.ToolInvocationSettled(metadata(), toolUseId, result));
+        }
+
+        @Override
+        public void compactionCompleted(
+                Conversation conversation, CompactionBoundary boundary) {
+            List<ChatMessage> messages = conversation.messages();
+            append(new RunEvent.CompactionCompleted(
+                    metadata(), boundary, messages.subList(1, messages.size())));
+        }
+
+        @Override
+        public void runStopped(AgentRunResult result) {
+            append(new RunEvent.RunStopped(
+                    metadata(), result.stopReason(), result.finalMessage(),
+                    result.structuredOutput(), result.usage(), result.consumption(),
+                    result.errorDetail()));
+        }
+
+        private RunEventMetadata metadata() {
+            return new RunEventMetadata(
+                    RunEvent.CURRENT_SCHEMA_VERSION,
+                    context.runId(), context.sessionId(), context.workspaceId(),
+                    sequence.incrementAndGet(), Instant.now());
+        }
+
+        private void append(RunEvent event) {
+            try {
+                store.append(event);
+            } catch (RunEventPersistenceException failure) {
+                throw failure;
+            } catch (RuntimeException failure) {
+                throw new RunEventPersistenceException(
+                        "failed to persist run event sequence "
+                                + event.metadata().sequence(), failure);
+            }
         }
     }
 }

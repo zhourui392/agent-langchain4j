@@ -64,13 +64,14 @@ final class ParallelToolDispatcher {
     }
 
     List<ToolResultMessage> dispatch(AiMessage aiMessage, AgentEventListener listener) {
+        AgentEventListener safeListener = SafeAgentEventListener.protect(listener);
         List<ToolUseRequest> requests = aiMessage.toolUseRequests();
-        requests.forEach(request -> notifyStart(listener, request));
+        requests.forEach(safeListener::onToolUseStart);
         log.info("dispatching tools: names={}, concurrency={}", toolNames(requests), requests.size());
         if (requests.size() == 1) {
-            return List.of(executeSingle(requests.get(0), listener));
+            return List.of(executeSingle(requests.get(0), safeListener));
         }
-        return executeAll(requests, listener);
+        return executeAll(requests, safeListener);
     }
 
     private ToolResultMessage executeSingle(ToolUseRequest request, AgentEventListener listener) {
@@ -110,7 +111,7 @@ final class ParallelToolDispatcher {
         ToolResult result = safeOutcome(request);
         eventRecorder.toolInvocationSettled(request.id(), result);
         long durationMs = (System.nanoTime() - startNs) / 1_000_000L;
-        notifyEnd(listener, request, result, durationMs);
+        listener.onToolUseEnd(request, result, durationMs);
         return result;
     }
 
@@ -273,23 +274,6 @@ final class ParallelToolDispatcher {
             return failure == null ? "tool execution failed" : failure.getClass().getSimpleName();
         }
         return failure.getMessage();
-    }
-
-    private static void notifyStart(AgentEventListener listener, ToolUseRequest request) {
-        try {
-            listener.onToolUseStart(request);
-        } catch (RuntimeException ex) {
-            log.warn("tool start listener failed: toolUseId={}", request.id(), ex);
-        }
-    }
-
-    private static void notifyEnd(AgentEventListener listener, ToolUseRequest request,
-                                  ToolResult result, long durationMs) {
-        try {
-            listener.onToolUseEnd(request, result, durationMs);
-        } catch (RuntimeException ex) {
-            log.warn("tool end listener failed: toolUseId={}", request.id(), ex);
-        }
     }
 
     private static <T> T withMdc(Map<String, String> parentMdc, ToolUseRequest request,
