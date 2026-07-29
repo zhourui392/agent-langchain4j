@@ -821,7 +821,7 @@ S0 (1→2→3)
 
 ### #51 [S10-Kernel-TDD] WAITING_FOR_INPUT / WAITING_FOR_APPROVAL 可恢复运行态 （blockedBy: 42, 43, 46）
 
-**状态**：待开始。
+**状态**：进行中（Red）。
 
 **Red**：ASK 在执行工具前暂停；批准后原 invocation 恰好执行一次；拒绝后 settle 为 denied；resume token 单次且不可跨 workspace；答案追加为新事件。
 

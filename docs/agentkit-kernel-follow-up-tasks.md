@@ -367,6 +367,8 @@ interface TaskHandle {
 
 ### #51 [Kernel-TDD, P2] `WAITING_FOR_INPUT` / `WAITING_FOR_APPROVAL` 可恢复运行态
 
+**状态**：进行中（Red，2026-07-29）。
+
 **Goal**
 
 把向用户提问、计划批准和工具 ASK 从同步 UI 回调提升为可持久化的 run suspension，使 CLI/Web 宿主都能暂停后恢复。
@@ -394,6 +396,27 @@ sealed interface RunSuspension {
 - resume token 单次消费且绑定 session/workspace/request。
 - 用户答案是新的 user event，不改写旧 event。
 - coding plan 仍是 coding domain VO；kernel 只认识通用 approval/input envelope。
+
+**实施前领域建模审计（2026-07-29）**
+
+- Summary：同步 `InteractivePrompter` 把“等待用户”错误地建模成 application 调用栈中的短暂分支；真正的一致性边界应是可持久化的 suspension/request 与一次性 token claim。approval 与 input 共享暂停/恢复协议，但消息投影不同：approval 的 tool batch 在恢复前不能进入 `Conversation`，input answer 则必须成为新消息和新事实。
+- Commands / Events：命令是 `RequestInput`、`RequestApproval`、`SuspendRun`、`Approve`、`Deny`、`SubmitInputAnswer`、`ClaimResumeToken`、`ResumeRunSegment`；事实是 `RunSuspended`、`ApprovalSubmitted`、`InputAnswered`、`ToolInvocationStarted/Settled`、`RunStopped`。token claim 必须先于任何恢复后的外部执行。
+- Ubiquitous Language：`RunSuspension` 是一次已持久化、尚未回答的等待；`SuspensionId` 是公开审计标识；`ResumeToken` 是不可写入 event/prompt/log 的单次凭证；`ApprovalRequest` 保存完整原 tool batch 及当时的 permission plan；`InputRequest` 是领域无关问题 envelope；`ResumeCommand` 只表达批准、拒绝或答案，不携带领域计划/诊断概念。
+- Domain Concept Map：聚合根为 pending `RunSuspension`；值对象包括 `SuspensionId`、`ResumeToken`、`SuspensionScope(sessionId, workspaceId, originatingRunId)`、`ApprovalRequest`、`InputRequest`、`InputAnswer` 与 `ApprovalDecision`；`RunSuspensionStore` 是原子 save/claim port；`AgentExecutor` 只编排新旧 run segment，不拥有 token 状态。
+- Aggregate Boundary：suspension payload、scope、expected response kind 与 token 消费属于同一个强一致边界；`Conversation` 与 `RunEvent` 是 append-only 投影，不参与 token 事务。approval 首段只持久化 pending assistant batch，不能把未配对 tool-use append 到 Conversation；新 segment claim 成功后才投影原 assistant batch，并按原顺序 settle 全批。input 问题可以作为无 tool-use 的 assistant message 完成投影，答案在新 segment 追加为 user message/event。
+- Invariants：pending save 成功后才能返回 waiting；原 run 与 resume run 必须同 session/workspace 且 RunId 不同；token 不可猜测、不可跨 scope/type、不可复用，错误 scope/type 不得误消费；permission batch 必须在任何工具执行前完整规划，存在 ASK 时全批暂停；批准不能覆盖原 policy DENY；拒绝时全批完整 settle 且零执行；批准后原 invocation 最多开始一次；claim 后执行中断不得 replay；恢复结果仍按原 `tool_use` 顺序 append；旧 event/message 永不改写；答案是新事实，不藏在旧 suspension 更新中。
+- Variation Point Map：持久化介质收敛到 `RunSuspensionStore`；token 生成/摘要与原子 claim 收敛到 store adapter；CLI/Web 只适配 `RunSuspension`/`ResumeCommand`；approval/input envelope 由 sealed variant 隔离；批量权限差异收敛到 preflight plan；coding/diagnosis 的计划审批规则留各 agent application/domain，不进入 kernel。
+- Refactor Signals：`PermissionService.check` 当前同时做 policy evaluation、同步 UI 和 cache，需拆出非阻塞 decision/preflight；`ParallelToolDispatcher` 当前在虚拟线程内逐个 ASK，需把 permission planning 移到并发执行之前；`AgentRunResult` 的 waiting stop reason 尚无 typed payload；`RunEventProjector` 当前会把未 settle batch误判为 interrupted，需显式认识 suspension/resume 事实。
+- Review Questions：本阶段按“batch 内任一 ASK 则全批暂停”处理，以免先发生部分副作用；拒绝会安全地 settle 全批而不执行原本 ALLOW 项。跨进程 durable store 只保证 token claim 不重放，不承诺 claim 后进程崩溃时自动判断外部副作用结果；该状态只能审计/对账，不能用同 token 重试。
+
+| 评分维度 | 实施前 | 证据与缺口 |
+|---|---:|---|
+| 聚合边界是否清晰 | 2/3 | 目标边界已确定，但尚无 suspension aggregate/store |
+| 变化是否被收敛 | 1/3 | 同步 prompter、permission 与 dispatcher 仍耦合 |
+| 不变量是否可被模型守护 | 1/3 | StopReason 已预留，token claim/配对尚无模型守护 |
+| 行为是否与模型一致 | 1/3 | ASK 仍阻塞线程且可在并行 batch 中途发生 |
+| 设计是否支持下一轮需求变化 | 1/3 | CLI/Web、approval/input 尚未共享 typed contract |
+| **总分** | **6/15** | Red 将先固定 scope、claim、batch pairing 与 append-only 验收线 |
 
 **Red**
 
