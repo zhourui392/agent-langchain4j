@@ -108,10 +108,10 @@ class ConfigLoaderTest {
     }
 
     @Test
-    void defaultsPermissionModeToBypass() {
+    void defaultConfigurationDoesNotBypassPermissions() {
         ConfigLoader loader = new ConfigLoader(envOf(Map.of("AK_API_KEY", "sk-env")), null);
 
-        assertThat(loader.load().permissionMode()).isEqualTo(PermissionMode.BYPASS);
+        assertThat(loader.load().permissionMode()).isEqualTo(PermissionMode.DEFAULT);
     }
 
     @Test

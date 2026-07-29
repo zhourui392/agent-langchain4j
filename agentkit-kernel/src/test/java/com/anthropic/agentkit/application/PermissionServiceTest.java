@@ -1,7 +1,10 @@
 package com.anthropic.agentkit.application;
 
 import com.anthropic.agentkit.application.InteractivePrompter.UserPermissionResponse;
+import com.anthropic.agentkit.domain.agent.AgentBudget;
 import com.anthropic.agentkit.domain.agent.RunId;
+import com.anthropic.agentkit.domain.agent.WorkspaceId;
+import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.permission.Decision;
 import com.anthropic.agentkit.domain.permission.PermissionMode;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
@@ -12,6 +15,10 @@ import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
 import com.anthropic.agentkit.infrastructure.permission.DefaultPermissionPolicy;
 import org.junit.jupiter.api.Test;
+
+import java.nio.file.Path;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -24,6 +31,8 @@ import static org.mockito.Mockito.when;
 class PermissionServiceTest {
 
     private static final RunId RUN_ID = RunId.of("permission-test-run");
+    private static final ExecutionContext CONTEXT = context(
+            RUN_ID, WorkspaceId.of("permission-test-workspace"));
     private final Tool readTool = stubTool("Read", true);
     private final Tool writeTool = stubTool("Write", false);
 
@@ -33,7 +42,7 @@ class PermissionServiceTest {
         PermissionService service = new PermissionService(
                 new DefaultPermissionPolicy(), prompter, PermissionMode.DEFAULT);
 
-        Decision decision = service.check(RUN_ID, invocationFor(readTool), readTool);
+        Decision decision = service.check(CONTEXT, invocationFor(readTool), readTool);
 
         assertThat(decision).isEqualTo(Decision.ALLOW);
         verify(prompter, never()).ask(any(), any());
@@ -45,7 +54,7 @@ class PermissionServiceTest {
         PermissionService service = new PermissionService(
                 new DefaultPermissionPolicy(), prompter, PermissionMode.PLAN);
 
-        Decision decision = service.check(RUN_ID, invocationFor(writeTool), writeTool);
+        Decision decision = service.check(CONTEXT, invocationFor(writeTool), writeTool);
 
         assertThat(decision).isEqualTo(Decision.DENY);
         verify(prompter, never()).ask(any(), any());
@@ -58,7 +67,7 @@ class PermissionServiceTest {
         PermissionService service = new PermissionService(
                 new DefaultPermissionPolicy(), prompter, PermissionMode.DEFAULT);
 
-        Decision decision = service.check(RUN_ID, invocationFor(writeTool), writeTool);
+        Decision decision = service.check(CONTEXT, invocationFor(writeTool), writeTool);
 
         assertThat(decision).isEqualTo(Decision.ALLOW);
         verify(prompter, times(1)).ask(any(), any());
@@ -71,7 +80,7 @@ class PermissionServiceTest {
         PermissionService service = new PermissionService(
                 new DefaultPermissionPolicy(), prompter, PermissionMode.DEFAULT);
 
-        Decision decision = service.check(RUN_ID, invocationFor(writeTool), writeTool);
+        Decision decision = service.check(CONTEXT, invocationFor(writeTool), writeTool);
 
         assertThat(decision).isEqualTo(Decision.DENY);
     }
@@ -83,9 +92,9 @@ class PermissionServiceTest {
         PermissionService service = new PermissionService(
                 new DefaultPermissionPolicy(), prompter, PermissionMode.DEFAULT);
 
-        Decision first = service.check(RUN_ID, invocationFor(writeTool), writeTool);
-        Decision second = service.check(RUN_ID, invocationFor(writeTool), writeTool);
-        Decision third = service.check(RUN_ID, invocationFor(writeTool), writeTool);
+        Decision first = service.check(CONTEXT, invocationFor(writeTool), writeTool);
+        Decision second = service.check(CONTEXT, invocationFor(writeTool), writeTool);
+        Decision third = service.check(CONTEXT, invocationFor(writeTool), writeTool);
 
         assertThat(first).isEqualTo(Decision.ALLOW);
         assertThat(second).isEqualTo(Decision.ALLOW);
@@ -93,8 +102,77 @@ class PermissionServiceTest {
         verify(prompter, times(1)).ask(any(), any());
     }
 
+    @Test
+    void allowAlwaysForOneBashPatternDoesNotAllowAnotherCommand() {
+        InteractivePrompter prompter = mock(InteractivePrompter.class);
+        when(prompter.ask(any(), any()))
+                .thenReturn(UserPermissionResponse.ALLOW_ALWAYS, UserPermissionResponse.DENY);
+        PermissionService service = new PermissionService(
+                (invocation, tool, mode) -> Decision.ASK, prompter, PermissionMode.DEFAULT);
+        Tool bash = stubTool("Bash", false);
+
+        Decision first = service.check(CONTEXT, invocationFor(bash, "echo safe"), bash);
+        Decision second = service.check(CONTEXT, invocationFor(bash, "rm unsafe"), bash);
+
+        assertThat(first).isEqualTo(Decision.ALLOW);
+        assertThat(second).isEqualTo(Decision.DENY);
+        verify(prompter, times(2)).ask(any(), any());
+    }
+
+    @Test
+    void denyRuleOverridesCachedAllowRule() {
+        AtomicInteger policyCalls = new AtomicInteger();
+        InteractivePrompter prompter = mock(InteractivePrompter.class);
+        when(prompter.ask(any(), any())).thenReturn(UserPermissionResponse.ALLOW_ALWAYS);
+        PermissionService service = new PermissionService(
+                (invocation, tool, mode) -> policyCalls.getAndIncrement() == 0
+                        ? Decision.ASK : Decision.DENY,
+                prompter, PermissionMode.DEFAULT);
+
+        Decision first = service.check(CONTEXT, invocationFor(writeTool), writeTool);
+        Decision second = service.check(CONTEXT, invocationFor(writeTool), writeTool);
+
+        assertThat(first).isEqualTo(Decision.ALLOW);
+        assertThat(second).isEqualTo(Decision.DENY);
+    }
+
+    @Test
+    void permissionCacheDoesNotLeakAcrossWorkspaceOrRun() {
+        InteractivePrompter prompter = mock(InteractivePrompter.class);
+        when(prompter.ask(any(), any())).thenReturn(
+                UserPermissionResponse.ALLOW_ALWAYS,
+                UserPermissionResponse.DENY,
+                UserPermissionResponse.DENY);
+        PermissionService service = new PermissionService(
+                (invocation, tool, mode) -> Decision.ASK, prompter, PermissionMode.DEFAULT);
+        ExecutionContext otherWorkspace = context(RUN_ID, WorkspaceId.of("other-workspace"));
+        ExecutionContext otherRun = context(
+                RunId.of("other-run"), CONTEXT.workspaceId());
+
+        Decision first = service.check(CONTEXT, invocationFor(writeTool), writeTool);
+        Decision second = service.check(otherWorkspace, invocationFor(writeTool), writeTool);
+        Decision third = service.check(otherRun, invocationFor(writeTool), writeTool);
+
+        assertThat(first).isEqualTo(Decision.ALLOW);
+        assertThat(second).isEqualTo(Decision.DENY);
+        assertThat(third).isEqualTo(Decision.DENY);
+        verify(prompter, times(3)).ask(any(), any());
+    }
+
     private static ToolInvocation invocationFor(Tool tool) {
         return ToolInvocation.create(new ToolUseId("u-" + tool.name()), tool.name(), ToolArguments.empty());
+    }
+
+    private static ToolInvocation invocationFor(Tool tool, String command) {
+        return ToolInvocation.create(
+                new ToolUseId("u-" + command), tool.name(),
+                ToolArguments.of(Map.of("command", command)));
+    }
+
+    private static ExecutionContext context(RunId runId, WorkspaceId workspaceId) {
+        return ExecutionContext.of(
+                runId, workspaceId, Path.of("."),
+                new CancellationToken(), AgentBudget.unlimited());
     }
 
     private static Tool stubTool(String name, boolean readOnly) {
