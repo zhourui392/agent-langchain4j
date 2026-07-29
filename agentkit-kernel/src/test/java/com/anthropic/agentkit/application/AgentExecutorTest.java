@@ -4,6 +4,7 @@ import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
 import com.anthropic.agentkit.domain.agent.AgentRunResult;
+import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.message.ToolResultMessage;
@@ -20,12 +21,9 @@ import com.anthropic.agentkit.application.InteractivePrompter.UserPermissionResp
 import com.anthropic.agentkit.domain.permission.PermissionMode;
 import com.anthropic.agentkit.infrastructure.permission.DefaultPermissionPolicy;
 
-import java.util.concurrent.CancellationException;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -142,9 +140,9 @@ class AgentExecutorTest {
 
         AgentExecutor executor = new AgentExecutor(stub, new ToolRegistry(), PermissionService.bypassing());
 
-        assertThatThrownBy(() -> executor.run(conv, runContext(conv, cancel)).join())
-                .isInstanceOf(CompletionException.class)
-                .hasCauseInstanceOf(CancellationException.class);
+        AgentRunResult result = executor.run(conv, runContext(conv, cancel)).join();
+
+        assertThat(result.stopReason()).isEqualTo(StopReason.CANCELLED);
         assertThat(stub.capturedRequests()).isEmpty();
     }
 
@@ -168,9 +166,9 @@ class AgentExecutorTest {
 
         AgentExecutor executor = new AgentExecutor(stub, tools, PermissionService.bypassing());
 
-        assertThatThrownBy(() -> executor.run(conv, runContext(conv, cancel)).join())
-                .isInstanceOf(CompletionException.class)
-                .hasCauseInstanceOf(CancellationException.class);
+        AgentRunResult result = executor.run(conv, runContext(conv, cancel)).join();
+
+        assertThat(result.stopReason()).isEqualTo(StopReason.CANCELLED);
         assertThat(stub.capturedRequests()).hasSize(1);
     }
 

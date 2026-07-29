@@ -2,6 +2,7 @@ package com.anthropic.agentkit.interfaces.engine;
 
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.port.LlmClient;
+import com.anthropic.agentkit.domain.port.LlmCall;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.infrastructure.streamjson.ClaudeStreamJsonListener;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -47,8 +48,10 @@ class UsageReportingTest {
     @Test
     void engineForwardsLlmUsageToResult() {
         LlmClient llm = (request, handler) -> {
-            handler.onUsage(7, 3, 2);
-            handler.onComplete(AiMessage.text("ok"));
+            return LlmCall.start(handler, guarded -> {
+                guarded.onUsage(7, 3, 2);
+                guarded.onComplete(AiMessage.text("ok"));
+            });
         };
         List<String> out = new ArrayList<>();
         AtomicInteger exit = new AtomicInteger();

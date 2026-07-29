@@ -3,6 +3,7 @@ package com.anthropic.agentkit.infrastructure.llm;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.ChatMessage;
 import com.anthropic.agentkit.domain.port.ChatRequest;
+import com.anthropic.agentkit.domain.port.LlmCall;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.port.ToolSpec;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -15,8 +16,6 @@ import dev.langchain4j.model.output.TokenUsage;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,16 +31,18 @@ public final class LangChain4jLlmClient implements LlmClient {
     }
 
     @Override
-    public void streamChat(ChatRequest request, StreamHandler handler) {
+    public LlmCall streamChat(ChatRequest request, StreamHandler handler) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(handler, "handler");
         long startNs = System.nanoTime();
         log.info("lc4j stream started: messages={}, tools={}", request.messages().size(), request.tools().size());
         dev.langchain4j.model.chat.request.ChatRequest lcRequest = buildLcRequest(request);
-        HandlerBridge bridge = new HandlerBridge(handler);
-        model.chat(lcRequest, bridge);
-        bridge.awaitTerminalSignal();
-        log.info("lc4j stream finished: durationMs={}", elapsedMs(startNs));
+        LlmCall call = LlmCall.start(handler,
+                guarded -> model.chat(lcRequest, new HandlerBridge(guarded)));
+        call.completion().whenComplete((message, failure) ->
+                log.info("lc4j stream finished: durationMs={}, success={}",
+                        elapsedMs(startNs), failure == null));
+        return call;
     }
 
     private static dev.langchain4j.model.chat.request.ChatRequest buildLcRequest(ChatRequest req) {
@@ -74,7 +75,6 @@ public final class LangChain4jLlmClient implements LlmClient {
     private static final class HandlerBridge implements StreamingChatResponseHandler {
 
         private final StreamHandler handler;
-        private final CountDownLatch terminalSignal = new CountDownLatch(1);
 
         HandlerBridge(StreamHandler handler) {
             this.handler = handler;
@@ -87,12 +87,8 @@ public final class LangChain4jLlmClient implements LlmClient {
 
         @Override
         public void onCompleteResponse(ChatResponse response) {
-            try {
-                reportUsage(response);
-                handler.onComplete((AiMessage) MessageMapper.toDomain(response.aiMessage()));
-            } finally {
-                terminalSignal.countDown();
-            }
+            reportUsage(response);
+            handler.onComplete((AiMessage) MessageMapper.toDomain(response.aiMessage()));
         }
 
         private void reportUsage(ChatResponse response) {
@@ -119,26 +115,7 @@ public final class LangChain4jLlmClient implements LlmClient {
 
         @Override
         public void onError(Throwable error) {
-            try {
-                log.error("lc4j stream error", error);
-                handler.onError(error);
-            } finally {
-                terminalSignal.countDown();
-            }
-        }
-
-        void awaitTerminalSignal() {
-            try {
-                boolean signaled = terminalSignal.await(90, TimeUnit.SECONDS);
-                if (!signaled) {
-                    log.error("lc4j stream timed out after 90s");
-                    handler.onError(new IllegalStateException(
-                            "LLM stream timed out after 90s without onComplete/onError"));
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("interrupted while waiting for LLM stream", e);
-            }
+            handler.onError(error);
         }
     }
 

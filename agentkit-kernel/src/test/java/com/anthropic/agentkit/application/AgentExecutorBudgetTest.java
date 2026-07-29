@@ -10,6 +10,7 @@ import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.ToolResultMessage;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.port.LlmClient;
+import com.anthropic.agentkit.domain.port.LlmCall;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
 import com.anthropic.agentkit.domain.tool.ToolUseRequest;
@@ -65,9 +66,11 @@ class AgentExecutorBudgetTest {
     @Test
     void rejectsToolCallsAfterInputTokenBudgetIsExceeded() {
         LlmClient llm = (request, handler) -> {
-            handler.onUsage(11, 0, 0);
-            handler.onComplete(new AiMessage("", List.of(
-                    new ToolUseRequest(new ToolUseId("t-1"), "Read", "{}"))));
+            return LlmCall.start(handler, guarded -> {
+                guarded.onUsage(11, 0, 0);
+                guarded.onComplete(new AiMessage("", List.of(
+                        new ToolUseRequest(new ToolUseId("t-1"), "Read", "{}"))));
+            });
         };
         AgentExecutor executor = new AgentExecutor(llm, tools(), allowAll());
         Conversation conversation = conversation();

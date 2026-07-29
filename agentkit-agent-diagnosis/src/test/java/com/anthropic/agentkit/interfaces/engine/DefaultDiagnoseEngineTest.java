@@ -8,6 +8,7 @@ import com.anthropic.agentkit.domain.diagnosis.StepStatus;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.port.ChatRequest;
 import com.anthropic.agentkit.domain.port.LlmClient;
+import com.anthropic.agentkit.domain.port.LlmCall;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
@@ -115,9 +116,11 @@ class DefaultDiagnoseEngineTest {
     @Test
     void completesWithSummaryCarryingSnapshotAndUsage() {
         LlmClient llm = (request, handler) -> {
-            handler.onUsage(11, 7, 3);
-            handler.onPartialText("done");
-            handler.onComplete(AiMessage.text("done"));
+            return LlmCall.start(handler, guarded -> {
+                guarded.onUsage(11, 7, 3);
+                guarded.onPartialText("done");
+                guarded.onComplete(AiMessage.text("done"));
+            });
         };
         DiagnoseEngine engine = new DefaultDiagnoseEngine(llm, new ToolRegistry());
         AtomicReference<RunSummary> summary = new AtomicReference<>();
@@ -383,14 +386,16 @@ class DefaultDiagnoseEngineTest {
         final AtomicInteger calls = new AtomicInteger();
 
         @Override
-        public void streamChat(ChatRequest request, StreamHandler handler) {
+        public LlmCall streamChat(ChatRequest request, StreamHandler handler) {
             calls.incrementAndGet();
             entered.countDown();
-            for (int i = 0; i < 2000 && release.getCount() > 0; i++) {
-                handler.onPartialText(".");
-                sleepQuietly();
-            }
-            handler.onComplete(AiMessage.text("done"));
+            return LlmCall.start(handler, guarded -> Thread.startVirtualThread(() -> {
+                for (int i = 0; i < 2000 && release.getCount() > 0; i++) {
+                    guarded.onPartialText(".");
+                    sleepQuietly();
+                }
+                guarded.onComplete(AiMessage.text("done"));
+            }));
         }
 
         private static void sleepQuietly() {

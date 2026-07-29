@@ -9,6 +9,7 @@ import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.ToolResultMessage;
 import com.anthropic.agentkit.domain.port.ChatRequest;
+import com.anthropic.agentkit.domain.port.LlmCall;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.port.LlmClient.StreamHandler;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
@@ -22,7 +23,10 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CancellationException;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -76,9 +80,6 @@ public final class AgentExecutor {
         } catch (AgentBudgetExceededException ex) {
             log.warn("session stopped: budget exhausted: {}", ex.getMessage());
             return state.finish(StopReason.BUDGET_EXHAUSTED);
-        } catch (CancellationException ex) {
-            log.warn("session stopped: cancelled");
-            throw ex;
         } catch (RuntimeException ex) {
             log.error("session failed", ex);
             listener.onError(ex);
@@ -96,17 +97,30 @@ public final class AgentExecutor {
                                    AgentEventListener listener, String systemPrompt) {
         int turn = 0;
         while (true) {
-            cancellationGuard(state.context().cancellation(), turn);
+            Optional<StopReason> boundedStop = boundedStop(state.context());
+            if (boundedStop.isPresent()) {
+                return state.finish(boundedStop.orElseThrow());
+            }
             state.budget().ensureInputTokensWithinBudget();
             state.budget().reserveTurn();
             turn++;
             MDC.put("turn", String.valueOf(turn));
             log.info("turn {} started: messageCount={}", turn, conversation.messages().size());
-            AiMessage aiMessage = executeTurn(
-                    conversation, state.context().cancellation(), listener, state.budget(), systemPrompt);
+            LlmTurnOutcome turnOutcome = executeTurn(
+                    conversation, state.context(), listener, state.budget(), systemPrompt);
+            if (turnOutcome.stopReason().isPresent()) {
+                return state.finishWithError(
+                        turnOutcome.stopReason().orElseThrow(), turnOutcome.errorDetail());
+            }
+            AiMessage aiMessage = turnOutcome.message().orElseThrow();
             state.remember(aiMessage);
             appendMessage(conversation, aiMessage, "assistant message");
             if (!aiMessage.hasToolUseRequests()) {
+                try {
+                    state.budget().ensureInputTokensWithinBudget();
+                } catch (AgentBudgetExceededException ex) {
+                    return state.finish(StopReason.BUDGET_EXHAUSTED);
+                }
                 log.info("turn {} completed: stopReason=no_tool_use", turn);
                 listener.onTurnComplete(aiMessage);
                 return state.finish(StopReason.MODEL_COMPLETED);
@@ -169,9 +183,9 @@ public final class AgentExecutor {
                 && tools.find(request.toolName()).kind() == ToolKind.TERMINAL;
     }
 
-    private AiMessage executeTurn(Conversation conversation, CancellationToken cancel,
-                                  AgentEventListener listener, AgentBudgetGuard budgetGuard,
-                                  String systemPrompt) {
+    private LlmTurnOutcome executeTurn(Conversation conversation, AgentRunContext context,
+                                       AgentEventListener listener, AgentBudgetGuard budgetGuard,
+                                       String systemPrompt) {
         long startNs = System.nanoTime();
         log.info("llm request started: messages={}, tools={}", conversation.messages().size(), tools.specs().size());
         listener.onLlmRequestStart();
@@ -180,43 +194,82 @@ public final class AgentExecutor {
                 .messages(conversation.messages());
         tools.specs().forEach(builder::tool);
         ChatRequest request = builder.build();
-        AtomicReference<AiMessage> completed = new AtomicReference<>();
-        AtomicReference<Throwable> failure = new AtomicReference<>();
-        AtomicReference<Integer> partialFragments = new AtomicReference<>(0);
-        AtomicReference<Integer> partialChars = new AtomicReference<>(0);
-        llm.streamChat(request, new StreamHandler() {
-            @Override public void onPartialText(String delta) {
-                cancellationGuard(cancel, currentTurn());
-                partialFragments.updateAndGet(value -> value + 1);
-                partialChars.updateAndGet(value -> value + delta.length());
-                log.debug("llm partial text received: fragment={}, chars={}, totalChars={}",
-                        partialFragments.get(), delta.length(), partialChars.get());
-                listener.onAssistantTextDelta(delta);
-            }
-            @Override public void onUsage(int inputTokens, int outputTokens, int cacheReadInputTokens) {
-                budgetGuard.recordUsage(inputTokens, outputTokens, cacheReadInputTokens);
-                log.info("llm usage: inputTokens={}, outputTokens={}, cacheReadInputTokens={}",
-                        inputTokens, outputTokens, cacheReadInputTokens);
-                listener.onUsage(inputTokens, outputTokens, cacheReadInputTokens);
-            }
-            @Override public void onComplete(AiMessage message) {
-                log.info("llm completed: toolUseCount={}", message.toolUseRequests().size());
-                completed.set(message);
-            }
-            @Override public void onError(Throwable error) {
-                log.error("llm stream failed", error);
-                failure.set(error);
-            }
-        });
-        if (failure.get() != null) {
-            throw new IllegalStateException("LLM stream failed: " + failure.get().getMessage(), failure.get());
+        RunStreamHandler handler = new RunStreamHandler(context, listener, budgetGuard);
+        LlmCall call;
+        try {
+            call = llm.streamChat(request, handler);
+        } catch (RuntimeException failure) {
+            handler.close();
+            log.error("llm request failed before call handle was returned", failure);
+            return LlmTurnOutcome.failed(StopReason.PROVIDER_ERROR, messageOf(failure));
         }
-        AiMessage result = completed.get();
-        if (result == null) {
-            throw new IllegalStateException("LLM stream completed without an AiMessage");
+        try {
+            LlmTurnOutcome result = awaitLlm(call, context, budgetGuard);
+            log.info("llm request finished: durationMs={}, stopReason={}",
+                    elapsedMs(startNs), result.stopReason().orElse(null));
+            return result;
+        } finally {
+            handler.close();
         }
-        log.info("llm request finished: durationMs={}", elapsedMs(startNs));
-        return result;
+    }
+
+    private LlmTurnOutcome awaitLlm(
+            LlmCall call, AgentRunContext context, AgentBudgetGuard budgetGuard) {
+        long waitNanos = context.limits().providerWait().toNanos();
+        if (waitNanos <= 0) {
+            call.cancel();
+            return LlmTurnOutcome.stopped(StopReason.TIMED_OUT);
+        }
+        try (CancellationToken.Registration ignored =
+                     context.cancellation().onCancel(call::cancel)) {
+            AiMessage message = call.completion().toCompletableFuture()
+                    .get(waitNanos, TimeUnit.NANOSECONDS);
+            return LlmTurnOutcome.completed(message);
+        } catch (TimeoutException ex) {
+            call.cancel();
+            return LlmTurnOutcome.stopped(StopReason.TIMED_OUT);
+        } catch (CancellationException ex) {
+            return LlmTurnOutcome.stopped(cancellationReason(context));
+        } catch (ExecutionException ex) {
+            return failedLlmOutcome(ex.getCause(), context);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            call.cancel();
+            return LlmTurnOutcome.stopped(StopReason.CANCELLED);
+        }
+    }
+
+    private LlmTurnOutcome failedLlmOutcome(Throwable failure, AgentRunContext context) {
+        if (failure instanceof AgentBudgetExceededException) {
+            return LlmTurnOutcome.stopped(StopReason.BUDGET_EXHAUSTED);
+        }
+        if (failure instanceof CancellationException) {
+            return LlmTurnOutcome.stopped(cancellationReason(context));
+        }
+        log.error("llm stream failed", failure);
+        return LlmTurnOutcome.failed(StopReason.PROVIDER_ERROR, messageOf(failure));
+    }
+
+    private static String messageOf(Throwable failure) {
+        if (failure == null || failure.getMessage() == null || failure.getMessage().isBlank()) {
+            return failure == null ? "provider failed" : failure.getClass().getSimpleName();
+        }
+        return failure.getMessage();
+    }
+
+    private static StopReason cancellationReason(AgentRunContext context) {
+        return context.limits().deadline().isExpired()
+                ? StopReason.TIMED_OUT : StopReason.CANCELLED;
+    }
+
+    private static Optional<StopReason> boundedStop(AgentRunContext context) {
+        if (context.cancellation().isCancelled()) {
+            return Optional.of(StopReason.CANCELLED);
+        }
+        if (context.limits().deadline().isExpired()) {
+            return Optional.of(StopReason.TIMED_OUT);
+        }
+        return Optional.empty();
     }
 
     private static void appendMessage(Conversation conversation, com.anthropic.agentkit.domain.message.ChatMessage message,
@@ -227,20 +280,6 @@ public final class AgentExecutor {
             log.error("failed to append {}", description, ex);
             throw ex;
         }
-    }
-
-    private static void cancellationGuard(CancellationToken cancel, int turn) {
-        try {
-            cancel.throwIfCancelled();
-        } catch (CancellationException ex) {
-            log.warn("cancellation detected: turn={}", turn);
-            throw ex;
-        }
-    }
-
-    private static int currentTurn() {
-        String turn = MDC.get("turn");
-        return turn == null || turn.isBlank() ? 0 : Integer.parseInt(turn);
     }
 
     private static long elapsedMs(long startNs) {
@@ -263,7 +302,8 @@ public final class AgentExecutor {
 
         private static AgentRunState create(AgentRunContext context, ToolRegistry tools,
                                             PermissionService permissions) {
-            AgentBudgetGuard budget = new AgentBudgetGuard(context.budget());
+            AgentBudgetGuard budget = new AgentBudgetGuard(
+                    context.budget(), context.budgetState());
             ParallelToolDispatcher dispatcher = new ParallelToolDispatcher(
                     tools, context.executionContext(), permissions);
             return new AgentRunState(context, budget, dispatcher);
@@ -281,10 +321,16 @@ public final class AgentExecutor {
             return finish(reason, Optional.empty());
         }
 
+        private AgentRunResult finishWithError(
+                StopReason reason, Optional<String> errorDetail) {
+            return new AgentRunResult(context.runId(), reason, lastMessage,
+                    Optional.empty(), budget.usage(), budget.consumption(), errorDetail);
+        }
+
         private AgentRunResult finish(
                 StopReason reason, Optional<Map<String, Object>> structuredOutput) {
             return new AgentRunResult(context.runId(), reason, lastMessage,
-                    structuredOutput, budget.usage(), budget.consumption());
+                    structuredOutput, budget.usage(), budget.consumption(), Optional.empty());
         }
     }
 
@@ -310,6 +356,86 @@ public final class AgentExecutor {
                 List<ToolResultMessage> results, Map<String, Object> payload) {
             return new ToolBatchOutcome(
                     results, Optional.of(StopReason.TERMINAL_TOOL), Optional.of(payload));
+        }
+    }
+
+    private record LlmTurnOutcome(
+            Optional<AiMessage> message,
+            Optional<StopReason> stopReason,
+            Optional<String> errorDetail) {
+
+        private static LlmTurnOutcome completed(AiMessage message) {
+            return new LlmTurnOutcome(
+                    Optional.of(message), Optional.empty(), Optional.empty());
+        }
+
+        private static LlmTurnOutcome stopped(StopReason reason) {
+            return new LlmTurnOutcome(
+                    Optional.empty(), Optional.of(reason), Optional.empty());
+        }
+
+        private static LlmTurnOutcome failed(StopReason reason, String detail) {
+            return new LlmTurnOutcome(
+                    Optional.empty(), Optional.of(reason), Optional.of(detail));
+        }
+    }
+
+    private static final class RunStreamHandler implements StreamHandler, AutoCloseable {
+        private final AgentRunContext context;
+        private final AgentEventListener listener;
+        private final AgentBudgetGuard budget;
+        private final AtomicBoolean open = new AtomicBoolean(true);
+        private int fragments;
+        private int characters;
+
+        private RunStreamHandler(AgentRunContext context, AgentEventListener listener,
+                                 AgentBudgetGuard budget) {
+            this.context = context;
+            this.listener = listener;
+            this.budget = budget;
+        }
+
+        @Override
+        public void onPartialText(String delta) {
+            if (!open.get()) {
+                return;
+            }
+            context.cancellation().throwIfCancelled();
+            budget.recordOutputCharacters(delta.length());
+            budget.ensureInputTokensWithinBudget();
+            fragments++;
+            characters += delta.length();
+            log.debug("llm partial text received: fragment={}, chars={}, totalChars={}",
+                    fragments, delta.length(), characters);
+            listener.onAssistantTextDelta(delta);
+        }
+
+        @Override
+        public void onUsage(int input, int output, int cacheRead) {
+            if (!open.get()) {
+                return;
+            }
+            budget.recordUsage(input, output, cacheRead);
+            listener.onUsage(input, output, cacheRead);
+        }
+
+        @Override
+        public void onComplete(AiMessage message) {
+            if (open.get()) {
+                log.info("llm completed: toolUseCount={}", message.toolUseRequests().size());
+            }
+        }
+
+        @Override
+        public void onError(Throwable error) {
+            if (open.get()) {
+                log.error("llm stream failed", error);
+            }
+        }
+
+        @Override
+        public void close() {
+            open.set(false);
         }
     }
 

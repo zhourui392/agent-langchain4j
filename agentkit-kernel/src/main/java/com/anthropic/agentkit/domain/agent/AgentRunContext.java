@@ -16,7 +16,9 @@ public record AgentRunContext(
         Path workspaceRoot,
         CancellationToken cancellation,
         AgentBudget budget,
-        SecretProvider secretProvider) {
+        SecretProvider secretProvider,
+        AgentRunLimits limits,
+        AgentBudgetState budgetState) {
 
     public AgentRunContext {
         Objects.requireNonNull(runId, "runId");
@@ -26,6 +28,8 @@ public record AgentRunContext(
         Objects.requireNonNull(cancellation, "cancellation");
         Objects.requireNonNull(budget, "budget");
         Objects.requireNonNull(secretProvider, "secretProvider");
+        Objects.requireNonNull(limits, "limits");
+        Objects.requireNonNull(budgetState, "budgetState");
         workspaceRoot = workspaceRoot.toAbsolutePath().normalize();
     }
 
@@ -41,7 +45,23 @@ public record AgentRunContext(
                                      CancellationToken cancellation, AgentBudget budget,
                                      SecretProvider secretProvider) {
         return new AgentRunContext(runId, sessionId, workspaceId, workspaceRoot,
-                cancellation, budget, secretProvider);
+                cancellation, budget, secretProvider,
+                AgentRunLimits.defaults(), new AgentBudgetState());
+    }
+
+    public static AgentRunContext childOf(ExecutionContext parent, SessionId childSession) {
+        return childOf(parent, childSession, parent.budget(), parent.limits());
+    }
+
+    public static AgentRunContext childOf(ExecutionContext parent, SessionId childSession,
+                                          AgentBudget requestedBudget,
+                                          AgentRunLimits requestedLimits) {
+        Objects.requireNonNull(parent, "parent");
+        return new AgentRunContext(
+                parent.runId(), childSession, parent.workspaceId(), parent.cwd(),
+                parent.cancellation(), parent.budget().narrowedBy(requestedBudget),
+                parent.secretProvider(), parent.limits().narrowedBy(requestedLimits),
+                parent.budgetState());
     }
 
     public static AgentRunContext at(Path workspaceRoot) {
@@ -62,6 +82,17 @@ public record AgentRunContext(
 
     public ExecutionContext executionContext() {
         return ExecutionContext.of(
-                runId, workspaceId, workspaceRoot, cancellation, budget, secretProvider);
+                runId, workspaceId, workspaceRoot, cancellation, budget,
+                secretProvider, limits, budgetState);
+    }
+
+    public AgentRunContext withLimits(AgentRunLimits requested) {
+        return new AgentRunContext(
+                runId, sessionId, workspaceId, workspaceRoot, cancellation, budget,
+                secretProvider, Objects.requireNonNull(requested, "requested"), budgetState);
+    }
+
+    public BudgetConsumption budgetConsumption() {
+        return budgetState.consumption();
     }
 }

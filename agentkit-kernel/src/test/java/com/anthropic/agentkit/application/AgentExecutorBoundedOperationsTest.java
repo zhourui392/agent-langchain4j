@@ -140,9 +140,44 @@ class AgentExecutorBoundedOperationsTest {
         ToolResult result = child.execute(
                 ToolArguments.of(java.util.Map.of("prompt", "inspect")), parent.executionContext());
 
-        assertThat(result.success()).isTrue();
+        assertThat(result.success()).isFalse();
+        assertThat(result.status()).isEqualTo(ToolResultStatus.BUDGET_EXHAUSTED);
         assertThat(((SequencedLlmClient) llm).calls).hasValue(1);
         assertThat(parent.budgetConsumption().turns()).isEqualTo(1);
+    }
+
+    @Test
+    void childAgentInheritsParentDeadline() {
+        HangingLlmClient llm = new HangingLlmClient();
+        Conversation conversation = conversation("child-deadline");
+        AgentRunContext parent = runContext(conversation)
+                .withLimits(limits(Duration.ofMillis(30)));
+        com.anthropic.agentkit.infrastructure.tools.SubAgentTool child =
+                new com.anthropic.agentkit.infrastructure.tools.SubAgentTool(
+                        llm, new ToolRegistry());
+
+        ToolResult result = child.execute(
+                ToolArguments.of(java.util.Map.of("prompt", "wait")), parent.executionContext());
+
+        assertThat(result.status()).isEqualTo(ToolResultStatus.TIMEOUT);
+        assertThat(llm.call.cancelled).isTrue();
+    }
+
+    @Test
+    void outputCharacterBudgetCancelsStreamingCall() {
+        LlmClient llm = (request, handler) -> LlmCall.start(handler, sink -> {
+            sink.onPartialText("1234");
+            sink.onComplete(AiMessage.text("must be ignored"));
+        });
+        Conversation conversation = conversation("output-characters");
+        AgentBudget budget = AgentBudget.of(3, 3, 100, 100, 3);
+
+        AgentRunResult result = new AgentExecutor(llm, new ToolRegistry(), allowAll())
+                .run(conversation, runContext(conversation, new CancellationToken(), budget)).join();
+
+        assertThat(result.stopReason()).isEqualTo(StopReason.BUDGET_EXHAUSTED);
+        assertThat(result.consumption().outputCharacters()).isEqualTo(4);
+        assertThat(conversation.messages()).noneMatch(AiMessage.class::isInstance);
     }
 
     private static AgentRunLimits limits(Duration timeout) {

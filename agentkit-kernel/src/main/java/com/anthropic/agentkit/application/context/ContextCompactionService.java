@@ -14,7 +14,6 @@ import com.anthropic.agentkit.domain.port.LlmClient.StreamHandler;
 
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 /**
@@ -92,19 +91,11 @@ public final class ContextCompactionService {
                 .systemPrompt(SUMMARY_SYSTEM)
                 .message(UserMessage.of(SUMMARY_INSTRUCTION + "\n\n" + transcript))
                 .build();
-        AtomicReference<AiMessage> completed = new AtomicReference<>();
-        llm.streamChat(request, new StreamHandler() {
+        return llm.streamChat(request, new StreamHandler() {
             @Override
             public void onPartialText(String delta) {
             }
-
-            @Override
-            public void onComplete(AiMessage message) {
-                completed.set(message);
-            }
-        });
-        AiMessage result = completed.get();
-        return result == null ? "" : result.text();
+        }).completion().toCompletableFuture().join().text();
     }
 
     private String render(ChatMessage message) {

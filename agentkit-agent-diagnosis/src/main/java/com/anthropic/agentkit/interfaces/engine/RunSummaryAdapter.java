@@ -16,7 +16,8 @@ final class RunSummaryAdapter {
         Objects.requireNonNull(result, "result");
         AgentRunResult run = result.agentRunResult();
         return new RunSummary(
-                exitReason(run.stopReason()), result.stateSnapshot(), usage(run.usage()), "");
+                exitReason(run.stopReason()), result.stateSnapshot(), usage(run.usage()),
+                run.errorDetail().orElse(""));
     }
 
     private static ExitReason exitReason(StopReason reason) {

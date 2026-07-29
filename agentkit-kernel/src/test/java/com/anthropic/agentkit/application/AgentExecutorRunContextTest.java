@@ -16,6 +16,7 @@ import com.anthropic.agentkit.domain.permission.Decision;
 import com.anthropic.agentkit.domain.permission.PermissionMode;
 import com.anthropic.agentkit.domain.port.ChatRequest;
 import com.anthropic.agentkit.domain.port.LlmClient;
+import com.anthropic.agentkit.domain.port.LlmCall;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.domain.tool.ToolArguments;
@@ -221,7 +222,7 @@ class AgentExecutorRunContextTest {
         private final Map<String, AtomicInteger> turns = new ConcurrentHashMap<>();
 
         @Override
-        public void streamChat(ChatRequest request, StreamHandler handler) {
+        public LlmCall streamChat(ChatRequest request, StreamHandler handler) {
             String key = request.messages().stream()
                     .filter(UserMessage.class::isInstance)
                     .map(UserMessage.class::cast)
@@ -232,7 +233,7 @@ class AgentExecutorRunContextTest {
             AiMessage response = turn == 0
                     ? toolRequest("tool-" + key, "Inspect", "{\"key\":\"" + key + "\"}")
                     : AiMessage.text("done " + key);
-            handler.onComplete(response);
+            return LlmCall.start(handler, guarded -> guarded.onComplete(response));
         }
     }
 }

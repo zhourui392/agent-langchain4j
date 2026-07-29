@@ -2,6 +2,7 @@ package com.anthropic.agentkit.testsupport;
 
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.port.ChatRequest;
+import com.anthropic.agentkit.domain.port.LlmCall;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.port.LlmClient.StreamHandler;
 
@@ -21,7 +22,7 @@ public final class StubLlmClient implements LlmClient {
     }
 
     @Override
-    public void streamChat(ChatRequest request, StreamHandler handler) {
+    public LlmCall streamChat(ChatRequest request, StreamHandler handler) {
         captured.add(request);
         AiMessage next = queue.pollFirst();
         if (next == null) {
@@ -29,10 +30,12 @@ public final class StubLlmClient implements LlmClient {
             handler.onError(err);
             throw err;
         }
-        if (!next.text().isEmpty()) {
-            handler.onPartialText(next.text());
-        }
-        handler.onComplete(next);
+        return LlmCall.start(handler, guarded -> {
+            if (!next.text().isEmpty()) {
+                guarded.onPartialText(next.text());
+            }
+            guarded.onComplete(next);
+        });
     }
 
     public List<ChatRequest> capturedRequests() {

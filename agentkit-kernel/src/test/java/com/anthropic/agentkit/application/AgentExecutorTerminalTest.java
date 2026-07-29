@@ -10,6 +10,7 @@ import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.ToolResultMessage;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.port.LlmClient;
+import com.anthropic.agentkit.domain.port.LlmCall;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.domain.tool.ToolResultStatus;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
@@ -129,8 +130,10 @@ class AgentExecutorTerminalTest {
     @Test
     void runResultReportsTerminalPayloadAndUsage() {
         LlmClient llm = (request, handler) -> {
-            handler.onUsage(12, 5, 3);
-            handler.onComplete(terminalCall("terminal-1", validPayload()));
+            return LlmCall.start(handler, guarded -> {
+                guarded.onUsage(12, 5, 3);
+                guarded.onComplete(terminalCall("terminal-1", validPayload()));
+            });
         };
         Conversation conversation = conversation();
 

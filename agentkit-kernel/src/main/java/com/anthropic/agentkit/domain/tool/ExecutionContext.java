@@ -1,6 +1,9 @@
 package com.anthropic.agentkit.domain.tool;
 
 import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.AgentBudgetState;
+import com.anthropic.agentkit.domain.agent.AgentRunLimits;
+import com.anthropic.agentkit.domain.agent.BudgetConsumption;
 import com.anthropic.agentkit.domain.agent.RunId;
 import com.anthropic.agentkit.domain.agent.WorkspaceId;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
@@ -17,7 +20,9 @@ public record ExecutionContext(
         Path cwd,
         CancellationToken cancellation,
         AgentBudget budget,
-        SecretProvider secretProvider) {
+        SecretProvider secretProvider,
+        AgentRunLimits limits,
+        AgentBudgetState budgetState) {
 
     public ExecutionContext {
         Objects.requireNonNull(runId, "runId");
@@ -26,6 +31,8 @@ public record ExecutionContext(
         Objects.requireNonNull(cancellation, "cancellation");
         Objects.requireNonNull(budget, "budget");
         Objects.requireNonNull(secretProvider, "secretProvider");
+        Objects.requireNonNull(limits, "limits");
+        Objects.requireNonNull(budgetState, "budgetState");
         cwd = cwd.toAbsolutePath().normalize();
     }
 
@@ -46,7 +53,17 @@ public record ExecutionContext(
                                       CancellationToken cancellation, AgentBudget budget,
                                       SecretProvider secretProvider) {
         return new ExecutionContext(
-                runId, workspaceId, cwd, cancellation, budget, secretProvider);
+                runId, workspaceId, cwd, cancellation, budget, secretProvider,
+                AgentRunLimits.defaults(), new AgentBudgetState());
+    }
+
+    public static ExecutionContext of(RunId runId, WorkspaceId workspaceId, Path cwd,
+                                      CancellationToken cancellation, AgentBudget budget,
+                                      SecretProvider secretProvider, AgentRunLimits limits,
+                                      AgentBudgetState budgetState) {
+        return new ExecutionContext(
+                runId, workspaceId, cwd, cancellation, budget, secretProvider,
+                limits, budgetState);
     }
 
     public Optional<String> secret(String name) {
@@ -54,5 +71,9 @@ public record ExecutionContext(
             throw new IllegalArgumentException("secret name must not be blank");
         }
         return secretProvider.find(new SecretScope(runId, workspaceId), name);
+    }
+
+    public BudgetConsumption budgetConsumption() {
+        return budgetState.consumption();
     }
 }

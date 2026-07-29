@@ -70,21 +70,25 @@ public final class GovernedTool implements Tool {
     }
 
     private ToolResult runWithTimeout(ToolArguments args, ExecutionContext ctx) {
-        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+        try {
             Future<ToolResult> future = executor.submit(() -> delegate.execute(args, ctx));
-            return await(future);
+            return await(future, ctx);
+        } finally {
+            executor.shutdownNow();
         }
     }
 
-    private ToolResult await(Future<ToolResult> future) {
+    private ToolResult await(Future<ToolResult> future, ExecutionContext context) {
+        long timeoutNanos = minimumTimeoutNanos(context);
         try {
-            return future.get(governance.timeout().toMillis(), TimeUnit.MILLISECONDS);
+            return future.get(timeoutNanos, TimeUnit.NANOSECONDS);
         } catch (TimeoutException ex) {
             future.cancel(true);
-            log.warn("governed tool timed out: tool={}, timeoutMs={}",
-                    delegate.name(), governance.timeout().toMillis());
+            long timeoutMs = TimeUnit.NANOSECONDS.toMillis(timeoutNanos);
+            log.warn("governed tool timed out: tool={}, timeoutMs={}", delegate.name(), timeoutMs);
             return ToolResult.of(ToolResultStatus.TIMEOUT,
-                    "tool timed out after " + governance.timeout().toMillis() + "ms");
+                    "tool timed out after " + timeoutMs + "ms");
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             log.warn("governed tool interrupted: tool={}", delegate.name());
@@ -93,6 +97,12 @@ public final class GovernedTool implements Tool {
             log.error("governed tool execution failed: tool={}", delegate.name(), ex);
             return ToolResult.error(executionFailureMessage(ex));
         }
+    }
+
+    private long minimumTimeoutNanos(ExecutionContext context) {
+        long governanceNanos = governance.timeout().toNanos();
+        long runNanos = context.limits().toolWait().toNanos();
+        return Math.max(1, Math.min(governanceNanos, runNanos));
     }
 
     private ToolResult redact(ToolResult result) {

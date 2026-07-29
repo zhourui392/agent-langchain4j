@@ -6,6 +6,7 @@ import com.anthropic.agentkit.application.InteractivePrompter;
 import com.anthropic.agentkit.application.PermissionService;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.agent.AgentRunResult;
+import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
 import com.anthropic.agentkit.domain.message.AiMessage;
@@ -26,10 +27,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Spawns an isolated read-only sub-agent to chase one hypothesis, returning its
- * final findings as the tool result. The child runs its own {@code AgentExecutor}
+ * Spawns an isolated read-only sub-agent for one delegated task, returning its
+ * final response as the tool result. The child runs its own {@code AgentExecutor}
  * over a fresh {@code Conversation} with a narrowed tool set, inheriting only the
- * parent's cwd, cancellation, and LLM client.
+ * parent's run scope and LLM client.
  *
  * @author zhourui(V33215020)
  * @since 2026-06-08
@@ -57,8 +58,8 @@ public final class SubAgentTool implements Tool {
 
     @Override
     public String description() {
-        return "Launch an isolated read-only sub-agent to investigate one hypothesis; "
-                + "returns its final findings.";
+        return "Launch an isolated read-only sub-agent for one delegated task; "
+                + "returns its final response.";
     }
 
     @Override
@@ -83,6 +84,10 @@ public final class SubAgentTool implements Tool {
             AgentRunResult result = childExecutor()
                     .run(child, childContext(ctx, child.sessionId()), AgentEventListener.NO_OP)
                     .join();
+            if (result.stopReason() != StopReason.MODEL_COMPLETED
+                    && result.stopReason() != StopReason.TERMINAL_TOOL) {
+                return stoppedResult(result.stopReason());
+            }
             AiMessage finalMessage = result.finalMessage();
             log.info("sub-agent completed: sessionId={}, turns={}, resultChars={}, durationMs={}",
                     child.sessionId(), assistantTurns(child), finalMessage.text().length(), elapsedMs(startNs));
@@ -101,9 +106,7 @@ public final class SubAgentTool implements Tool {
     }
 
     private static AgentRunContext childContext(ExecutionContext parent, SessionId childSession) {
-        return AgentRunContext.of(
-                parent.runId(), childSession, parent.workspaceId(), parent.cwd(),
-                parent.cancellation(), parent.budget(), parent.secretProvider());
+        return AgentRunContext.childOf(parent, childSession);
     }
 
     private static String failureMessage(ExecutionContext ctx, CompletionException ex) {
@@ -112,6 +115,21 @@ public final class SubAgentTool implements Tool {
         }
         Throwable cause = ex.getCause();
         return "sub-agent failed: " + (cause == null ? ex.getMessage() : cause.getMessage());
+    }
+
+    private static ToolResult stoppedResult(StopReason reason) {
+        return switch (reason) {
+            case CANCELLED -> ToolResult.of(
+                    com.anthropic.agentkit.domain.tool.ToolResultStatus.CANCELLED,
+                    "sub-agent cancelled");
+            case TIMED_OUT -> ToolResult.of(
+                    com.anthropic.agentkit.domain.tool.ToolResultStatus.TIMEOUT,
+                    "sub-agent timed out");
+            case BUDGET_EXHAUSTED -> ToolResult.of(
+                    com.anthropic.agentkit.domain.tool.ToolResultStatus.BUDGET_EXHAUSTED,
+                    "sub-agent budget exhausted");
+            default -> ToolResult.error("sub-agent stopped: " + reason);
+        };
     }
 
     private static long assistantTurns(Conversation conversation) {

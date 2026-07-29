@@ -36,11 +36,12 @@ class OpenAiEndToEndSmokeIT {
 
         AtomicReference<AiMessage> completed = new AtomicReference<>();
         AtomicReference<Throwable> failure = new AtomicReference<>();
-        client.streamChat(request, new StreamHandler() {
+        var call = client.streamChat(request, new StreamHandler() {
             @Override public void onPartialText(String delta) {}
             @Override public void onComplete(AiMessage message) { completed.set(message); }
             @Override public void onError(Throwable error) { failure.set(error); }
         });
+        call.completion().toCompletableFuture().join();
 
         assertThat(failure.get()).as("no error from API").isNull();
         assertThat(completed.get()).as("LLM produced an AiMessage").isNotNull();

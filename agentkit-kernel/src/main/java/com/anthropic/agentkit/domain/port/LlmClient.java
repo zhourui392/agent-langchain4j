@@ -4,7 +4,7 @@ import com.anthropic.agentkit.domain.message.AiMessage;
 
 public interface LlmClient {
 
-    void streamChat(ChatRequest request, StreamHandler handler);
+    LlmCall streamChat(ChatRequest request, StreamHandler handler);
 
     interface StreamHandler {
         void onPartialText(String delta);
@@ -16,6 +16,10 @@ public interface LlmClient {
         }
 
         default void onUsage(int inputTokens, int outputTokens, int cacheReadInputTokens) {
+        }
+
+        static StreamHandler noop() {
+            return delta -> { };
         }
     }
 }

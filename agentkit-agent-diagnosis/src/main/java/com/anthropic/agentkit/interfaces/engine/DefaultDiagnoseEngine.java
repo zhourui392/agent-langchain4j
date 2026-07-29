@@ -15,10 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Objects;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -46,8 +43,6 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
     private final ContextCompactionService compaction;
     private final DiagnosisOrchestrator orchestrator;
     private final RunningSessions running = new RunningSessions();
-    private final ScheduledExecutorService timeoutScheduler =
-            Executors.newSingleThreadScheduledExecutor(DefaultDiagnoseEngine::daemon);
     private final Semaphore concurrency;
     private final long closeDrainSeconds;
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -134,7 +129,6 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
         }
         running.cancelAll();
         awaitDrain();
-        timeoutScheduler.shutdownNow();
     }
 
     private RunStart tryStartRun(String sessionId, Consumer<RunSummary> onComplete) {
@@ -180,21 +174,7 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
 
     private OrchestrationResult await(RunRequest request, Conversation conversation,
                                       RunningSessions.RunControl control, Consumer<String> onChunk) {
-        ScheduledFuture<?> timeout = scheduleTimeout(control, request.timeoutSeconds());
-        try {
-            return orchestrator.run(request, conversation, control.token(), onChunk);
-        } finally {
-            if (timeout != null) {
-                timeout.cancel(false);
-            }
-        }
-    }
-
-    private ScheduledFuture<?> scheduleTimeout(RunningSessions.RunControl control, long timeoutSeconds) {
-        if (timeoutSeconds <= 0) {
-            return null;
-        }
-        return timeoutScheduler.schedule(control::timeout, timeoutSeconds, TimeUnit.SECONDS);
+        return orchestrator.run(request, conversation, control.token(), onChunk);
     }
 
     private static RunSummary summary(ExitReason reason, String errorDetail) {
@@ -232,12 +212,6 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
         if (summary.reason() == ExitReason.ERROR) {
             log.error("diagnose run failed sessionId={}", sessionId, ex);
         }
-    }
-
-    private static Thread daemon(Runnable runnable) {
-        Thread thread = new Thread(runnable, "diagnose-timeout");
-        thread.setDaemon(true);
-        return thread;
     }
 
     private void awaitDrain() {

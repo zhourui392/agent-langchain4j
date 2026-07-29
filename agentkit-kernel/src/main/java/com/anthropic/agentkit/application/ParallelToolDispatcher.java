@@ -20,6 +20,8 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -129,7 +131,7 @@ final class ParallelToolDispatcher {
             log.debug("tool arguments summary: tool={}, args={}", tool.name(), summarizeArgs(invocation.args()));
         }
         try {
-            ToolResult result = tool.execute(invocation.args(), executionContext);
+            ToolResult result = executeBounded(tool, invocation);
             invocation.settle(result);
             log.info("tool completed: tool={}, success={}, durationMs={}",
                     tool.name(), result.success(), elapsedMs(startNs));
@@ -146,6 +148,44 @@ final class ParallelToolDispatcher {
             log.debug("tool failure stack", ex);
             return failure;
         }
+    }
+
+    private ToolResult executeBounded(Tool tool, ToolInvocation invocation) {
+        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+        Map<String, String> parentMdc = MDC.getCopyOfContextMap();
+        Future<ToolResult> future = executor.submit(() -> withMdc(
+                parentMdc, invocation.id(),
+                () -> tool.execute(invocation.args(), executionContext)));
+        try (var ignored = executionContext.cancellation().onCancel(
+                () -> future.cancel(true))) {
+            long waitNanos = executionContext.limits().toolWait().toNanos();
+            if (waitNanos <= 0) {
+                return timedOut(future);
+            }
+            return future.get(waitNanos, TimeUnit.NANOSECONDS);
+        } catch (TimeoutException ex) {
+            return timedOut(future);
+        } catch (CancellationException ex) {
+            return ToolResult.of(ToolResultStatus.CANCELLED, "tool cancelled");
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            future.cancel(true);
+            return ToolResult.of(ToolResultStatus.CANCELLED, "tool interrupted");
+        } catch (ExecutionException ex) {
+            if (ex.getCause() instanceof CancellationException) {
+                return ToolResult.of(ToolResultStatus.CANCELLED, messageOf(ex.getCause()));
+            }
+            return ToolResult.of(ToolResultStatus.ERROR, messageOf(ex.getCause()));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private ToolResult timedOut(Future<ToolResult> future) {
+        future.cancel(true);
+        long timeoutMs = executionContext.limits().toolWait().toMillis();
+        return ToolResult.of(ToolResultStatus.TIMEOUT,
+                "tool timed out after " + timeoutMs + "ms");
     }
 
     private static List<ToolResultMessage> awaitAll(
@@ -205,6 +245,12 @@ final class ParallelToolDispatcher {
 
     private static <T> T withMdc(Map<String, String> parentMdc, ToolUseRequest request,
                                  java.util.function.Supplier<T> action) {
+        return withMdc(parentMdc, request.id(), action);
+    }
+
+    private static <T> T withMdc(Map<String, String> parentMdc,
+                                 com.anthropic.agentkit.domain.tool.ToolUseId toolUseId,
+                                 java.util.function.Supplier<T> action) {
         Map<String, String> previousMdc = MDC.getCopyOfContextMap();
         try {
             if (parentMdc == null) {
@@ -212,7 +258,7 @@ final class ParallelToolDispatcher {
             } else {
                 MDC.setContextMap(parentMdc);
             }
-            MDC.put("toolUseId", request.id().value());
+            MDC.put("toolUseId", toolUseId.value());
             return action.get();
         } finally {
             if (previousMdc == null) {

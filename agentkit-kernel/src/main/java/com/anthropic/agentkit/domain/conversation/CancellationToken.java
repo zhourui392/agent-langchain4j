@@ -29,19 +29,29 @@ public final class CancellationToken {
         }
     }
 
-    public void onCancel(Runnable callback) {
+    public Registration onCancel(Runnable callback) {
         Objects.requireNonNull(callback, "callback");
         if (cancelled.get()) {
             callback.run();
-            return;
+            return Registration.NO_OP;
         }
         callbacks.add(callback);
         if (cancelled.get() && callbacks.remove(callback)) {
             callback.run();
+            return Registration.NO_OP;
         }
+        return () -> callbacks.remove(callback);
     }
 
     public static CancellationToken notCancellable() {
         return new CancellationToken();
+    }
+
+    @FunctionalInterface
+    public interface Registration extends AutoCloseable {
+        Registration NO_OP = () -> { };
+
+        @Override
+        void close();
     }
 }

@@ -10,6 +10,8 @@ import com.anthropic.agentkit.application.diagnosis.PlanGuardMode;
 import com.anthropic.agentkit.application.diagnosis.PlanGuardPolicy;
 import com.anthropic.agentkit.domain.agent.AgentBudget;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
+import com.anthropic.agentkit.domain.agent.AgentRunLimits;
+import com.anthropic.agentkit.domain.agent.RunDeadline;
 import com.anthropic.agentkit.domain.agent.AgentRunResult;
 import com.anthropic.agentkit.domain.agent.AgentUsage;
 import com.anthropic.agentkit.domain.agent.BudgetConsumption;
@@ -35,6 +37,7 @@ import com.anthropic.agentkit.infrastructure.permission.ReadOnlyPermissionPolicy
 import com.anthropic.agentkit.infrastructure.streamjson.ClaudeStreamJsonListener;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -210,8 +213,15 @@ public final class DiagnosisOrchestrator {
 
     private AgentRunContext context(RunRequest request, Conversation conversation,
                                     CancellationToken cancel) {
-        return AgentRunContext.create(
+        AgentRunContext context = AgentRunContext.create(
                 conversation.sessionId(), Path.of(request.workingDir()), cancel, budget);
+        if (request.timeoutSeconds() <= 0) {
+            return context;
+        }
+        return context.withLimits(new AgentRunLimits(
+                RunDeadline.after(Duration.ofSeconds(request.timeoutSeconds())),
+                AgentRunLimits.DEFAULT_PROVIDER_TIMEOUT,
+                AgentRunLimits.DEFAULT_TOOL_TIMEOUT));
     }
 
     public record Options(AgentBudget budget, DiagnosisStateCodec stateCodec, DiagnosisPlanner planner,
