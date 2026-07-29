@@ -27,6 +27,18 @@ final class ToolUseInvariantChecker {
         }
     }
 
+    boolean hasPendingBatch() {
+        return activeTurn != null;
+    }
+
+    static void validateCompleteProjection(Iterable<ChatMessage> messages) {
+        ToolUseInvariantChecker checker = new ToolUseInvariantChecker();
+        messages.forEach(checker::onAppend);
+        if (checker.hasPendingBatch()) {
+            throw new IllegalStateException("compacted projection has a pending tool batch");
+        }
+    }
+
     private void validateAndSettle(ToolResultMessage result) {
         ToolUseId id = result.toolUseId();
         if (settled.contains(id)) {

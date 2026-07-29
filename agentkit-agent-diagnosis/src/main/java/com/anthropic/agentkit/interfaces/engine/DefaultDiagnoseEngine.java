@@ -1,13 +1,11 @@
 package com.anthropic.agentkit.interfaces.engine;
 
-import com.anthropic.agentkit.application.context.ContextCompactionService;
 import com.anthropic.agentkit.application.diagnosis.DiagnosisPlanner;
 import com.anthropic.agentkit.application.diagnosis.DiagnosisReporter;
 import com.anthropic.agentkit.application.diagnosis.PlanGuardMode;
 import com.anthropic.agentkit.domain.agent.AgentBudget;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
-import com.anthropic.agentkit.domain.conversation.TokenBudget;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.infrastructure.diagnosis.DiagnosisStateCodec;
@@ -34,13 +32,10 @@ import java.util.function.Consumer;
  */
 public final class DefaultDiagnoseEngine implements DiagnoseEngine {
 
-    private static final int DEFAULT_CONTEXT_TOKENS = 180_000;
-    private static final int DEFAULT_RECENT_MESSAGES = 30;
     private static final int DEFAULT_CLOSE_DRAIN_SECONDS = 10;
     private static final Logger log = LoggerFactory.getLogger(DefaultDiagnoseEngine.class);
 
     private final ConversationRebuilder rebuilder = new ConversationRebuilder();
-    private final ContextCompactionService compaction;
     private final DiagnosisOrchestrator orchestrator;
     private final RunningSessions running = new RunningSessions();
     private final Semaphore concurrency;
@@ -68,8 +63,6 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
     public DefaultDiagnoseEngine(LlmClient llm, ToolRegistry tools, EngineOptions options) {
         Objects.requireNonNull(tools, "tools");
         EngineOptions config = Objects.requireNonNull(options, "options");
-        this.compaction = new ContextCompactionService(
-                llm, TokenBudget.of(DEFAULT_CONTEXT_TOKENS), DEFAULT_RECENT_MESSAGES);
         this.orchestrator = new DiagnosisOrchestrator(llm, tools, new DiagnosisOrchestrator.Options(
                 config.budget(),
                 new DiagnosisStateCodec(),
@@ -92,8 +85,8 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
         if (start.rejected()) {
             return;
         }
-        Conversation conversation = compaction.maybeCompact(rebuilder.from(
-                SessionId.of(sessionId), request.history(), request.userMessage()));
+        Conversation conversation = rebuilder.from(
+                SessionId.of(sessionId), request.history(), request.userMessage());
         long startedAt = System.nanoTime();
         log.info("diagnose run started sessionId={} workingDir={} historySize={} hasSnapshot={}",
                 sessionId, request.workingDir(), request.history().size(), !request.stateSnapshot().isBlank());

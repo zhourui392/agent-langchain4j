@@ -1,5 +1,8 @@
 package com.anthropic.agentkit.application;
 
+import com.anthropic.agentkit.application.context.ContextDecision;
+import com.anthropic.agentkit.application.context.ContextPolicy;
+import com.anthropic.agentkit.application.tool.ToolOutputPolicy;
 import com.anthropic.agentkit.domain.agent.AgentBudgetExceededException;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.agent.AgentRunResult;
@@ -39,11 +42,21 @@ public final class AgentExecutor {
     private final LlmClient llm;
     private final ToolRegistry tools;
     private final PermissionService permissions;
+    private final ContextPolicy contextPolicy;
+    private final ToolOutputPolicy toolOutputPolicy;
 
     public AgentExecutor(LlmClient llm, ToolRegistry tools, PermissionService permissions) {
+        this(llm, tools, permissions,
+                ContextPolicy.standard(llm), ToolOutputPolicy.defaultLimited());
+    }
+
+    public AgentExecutor(LlmClient llm, ToolRegistry tools, PermissionService permissions,
+                         ContextPolicy contextPolicy, ToolOutputPolicy toolOutputPolicy) {
         this.llm = Objects.requireNonNull(llm, "llm");
         this.tools = Objects.requireNonNull(tools, "tools");
         this.permissions = Objects.requireNonNull(permissions, "permissions");
+        this.contextPolicy = Objects.requireNonNull(contextPolicy, "contextPolicy");
+        this.toolOutputPolicy = Objects.requireNonNull(toolOutputPolicy, "toolOutputPolicy");
     }
 
     public CompletableFuture<AgentRunResult> run(Conversation conversation, AgentRunContext context) {
@@ -74,7 +87,8 @@ public final class AgentExecutor {
         listener.onRunStart(context);
         log.info("session started: runId={}, workspaceId={}, initialMessages={}, systemPromptChars={}",
                 context.runId(), context.workspaceId(), conversation.messages().size(), systemPrompt.length());
-        AgentRunState state = AgentRunState.create(context, tools, permissions);
+        AgentRunState state = AgentRunState.create(
+                context, tools, permissions, toolOutputPolicy);
         try {
             return runLoop(conversation, state, listener, systemPrompt);
         } catch (AgentBudgetExceededException ex) {
@@ -186,6 +200,39 @@ public final class AgentExecutor {
     private LlmTurnOutcome executeTurn(Conversation conversation, AgentRunContext context,
                                        AgentEventListener listener, AgentBudgetGuard budgetGuard,
                                        String systemPrompt) {
+        ContextDecision preparation = contextPolicy.beforeLlmCall(conversation, context);
+        if (preparation.stopReason().isPresent()) {
+            return LlmTurnOutcome.from(preparation);
+        }
+        LlmTurnOutcome first = requestLlm(
+                conversation, context, listener, budgetGuard, systemPrompt);
+        if (first.failure().isEmpty()) {
+            return first;
+        }
+        ContextDecision recovery = contextPolicy.recoverFromOverflow(
+                conversation, first.failure().orElseThrow(), context);
+        if (recovery.notApplicable()) {
+            return first;
+        }
+        if (recovery.stopReason().isPresent()) {
+            return LlmTurnOutcome.from(recovery);
+        }
+        ContextDecision retryPreparation = contextPolicy.beforeLlmCall(conversation, context);
+        if (retryPreparation.stopReason().isPresent()) {
+            return LlmTurnOutcome.from(retryPreparation);
+        }
+        LlmTurnOutcome retry = requestLlm(
+                conversation, context, listener, budgetGuard, systemPrompt);
+        if (retry.failure().filter(contextPolicy::isContextOverflow).isPresent()) {
+            return LlmTurnOutcome.failed(
+                    StopReason.CONTEXT_EXHAUSTED, messageOf(retry.failure().orElseThrow()));
+        }
+        return retry;
+    }
+
+    private LlmTurnOutcome requestLlm(Conversation conversation, AgentRunContext context,
+                                      AgentEventListener listener, AgentBudgetGuard budgetGuard,
+                                      String systemPrompt) {
         long startNs = System.nanoTime();
         log.info("llm request started: messages={}, tools={}", conversation.messages().size(), tools.specs().size());
         listener.onLlmRequestStart();
@@ -201,7 +248,7 @@ public final class AgentExecutor {
         } catch (RuntimeException failure) {
             handler.close();
             log.error("llm request failed before call handle was returned", failure);
-            return LlmTurnOutcome.failed(StopReason.PROVIDER_ERROR, messageOf(failure));
+            return LlmTurnOutcome.providerFailure(failure);
         }
         try {
             LlmTurnOutcome result = awaitLlm(call, context);
@@ -246,7 +293,7 @@ public final class AgentExecutor {
             return LlmTurnOutcome.stopped(cancellationReason(context));
         }
         log.error("llm stream failed", failure);
-        return LlmTurnOutcome.failed(StopReason.PROVIDER_ERROR, messageOf(failure));
+        return LlmTurnOutcome.providerFailure(failure);
     }
 
     private static String messageOf(Throwable failure) {
@@ -299,12 +346,13 @@ public final class AgentExecutor {
             this.dispatcher = dispatcher;
         }
 
-        private static AgentRunState create(AgentRunContext context, ToolRegistry tools,
-                                            PermissionService permissions) {
+        private static AgentRunState create(
+                AgentRunContext context, ToolRegistry tools, PermissionService permissions,
+                ToolOutputPolicy toolOutputPolicy) {
             AgentBudgetGuard budget = new AgentBudgetGuard(
                     context.budget(), context.budgetState());
             ParallelToolDispatcher dispatcher = new ParallelToolDispatcher(
-                    tools, context.executionContext(), permissions);
+                    tools, context.executionContext(), permissions, toolOutputPolicy);
             return new AgentRunState(context, budget, dispatcher);
         }
 
@@ -361,21 +409,34 @@ public final class AgentExecutor {
     private record LlmTurnOutcome(
             Optional<AiMessage> message,
             Optional<StopReason> stopReason,
-            Optional<String> errorDetail) {
+            Optional<String> errorDetail,
+            Optional<Throwable> failure) {
 
         private static LlmTurnOutcome completed(AiMessage message) {
             return new LlmTurnOutcome(
-                    Optional.of(message), Optional.empty(), Optional.empty());
+                    Optional.of(message), Optional.empty(), Optional.empty(), Optional.empty());
         }
 
         private static LlmTurnOutcome stopped(StopReason reason) {
             return new LlmTurnOutcome(
-                    Optional.empty(), Optional.of(reason), Optional.empty());
+                    Optional.empty(), Optional.of(reason), Optional.empty(), Optional.empty());
         }
 
         private static LlmTurnOutcome failed(StopReason reason, String detail) {
             return new LlmTurnOutcome(
-                    Optional.empty(), Optional.of(reason), Optional.of(detail));
+                    Optional.empty(), Optional.of(reason), Optional.of(detail), Optional.empty());
+        }
+
+        private static LlmTurnOutcome providerFailure(Throwable failure) {
+            return new LlmTurnOutcome(
+                    Optional.empty(), Optional.of(StopReason.PROVIDER_ERROR),
+                    Optional.of(messageOf(failure)), Optional.of(failure));
+        }
+
+        private static LlmTurnOutcome from(ContextDecision decision) {
+            return new LlmTurnOutcome(
+                    Optional.empty(), decision.stopReason(),
+                    decision.errorDetail(), Optional.empty());
         }
     }
 

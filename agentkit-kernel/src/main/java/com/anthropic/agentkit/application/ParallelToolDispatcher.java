@@ -1,5 +1,6 @@
 package com.anthropic.agentkit.application;
 
+import com.anthropic.agentkit.application.tool.ToolOutputPolicy;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.ToolResultMessage;
 import com.anthropic.agentkit.domain.permission.Decision;
@@ -34,12 +35,19 @@ final class ParallelToolDispatcher {
     private final ToolRegistry tools;
     private final ExecutionContext executionContext;
     private final PermissionService permissions;
+    private final ToolOutputPolicy outputPolicy;
 
     ParallelToolDispatcher(ToolRegistry tools, ExecutionContext executionContext,
                            PermissionService permissions) {
+        this(tools, executionContext, permissions, ToolOutputPolicy.defaultLimited());
+    }
+
+    ParallelToolDispatcher(ToolRegistry tools, ExecutionContext executionContext,
+                           PermissionService permissions, ToolOutputPolicy outputPolicy) {
         this.tools = tools;
         this.executionContext = executionContext;
         this.permissions = permissions;
+        this.outputPolicy = outputPolicy;
     }
 
     List<ToolResultMessage> dispatch(AiMessage aiMessage) {
@@ -118,8 +126,7 @@ final class ParallelToolDispatcher {
             log.warn("permission denied: {}", tool.name());
             ToolResult denied = ToolResult.of(
                     ToolResultStatus.DENIED, "permission denied: " + tool.name());
-            invocation.settle(denied);
-            return denied;
+            return governAndSettle(invocation, denied);
         }
         invocation.allow();
         return runTool(tool, invocation);
@@ -132,22 +139,35 @@ final class ParallelToolDispatcher {
         }
         try {
             ToolResult result = executeBounded(tool, invocation);
-            invocation.settle(result);
+            result = governAndSettle(invocation, result);
             log.info("tool completed: tool={}, success={}, durationMs={}",
                     tool.name(), result.success(), elapsedMs(startNs));
             return result;
         } catch (CancellationException ex) {
             ToolResult cancelled = failure(ToolResultStatus.CANCELLED, ex, "execution");
-            invocation.settle(cancelled);
-            return cancelled;
+            return governAndSettle(invocation, cancelled);
         } catch (RuntimeException ex) {
             ToolResult failure = failure(ToolResultStatus.ERROR, ex, "execution");
-            invocation.settle(failure);
+            failure = governAndSettle(invocation, failure);
             log.error("tool failed: tool={}, errorType={}, message={}",
                     tool.name(), ex.getClass().getSimpleName(), ex.getMessage());
             log.debug("tool failure stack", ex);
             return failure;
         }
+    }
+
+    private ToolResult governAndSettle(ToolInvocation invocation, ToolResult raw) {
+        ToolResult governed;
+        try {
+            governed = outputPolicy.govern(invocation, raw, executionContext);
+        } catch (RuntimeException ex) {
+            log.error("tool output policy failed: tool={}", invocation.toolName(), ex);
+            governed = ToolResult.of(
+                    ToolResultStatus.ERROR, "tool output rejected by policy",
+                    Map.of("stage", "output_policy"));
+        }
+        invocation.settle(governed);
+        return governed;
     }
 
     private ToolResult executeBounded(Tool tool, ToolInvocation invocation) {
