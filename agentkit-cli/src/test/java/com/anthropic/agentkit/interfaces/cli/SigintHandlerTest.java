@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class SigintHandlerTest {
 
@@ -73,5 +74,19 @@ class SigintHandlerTest {
         assertThat(handler.state()).isEqualTo(State.IDLE);
         assertThat(token.isCancelled()).isFalse();
         assertThat(exited).isFalse();
+    }
+
+    @Test
+    void staleTurnCompletionCannotReleaseTheActiveRun() {
+        SigintHandler handler = new SigintHandler(() -> {});
+        CancellationToken active = handler.turnStarted();
+
+        handler.turnFinished(new CancellationToken());
+
+        assertThatThrownBy(handler::turnStarted)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("already active");
+        handler.turnFinished(active);
+        assertThat(handler.turnStarted().isCancelled()).isFalse();
     }
 }

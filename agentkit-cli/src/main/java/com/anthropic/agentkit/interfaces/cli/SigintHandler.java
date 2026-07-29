@@ -3,7 +3,6 @@ package com.anthropic.agentkit.interfaces.cli;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicReference;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,8 +13,8 @@ public final class SigintHandler {
 
     public enum State { IDLE, CANCELLING, EXIT }
 
-    private final AtomicReference<State> state = new AtomicReference<>(State.IDLE);
-    private final AtomicReference<CancellationToken> activeRun = new AtomicReference<>();
+    private volatile State state = State.IDLE;
+    private CancellationToken activeRun;
     private final Runnable exitAction;
 
     public SigintHandler(Runnable exitAction) {
@@ -23,47 +22,59 @@ public final class SigintHandler {
     }
 
     public State state() {
-        return state.get();
+        return state;
     }
 
-    public CancellationToken turnStarted() {
-        CancellationToken token = new CancellationToken();
-        if (!activeRun.compareAndSet(null, token)) {
+    public synchronized CancellationToken turnStarted() {
+        if (activeRun != null || state != State.IDLE) {
             throw new IllegalStateException("a CLI run is already active");
         }
-        return token;
+        activeRun = new CancellationToken();
+        return activeRun;
     }
 
     public void onSigint() {
-        CancellationToken cancellation = activeRun.get();
-        if (cancellation == null) {
-            log.debug("SIGINT received while CLI is idle");
-            return;
+        boolean exit;
+        synchronized (this) {
+            exit = transitionOnSigint();
         }
-        State previous = state.get();
-        switch (previous) {
-            case IDLE -> {
-                if (state.compareAndSet(State.IDLE, State.CANCELLING)) {
-                    log.warn("SIGINT received: action=cancel_turn");
-                    cancellation.cancel();
-                }
-            }
-            case CANCELLING -> {
-                if (state.compareAndSet(State.CANCELLING, State.EXIT)) {
-                    log.warn("SIGINT received: action=exit_process");
-                    exitAction.run();
-                }
-            }
-            case EXIT -> {
-                log.warn("SIGINT received: action=already_exiting");
-            }
+        if (exit) {
+            exitAction.run();
         }
     }
 
-    public void turnFinished(CancellationToken token) {
+    private boolean transitionOnSigint() {
+        CancellationToken cancellation = activeRun;
+        if (cancellation == null) {
+            log.debug("SIGINT received while CLI is idle");
+            return false;
+        }
+        return switch (state) {
+            case IDLE -> {
+                state = State.CANCELLING;
+                log.warn("SIGINT received: action=cancel_turn");
+                cancellation.cancel();
+                yield false;
+            }
+            case CANCELLING -> {
+                state = State.EXIT;
+                log.warn("SIGINT received: action=exit_process");
+                yield true;
+            }
+            case EXIT -> {
+                log.warn("SIGINT received: action=already_exiting");
+                yield false;
+            }
+        };
+    }
+
+    public synchronized void turnFinished(CancellationToken token) {
         Objects.requireNonNull(token, "token");
-        if (activeRun.compareAndSet(token, null)) {
-            state.compareAndSet(State.CANCELLING, State.IDLE);
+        if (activeRun == token) {
+            activeRun = null;
+            if (state == State.CANCELLING) {
+                state = State.IDLE;
+            }
             log.debug("SIGINT state reset after CLI run finished");
         }
     }

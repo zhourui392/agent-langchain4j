@@ -1,6 +1,8 @@
 package com.anthropic.agentkit.interfaces.cli.io;
 
 import com.anthropic.agentkit.application.io.TerminalIo.PromptAnswer;
+import com.anthropic.agentkit.domain.conversation.CancellationToken;
+import com.anthropic.agentkit.interfaces.cli.SigintHandler;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReader;
 import org.jline.reader.UserInterruptException;
@@ -11,7 +13,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -119,10 +120,11 @@ class JLineTerminalIoTest {
     }
 
     @Test
-    void registersRealTerminalSigintHandler() {
+    void terminalSignalCancelsTheActiveCliRun() {
         LineReader reader = mock(LineReader.class);
         Terminal terminal = mock(Terminal.class);
-        AtomicBoolean called = new AtomicBoolean();
+        SigintHandler sigint = new SigintHandler(() -> {});
+        CancellationToken token = sigint.turnStarted();
         JLineTerminalIo io = new JLineTerminalIo(
                 reader, new PrintStream(new ByteArrayOutputStream()),
                 new PrintStream(new ByteArrayOutputStream()), terminal);
@@ -133,10 +135,10 @@ class JLineTerminalIoTest {
                     return Terminal.SignalHandler.SIG_DFL;
                 });
 
-        io.onSigint(() -> called.set(true));
+        io.onSigint(sigint::onSigint);
 
         verify(terminal).handle(eq(Terminal.Signal.INT), any());
-        assertThat(called).isTrue();
+        assertThat(token.isCancelled()).isTrue();
     }
 
     private static JLineTerminalIo newIo(LineReader reader) {

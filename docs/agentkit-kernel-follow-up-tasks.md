@@ -1,6 +1,6 @@
 # AgentKit Kernel：非高优先级与后续 Agent Runtime 任务
 
-> 状态：`#47–#54` 已完成，`#55` 进行中（Green，2026-07-29）；`#56` 保持条件触发候选
+> 状态：`#47–#55` 已完成；`#56` 保持条件触发候选
 >
 > 审计日期：2026-07-29
 >
@@ -56,7 +56,7 @@
                  └─→ #55 CLI composition cleanup
 ```
 
-建议交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`；当前 `#47–#54` 已完成，下一项为 `#55`。`#56` 独立按日志规模或多 writer 需求触发，不为“对齐产品功能表”提前实现没有消费方的扩展。
+实际交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`；当前 `#47–#55` 已全部完成。`#56` 独立按日志规模或多 writer 需求触发，不为“对齐产品功能表”提前实现没有消费方的扩展。
 
 ## 4. 变化点地图
 
@@ -70,7 +70,7 @@
 | fork/rewind/checkpoint | immutable parent pointer、append-only branch journal、typed side effect 与文件补偿已落地 | `SessionBranchService` + `FileCheckpointProvider` | #52（已完成） |
 | provider retry/fallback | typed failure、有限退避、attempt budget、实际 model usage 已落地 | `ModelPolicy` / `RetryPolicy` | #53（已完成） |
 | Agent 发现与派发 | typed manifest/SPI、显式 platform registry、diagnosis/coding 正式入口已落地 | `AgentManifest` + `AgentRegistry` | #54（已完成） |
-| CLI 命令和取消接线 | `AgentKitApplication.main`、slash commands | CLI composition root | #55 |
+| CLI 命令和取消接线 | typed assistant manifest、event resume、同源 slash catalog 与 run-scoped SIGINT 已落地 | `CliSession` + `CliAgentEntryPoint` + CLI composition root | #55（已完成） |
 | 事件日志规模与多 writer | 文件 append 前全量读取校验、实例内同步、无 retention | tail index + writer fencing + retention/rotation policy | #56 |
 
 ## 5. 后续任务详情
@@ -515,9 +515,9 @@ sealed interface RunSuspension {
 - Domain Concept Map：`SessionBranch` 是聚合根；`SessionBranchId`、`SessionBranchScope`、`RunEventPointer`、`BranchPoint`、`CheckpointId`/`CheckpointOwner` 是 VO；`BranchOrigin`/`RewindMode` 收敛合法状态；`ToolSideEffect.CheckpointedFile|NonReversible` 是 typed fact；`SessionBranchStore`、`FileCheckpointProvider` 与既有 `RunEventStore` 是独立 port。
 - Aggregate Boundary：branch file 只接受一次 `BranchCreated`，以 owner-only JSONL 保存完整不可变 metadata；父 branch 仅按 `(branchId, runId, sequence)` 引用，不参与 child 写入。run facts、branch journal 与 checkpoint snapshot 是三个介质边界；application 先保存新 branch，再执行显式文件补偿，失败不会回删审计事实或伪装成跨介质原子事务。
 - Invariants：目标 run event 必须存在且 session/workspace 与 branch 完全匹配；目标 sequence 不能越过 parent head；错 scope 与 unknown branch 统一 unavailable；rewind 只新增 branch，不改 parent；多个 checkpoint 按 side-effect 逆序恢复；conversation-only 把 checkpoint 放进 `unrestoredCheckpoints`；恢复失败继续返回 branch、unrestored 与 residual；read-only 工具无 side-effect event，默认 mutating/Bash/MCP 是 non-reversible；FileWrite/Edit 只有拿到写前 checkpoint 才产生 checkpointed fact。
-- Variation Point Map：branch 介质在 `SessionBranchStore`，文件内容/存在性/mtime 补偿在 `FileCheckpointProvider`，tool effect 分类在 provider-neutral `ToolSafety.reversibility`，事实持久化在 `ToolSideEffectObserved`，conversation 继续复用 `RunEventProjector`。CLI 组合根只注入本地 checkpoint provider；具体 fork/rewind 命令展示留 #55，worktree 继续属于 coding/platform。
+- Variation Point Map：branch 介质在 `SessionBranchStore`，文件内容/存在性/mtime 补偿在 `FileCheckpointProvider`，tool effect 分类在 provider-neutral `ToolSafety.reversibility`，事实持久化在 `ToolSideEffectObserved`，conversation 继续复用 `RunEventProjector`。CLI 组合根只注入本地 checkpoint provider；worktree 继续属于 coding/platform。
 - Refactor Signals：`ExecutionContext` 现显式携带 SessionId，checkpoint owner 不再由全局推断；`TruncatingTool`/`GovernedTool` 透传 delegate safety，避免装饰器把 checkpointed mutation 降级；checkpoint/branch 目录分别尝试 `0700`、文件 `0600`，opaque ID 以安全编码派生文件名。完整 checkpoint payload 为本机 L0 恢复所需，和 suspension 一样依赖 owner-only 保护而非审计脱敏。
-- Remaining Limitations：当前补偿只覆盖 kernel 自己捕获的普通文件内容、存在性与 mtime；不覆盖目录树、ACL、symlink、Bash/MCP/数据库/远端 API、后台进程或 worktree merge。branch 创建/选择尚无 CLI 命令，按任务边界留 #55；多 writer fencing、索引和 retention 仍只在 #56 的真实规模条件触发。
+- Remaining Limitations：当前补偿只覆盖 kernel 自己捕获的普通文件内容、存在性与 mtime；不覆盖目录树、ACL、symlink、Bash/MCP/数据库/远端 API、后台进程或 worktree merge。#55 的验收范围是 clear/event-resume/SIGINT/agent selection，没有新增 branch 创建/选择命令；这仍是独立的宿主产品需求，不应冒充 kernel 缺口。多 writer fencing、索引和 retention 仍只在 #56 的真实规模条件触发。
 
 | 评分维度 | 完成后 | 证据 |
 |---|---:|---|
@@ -640,7 +640,7 @@ record AgentManifest<I, O>(
 - Invariants：ID 不能为空且 registry 内唯一；description/config/capability 集合不可变；普通工具与 terminal tool 不得重名；缺配置、错误 request type 或错误 result type 必须在 entry point 调用前失败；entry point 必须声明非空 request/result class；kernel 不得依赖 agent 模块，agent 模块不得互相依赖。
 - Variation Point Map：agent 元数据由 `AgentManifest` 收敛；宿主选择/配置可用性由 `AgentRegistry` 收敛；diagnosis streaming/stop 与 coding plan→patch→review 分别由自己的 engine 收敛；coding manifest capability 由与实际角色 `AgentSpec` 共用的 `CodingCapabilities` 生成，避免第二份手写清单漂移。
 - Refactor Signals：`CodingEngineBuilder` 已取代宿主直接拼 Planner/Patcher/Reviewer；`DiagnoseEngine` 在不破坏原 stream API 的情况下适配 typed invoke；旧 ArchUnit `kernelHasNoDiagnosisDependency` 已改成覆盖 diagnosis/coding 的通用规则，并在两个 agent 包内增加互斥依赖门禁。
-- Remaining Limitations：registry 是 in-process 显式注册，不是插件 ABI、网络协议或 classpath discovery；required config 只保存 logical key，不保存/解析 secret；动态 MCP catalog 无法被静态 manifest 穷举；CLI 的 agent 选择、错误展示、命令与 SIGINT/session UX 按边界留 #55。
+- Remaining Limitations：registry 是 in-process 显式注册，不是插件 ABI、网络协议或 classpath discovery；required config 只保存 logical key，不保存/解析 secret；动态 MCP catalog 无法被静态 manifest 穷举。#55 已让 CLI assistant 走显式 manifest selection；diagnosis/coding 的产品级 CLI request adapter 仍需各宿主按自己的 DTO 与交互方式显式注册，不由通用 registry 猜测。
 
 | 评分维度 | 完成后 | 证据 |
 |---|---:|---|
@@ -654,6 +654,8 @@ record AgentManifest<I, O>(
 ---
 
 ### #55 [CLI/Platform-TDD, P3] 组合根、slash command 与 SIGINT 接线清理
+
+**状态**：已完成（2026-07-29）；Red/Green/Refactor 三提交交付。
 
 **Goal**
 
@@ -682,6 +684,24 @@ record AgentManifest<I, O>(
 - 不增加 Ink/React UI、IDE bridge 或插件系统。
 
 **blockedBy**：#40、#46、#54。
+
+**完成后边界复核（2026-07-29）**
+
+- Summary：CLI 的 active conversation 由 application `CliSession` 统一替换；`/clear` 新建 SessionId，`/resume <run-id>` 只通过 `RunEventResumer` 投影 append-only facts，不再把旧 session JSONL 当作恢复执行入口。started-but-unsettled tool invocation 以 `UNKNOWN` 和 reconciliation 提示展示，任何命令都拿不到 `ToolRegistry`，因此无法在恢复时 replay。
+- Command Source of Truth：`SlashCommand` 同时声明 name/usage/description，`SlashCommands.standard` 是 Help/Clear/Resume 唯一注册点，`HelpCommand` 从 parser 的真实不可变 snapshot 渲染；help 中出现的每个 slash name 都能被同一 parser 解析。
+- Run Boundary：CLI assistant 由 `CliAgentManifest` 发布实际 tool capability，`AgentRegistry.select` 在 REPL 前完成 agent/config/type preflight；`CliAgentEntryPoint` 继续调用受独立 `PermissionService` 保护的原 executor，不使用 `StructuredAgent` 的 bypass policy。每个首段和 suspension resume 段都创建新的 RunId、`AgentRunContext` 与 CancellationToken。
+- SIGINT Boundary：JLine `Terminal.Signal.INT` 显式接到 CLI-owned `SigintHandler`；空闲 signal 不创建或污染 token，第一次 active signal 只取消当前 run，第二次 active signal 才调用 CLI exit policy。完成回调必须携带同一 token，陈旧回调不能释放新 run。
+- Layering：`CliSession` 只依赖 kernel application/domain；命令文本、JLine signal、renderer、二次 Ctrl-C 退出和 assistant host adapter 全留 `interfaces/cli`。kernel 没有增加 UI command、进程退出或具体 agent 选择逻辑，也没有引入插件扫描、富终端或 IDE bridge。
+- Remaining Limitations：生产 CLI 当前只显式注册 permission-aware `assistant` manifest；`--agent` 选择未知 ID 会列出 available agents。diagnosis/coding 虽已由 #54 证明可共用 registry，但要进入这个 REPL 仍需各自的 request/result UI adapter。branch 创建/选择也不是本任务 DoD，需由真实产品需求另行立项。
+
+| 评分维度 | 完成后 | 证据 |
+|---|---:|---|
+| 聚合边界是否清晰 | 3/3 | active CLI session、单次 run scope、run facts 与 UI command 分离 |
+| 变化是否被收敛 | 3/3 | command catalog、session use case、typed agent adapter、signal policy 各有唯一归属 |
+| 不变量是否可被模型守护 | 3/3 | typed RunId/manifest、token identity、event projection 与 registered-command snapshot |
+| 行为是否与模型一致 | 3/3 | clear 真替换、resume 不 replay、UNKNOWN 可见、下一 run token 新鲜 |
+| 设计是否支持下一轮需求变化 | 3/3 | 新 CLI agent 显式加 manifest + UI adapter；kernel 与 agent 领域工作流不变 |
+| **合计** | **15/15** | clear/resume/SIGINT/selection 端到端与全模块回归均通过 |
 
 ---
 
@@ -745,7 +765,7 @@ record AgentManifest<I, O>(
 | #52 Checkpoint | 用户明确需要 rewind/fork，且接受非文件副作用不可回滚 |
 | #53 Retry/Model policy | provider rate-limit/瞬态错误达到可观测频率，或 child model tier 有成本需求 |
 | #54 Manifest | diagnosis/coding 需要由同一入口真实派发；条件已满足并于 2026-07-29 完成 |
-| #55 CLI cleanup | CLI 重新成为交付面，或用于验证统一 runtime |
+| #55 CLI cleanup | CLI 重新成为交付面，或用于验证统一 runtime；条件已满足并于 2026-07-29 完成 |
 | #56 Event scaling | 单 run 日志达到可测性能瓶颈、同一 RunId 出现多进程 writer，或宿主提出 retention/归档要求 |
 
 ## 8. 与高优先级任务的边界复核

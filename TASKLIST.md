@@ -20,7 +20,7 @@
 | S8 持久化 | #36–38 | 0.5d | JSONL store + /resume + SessionId |
 | MVP-Gate | #39 | — | 端到端冒烟，打 `v0.1.0-mvp` |
 | S9 Runtime Hardening | #40–46 | 已完成（7/7） | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
-| S10 Runtime Extensions | #47–55 | 进行中（8/9） | 子 Agent、interceptor、MCP、后台任务、暂停恢复、分支、模型策略、manifest、CLI |
+| S10 Runtime Extensions | #47–55 | 已完成（9/9） | 子 Agent、interceptor、MCP、后台任务、暂停恢复、分支、模型策略、manifest、CLI |
 | **MVP 合计** | — | **≈8 人天** | — |
 
 ## 依赖图
@@ -877,7 +877,7 @@ S0 (1→2→3)
 
 ### #55 [S10-CLI-Platform-TDD] 组合根、slash command 与 SIGINT 接线清理 （blockedBy: 40, 46, 54）
 
-**状态**：进行中（Green；2026-07-29）。
+**状态**：已完成（2026-07-29）。
 
 **Red**：help 只列真实注册命令；`/clear` 重置 active conversation；`/resume` 走 event recovery；第一次 SIGINT 只取消 active run且不污染下一轮；agent 选择/配置错误可见。
 

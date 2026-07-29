@@ -848,7 +848,7 @@ session rewind 是从不可变 run fact 创建新分支并选择性补偿 kernel
 | Rewind 投影 | `SessionBranchService` 复用 `RunEventProjector` 重建目标 conversation；checkpoint effect 按事件逆序补偿，non-reversible effect 转 `ResidualSideEffect` | 同一文件多次写能回到目标时点；`CONVERSATION_ONLY` 返回 unrestored checkpoint；恢复失败保留 child 并返回 unrestored/residual，不伪造全成功 |
 | 本地持久化 | branch/checkpoint 目录尝试 `0700`、文件 `0600`，opaque ID 安全编码后派生文件名；CLI 为 Write/Edit 注入 `~/.agentkit/sessions/checkpoints` provider | checkpoint 保存恢复所需完整文件内容，依赖 L0 owner-only 保护；branch/checkpoint 不是审计脱敏日志，也不是多租户隔离或分布式事务 |
 
-本节只承诺 kernel 管理的普通文件内容、存在性和 mtime 补偿；目录树、ACL、symlink、Bash、MCP、数据库、远端 API、后台进程与 worktree 建立/合并都不在通用回滚范围。branch 的 CLI 选择/展示留 #55；索引、retention 和多 writer fencing 仍按 #56 的真实规模条件触发。
+本节只承诺 kernel 管理的普通文件内容、存在性和 mtime 补偿；目录树、ACL、symlink、Bash、MCP、数据库、远端 API、后台进程与 worktree 建立/合并都不在通用回滚范围。branch 的 CLI 创建/选择不是 #55 的 clear/event-resume/SIGINT 验收范围，仍需真实宿主需求另行立项；索引、retention 和多 writer fencing 仍按 #56 的真实规模条件触发。
 
 ---
 
@@ -882,11 +882,28 @@ diagnosis 与 coding 已成为两个真实、平级的 agent 包。宿主需要�
 | Agent 入口 | diagnosis 的现有 `DiagnoseEngine` 适配 typed entry point，保留 stream/stop/close API；coding 新增 `CodingRequest`、`CodingEngine`、`CodingEngineBuilder`，builder 内部装配 Planner/Patcher/Reviewer | 宿主不再直接拼领域角色；`CodingPipeline` 与 `CodingTask` 状态机仍完全留 coding 包，diagnosis orchestration 仍完全留 diagnosis 包 |
 | 模块依赖 | agent 包只依赖 kernel，互不依赖；platform registry 依赖 kernel contract，真实宿主测试显式带入两个 agent 包 | ArchUnit 分别守 kernel→agent 禁止和 diagnosis↔coding 禁止；统一入口不会演化成 kernel 反向依赖或共享领域“大一统”模型 |
 
-registry 的 typed dispatch 是 in-process host contract，不是网络协议或插件 ABI；跨进程/Web transport 仍应由宿主把自己的 DTO 映射到对应 agent request。#54 也不选择 CLI 命令、SIGINT 或 session UX，这些产品接线继续由 #55 完成。
+registry 的 typed dispatch 是 in-process host contract，不是网络协议或插件 ABI；跨进程/Web transport 仍应由宿主把自己的 DTO 映射到对应 agent request。#54 不选择 CLI 命令、SIGINT 或 session UX；这些产品接线已由 #55 按 §16.23 的宿主边界完成。
+
+---
+
+### 16.23 CLI active session、event resume 与 run-scoped SIGINT（2026-07-29）
+
+CLI 是 kernel runtime 的一个宿主，不是第二套执行语义。命令发现、终端 signal、退出策略和展示文本留在 `interfaces/cli`；active conversation 的替换用例留 platform application；恢复、运行、权限和 manifest 继续复用 kernel 已有 contract。
+
+| 决策面 | 选型 | 不变量 / 后果 |
+|---|---|---|
+| Active session | CLI application `CliSession` 持有可原子替换的 `Conversation`；`clear()` 创建 fresh SessionId，`resume(RunId)` 安装 `RunEventResumer` 的 projection | clear 不删除历史事实；恢复坐标是 RunId 而非旧 session JSONL 文件；状态不从进程全局单例或 terminal 隐式读取 |
+| Slash command 真相源 | `SlashCommand` 声明 name/usage/description/execute，`SlashCommands.standard` 注册 Help/Clear/Resume；help 从 parser 的实际注册 snapshot 生成 | help 不得宣称未注册命令；命令通过注入 `CliSession` 调用用例，不允许 `AgentKitApplication` 按字符串名称特判 |
+| 恢复展示 | `/resume <run-id>` 只加载、校验并投影 append-only `RunEventStore`；unsettled invocation 展示 tool/id、`UNKNOWN` 与 reconciliation required | resume 没有 `ToolRegistry` 或执行入口，settled/unknown 工具都不 replay；missing run 不得伪装成功 |
+| Agent selection | CLI 自己提供 permission-aware `assistant` typed request/result/entry point 与 manifest；组合根通过 `AgentRegistry.select` 在 REPL 前校验 ID、配置和类型 | assistant capability 来自实际 `ToolRegistry`；entry point 仍调用带独立 `PermissionService` 的 executor，不因 manifest 选择改成 bypass；未知 ID 列出 available agents |
+| Run scope | `CliAgentEntryPoint` 每次 initial run 和每个 suspension resume segment 都创建 fresh RunId、`AgentRunContext` 和 CancellationToken | 上一段取消不可污染下一段；同一 active Conversation 可连续产生多个独立、可审计 run；secret/workspace 继续显式透传 |
+| SIGINT | JLine `Terminal.Signal.INT` 连接到 CLI-owned `SigintHandler`；第一次 active INT cancel 当前 token，第二次 active INT 执行 exit policy，idle INT 不创建 token | 完成回调携带 token identity，stale completion 不得释放 active run；kernel 不引用 JLine、`System.exit` 或二次 Ctrl-C 规则 |
+
+生产 REPL 当前只注册 `assistant` manifest。diagnosis/coding 的 manifest 已能被同一 registry 派发，但二者请求、结果和交互形状不同；若要暴露为 CLI 产品命令，应各自增加显式 UI adapter 与配置 wiring，不能把领域 DTO 塞进通用字符串协议。branch 创建/选择、富终端、IDE bridge、插件扫描和容器 sandbox 都不在本决策范围。
 
 ---
 
 ## 17. 下一步
 
-1. 以 #55 清理 slash command、run recovery、branch host UX、agent 选择与每轮 SIGINT/context 接线。
+1. S10 `#47–#55` 已全部完成；下一项不是默认继续扩 kernel，而是由真实宿主需求选择产品级 agent adapter 或 branch UX。
 2. #56 仅在事件日志规模、多 writer 或 retention 需求真实触发时立项。
