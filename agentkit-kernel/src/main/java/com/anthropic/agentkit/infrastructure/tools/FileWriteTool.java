@@ -47,7 +47,7 @@ public final class FileWriteTool implements Tool {
         boolean existedBefore = Files.exists(file);
         log.debug("file write args: path={}, bytes={}", file, content.getBytes(StandardCharsets.UTF_8).length);
 
-        Optional<ToolResult> guard = requireReadGuard.checkBeforeOverwrite(file);
+        Optional<ToolResult> guard = requireReadGuard.checkBeforeOverwrite(ctx.workspaceId(), file);
         if (guard.isPresent()) {
             log.warn("file write blocked: path={}", file);
             return guard.get();
@@ -58,7 +58,7 @@ public final class FileWriteTool implements Tool {
                 Files.createDirectories(file.getParent());
             }
             Files.writeString(file, content, StandardCharsets.UTF_8);
-            fileStateCache.recordRead(file);
+            fileStateCache.recordRead(ctx.workspaceId(), file);
             log.info("file write completed: path={}, bytes={}, mode={}, durationMs={}",
                     file, content.getBytes(StandardCharsets.UTF_8).length,
                     existedBefore ? "overwrite" : "create", elapsedMs(startNs));

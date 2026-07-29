@@ -1,5 +1,7 @@
 package com.anthropic.agentkit.infrastructure.tools.support;
 
+import com.anthropic.agentkit.domain.agent.WorkspaceId;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -14,23 +16,34 @@ public final class FileStateCache {
 
     private static final Logger log = LoggerFactory.getLogger(FileStateCache.class);
 
-    private final Map<Path, FileTime> readMtimes = new ConcurrentHashMap<>();
+    private final Map<FileStateKey, FileTime> readMtimes = new ConcurrentHashMap<>();
 
     public void recordRead(Path file) {
+        recordRead(workspaceFor(file), file);
+    }
+
+    public void recordRead(WorkspaceId workspaceId, Path file) {
         FileTime mtime = currentMtime(file);
         if (mtime != null) {
-            readMtimes.put(file.toAbsolutePath().normalize(), mtime);
-            log.debug("file read state recorded: file={}, mtime={}", file, mtime);
+            readMtimes.put(key(workspaceId, file), mtime);
+            log.debug("file read state recorded: workspace={}, file={}, mtime={}", workspaceId, file, mtime);
         }
     }
 
     public boolean hasBeenRead(Path file) {
-        return readMtimes.containsKey(file.toAbsolutePath().normalize());
+        return hasBeenRead(workspaceFor(file), file);
+    }
+
+    public boolean hasBeenRead(WorkspaceId workspaceId, Path file) {
+        return readMtimes.containsKey(key(workspaceId, file));
     }
 
     public boolean isStale(Path file) {
-        Path key = file.toAbsolutePath().normalize();
-        FileTime recorded = readMtimes.get(key);
+        return isStale(workspaceFor(file), file);
+    }
+
+    public boolean isStale(WorkspaceId workspaceId, Path file) {
+        FileTime recorded = readMtimes.get(key(workspaceId, file));
         if (recorded == null) {
             return false;
         }
@@ -53,5 +66,18 @@ public final class FileStateCache {
         } catch (IOException ex) {
             return null;
         }
+    }
+
+    private static FileStateKey key(WorkspaceId workspaceId, Path file) {
+        return new FileStateKey(workspaceId, file.toAbsolutePath().normalize());
+    }
+
+    private static WorkspaceId workspaceFor(Path file) {
+        Path absolute = file.toAbsolutePath().normalize();
+        Path parent = absolute.getParent();
+        return WorkspaceId.fromPath(parent == null ? absolute : parent);
+    }
+
+    private record FileStateKey(WorkspaceId workspaceId, Path file) {
     }
 }

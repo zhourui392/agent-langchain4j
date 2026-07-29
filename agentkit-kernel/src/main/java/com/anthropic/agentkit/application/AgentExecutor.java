@@ -2,6 +2,8 @@ package com.anthropic.agentkit.application;
 
 import com.anthropic.agentkit.domain.agent.AgentBudget;
 import com.anthropic.agentkit.domain.agent.AgentBudgetExceededException;
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
+import com.anthropic.agentkit.domain.agent.RunId;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.message.AiMessage;
@@ -31,8 +33,9 @@ public final class AgentExecutor {
 
     private final LlmClient llm;
     private final ToolRegistry tools;
-    private final AgentBudget budget;
-    private final ParallelToolDispatcher dispatcher;
+    private final PermissionService permissions;
+    private final ExecutionContext defaultExecutionContext;
+    private final AgentBudget defaultBudget;
 
     public AgentExecutor(LlmClient llm, ToolRegistry tools) {
         this(llm, tools, allowAllPermissions(), ExecutionContext.at(currentDirectory()));
@@ -57,47 +60,64 @@ public final class AgentExecutor {
                          AgentBudget budget) {
         this.llm = Objects.requireNonNull(llm, "llm");
         this.tools = Objects.requireNonNull(tools, "tools");
-        this.budget = Objects.requireNonNull(budget, "budget");
-        Objects.requireNonNull(permissions, "permissions");
-        Objects.requireNonNull(executionContext, "executionContext");
-        this.dispatcher = new ParallelToolDispatcher(tools, executionContext, permissions);
+        this.permissions = Objects.requireNonNull(permissions, "permissions");
+        this.defaultExecutionContext = Objects.requireNonNull(executionContext, "executionContext");
+        this.defaultBudget = Objects.requireNonNull(budget, "budget");
     }
 
     public CompletableFuture<AiMessage> run(Conversation conversation, CancellationToken cancel) {
-        return run(conversation, cancel, AgentEventListener.NO_OP);
+        return run(conversation, legacyContext(conversation, cancel), AgentEventListener.NO_OP);
     }
 
     public CompletableFuture<AiMessage> run(Conversation conversation,
                                             CancellationToken cancel,
                                             StreamHandler streamHandler) {
         Objects.requireNonNull(streamHandler, "streamHandler");
-        return run(conversation, cancel, fromStreamHandler(streamHandler));
+        return run(conversation, legacyContext(conversation, cancel), fromStreamHandler(streamHandler));
     }
 
     public CompletableFuture<AiMessage> run(Conversation conversation,
                                             CancellationToken cancel,
                                             AgentEventListener listener) {
-        return run(conversation, cancel, listener, "");
+        return run(conversation, legacyContext(conversation, cancel), listener, "");
     }
 
     public CompletableFuture<AiMessage> run(Conversation conversation,
                                             CancellationToken cancel,
                                             AgentEventListener listener,
                                             String systemPrompt) {
-        Objects.requireNonNull(conversation, "conversation");
-        Objects.requireNonNull(cancel, "cancel");
-        Objects.requireNonNull(listener, "listener");
-        Objects.requireNonNull(systemPrompt, "systemPrompt");
-        return CompletableFuture.supplyAsync(() -> loop(conversation, cancel, listener, systemPrompt));
+        return run(conversation, legacyContext(conversation, cancel), listener, systemPrompt);
     }
 
-    private AiMessage loop(Conversation conversation, CancellationToken cancel,
+    public CompletableFuture<AiMessage> run(Conversation conversation, AgentRunContext context) {
+        return run(conversation, context, AgentEventListener.NO_OP, "");
+    }
+
+    public CompletableFuture<AiMessage> run(Conversation conversation, AgentRunContext context,
+                                            AgentEventListener listener) {
+        return run(conversation, context, listener, "");
+    }
+
+    public CompletableFuture<AiMessage> run(Conversation conversation, AgentRunContext context,
+                                            AgentEventListener listener, String systemPrompt) {
+        Objects.requireNonNull(conversation, "conversation");
+        Objects.requireNonNull(context, "context");
+        Objects.requireNonNull(listener, "listener");
+        Objects.requireNonNull(systemPrompt, "systemPrompt");
+        if (!conversation.sessionId().equals(context.sessionId())) {
+            throw new IllegalArgumentException("run context session does not match conversation");
+        }
+        return CompletableFuture.supplyAsync(() -> loop(conversation, context, listener, systemPrompt));
+    }
+
+    private AiMessage loop(Conversation conversation, AgentRunContext context,
                            AgentEventListener listener, String systemPrompt) {
         MDC.put("session", conversation.sessionId().value());
-        log.info("session started: initialMessages={}, systemPromptChars={}",
-                conversation.messages().size(), systemPrompt.length());
+        MDC.put("run", context.runId().value());
+        log.info("session started: runId={}, workspaceId={}, initialMessages={}, systemPromptChars={}",
+                context.runId(), context.workspaceId(), conversation.messages().size(), systemPrompt.length());
         try {
-            return runLoop(conversation, cancel, listener, systemPrompt);
+            return runLoop(conversation, context, listener, systemPrompt);
         } catch (AgentBudgetExceededException ex) {
             log.warn("session stopped: budget exhausted: {}", ex.getMessage());
             throw ex;
@@ -109,24 +129,29 @@ public final class AgentExecutor {
             listener.onError(ex);
             throw ex;
         } finally {
+            permissions.clear(context.runId());
             MDC.remove("turn");
             MDC.remove("toolUseId");
+            MDC.remove("run");
             MDC.remove("session");
         }
     }
 
-    private AiMessage runLoop(Conversation conversation, CancellationToken cancel,
+    private AiMessage runLoop(Conversation conversation, AgentRunContext context,
                               AgentEventListener listener, String systemPrompt) {
-        AgentBudgetGuard budgetGuard = new AgentBudgetGuard(budget);
+        AgentBudgetGuard budgetGuard = new AgentBudgetGuard(context.budget());
+        ParallelToolDispatcher dispatcher = new ParallelToolDispatcher(
+                tools, context.runId(), context.executionContext(), permissions);
         int turn = 0;
         while (true) {
-            cancellationGuard(cancel, turn);
+            cancellationGuard(context.cancellation(), turn);
             budgetGuard.ensureInputTokensWithinBudget();
             budgetGuard.reserveTurn();
             turn++;
             MDC.put("turn", String.valueOf(turn));
             log.info("turn {} started: messageCount={}", turn, conversation.messages().size());
-            AiMessage aiMessage = executeTurn(conversation, cancel, listener, budgetGuard, systemPrompt);
+            AiMessage aiMessage = executeTurn(
+                    conversation, context.cancellation(), listener, budgetGuard, systemPrompt);
             appendMessage(conversation, aiMessage, "assistant message");
             if (!aiMessage.hasToolUseRequests()) {
                 log.info("turn {} completed: stopReason=no_tool_use", turn);
@@ -208,6 +233,13 @@ public final class AgentExecutor {
             @Override public void onTurnComplete(AiMessage finalMessage) { handler.onComplete(finalMessage); }
             @Override public void onError(Throwable error) { handler.onError(error); }
         };
+    }
+
+    private AgentRunContext legacyContext(Conversation conversation, CancellationToken cancel) {
+        Objects.requireNonNull(conversation, "conversation");
+        Objects.requireNonNull(cancel, "cancel");
+        return AgentRunContext.of(RunId.fresh(), conversation.sessionId(),
+                defaultExecutionContext.workspaceId(), defaultExecutionContext.cwd(), cancel, defaultBudget);
     }
 
     private static void cancellationGuard(CancellationToken cancel, int turn) {

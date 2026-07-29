@@ -56,7 +56,7 @@ public final class FileEditTool implements Tool {
                 file, args.getString("old_string").length(),
                 args.getString("new_string").length(), replacement.replaceAll());
 
-        Optional<ToolResult> guard = requireReadGuard.checkBeforeOverwrite(file);
+        Optional<ToolResult> guard = requireReadGuard.checkBeforeOverwrite(ctx.workspaceId(), file);
         if (guard.isPresent()) {
             log.warn("file edit blocked: path={}", file);
             return guard.get();
@@ -64,7 +64,7 @@ public final class FileEditTool implements Tool {
 
         try {
             String original = Files.readString(file, StandardCharsets.UTF_8);
-            return applyEdit(file, original, replacement, startNs);
+            return applyEdit(ctx.workspaceId(), file, original, replacement, startNs);
         } catch (NoSuchFileException ex) {
             log.warn("file edit failed: path={}, reason=not_found", file);
             return ToolResult.error("file not found: " + file);
@@ -74,7 +74,8 @@ public final class FileEditTool implements Tool {
         }
     }
 
-    private ToolResult applyEdit(Path file, String original, StringReplacement replacement, long startNs)
+    private ToolResult applyEdit(com.anthropic.agentkit.domain.agent.WorkspaceId workspaceId,
+                                 Path file, String original, StringReplacement replacement, long startNs)
             throws IOException {
         int occurrences = replacement.countOccurrences(original);
         if (occurrences == 0) {
@@ -88,7 +89,7 @@ public final class FileEditTool implements Tool {
         }
         String updated = replacement.applyTo(original);
         Files.writeString(file, updated, StandardCharsets.UTF_8);
-        fileStateCache.recordRead(file);
+        fileStateCache.recordRead(workspaceId, file);
         String diff = DiffRenderer.unifiedDiff(original, updated, file.toString());
         log.info("file edit completed: path={}, replacements={}, durationMs={}",
                 file, occurrences, elapsedMs(startNs));

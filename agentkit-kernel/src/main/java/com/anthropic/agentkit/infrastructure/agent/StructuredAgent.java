@@ -2,12 +2,13 @@ package com.anthropic.agentkit.infrastructure.agent;
 
 import com.anthropic.agentkit.application.AgentEventListener;
 import com.anthropic.agentkit.application.AgentExecutor;
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.port.LlmClient;
-import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.Tool;
+import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.infrastructure.tools.StructuredOutputTool;
 
@@ -48,20 +49,30 @@ public final class StructuredAgent {
         this.domainTools = List.copyOf(Objects.requireNonNull(domainTools, "domainTools"));
     }
 
-    public Map<String, Object> run(String task, ExecutionContext ctx) {
+    public Map<String, Object> run(String task, AgentRunContext ctx) {
         Objects.requireNonNull(task, "task");
         Objects.requireNonNull(ctx, "ctx");
         AtomicReference<Map<String, Object>> sink = new AtomicReference<>();
-        Conversation conversation = new Conversation(SessionId.fresh());
+        Conversation conversation = new Conversation(ctx.sessionId());
         conversation.append(UserMessage.of(task));
         new AgentExecutor(llm, buildRegistry(sink))
-                .run(conversation, ctx.cancellation(), AgentEventListener.NO_OP, systemPrompt)
+                .run(conversation, ctx, AgentEventListener.NO_OP, systemPrompt)
                 .join();
         Map<String, Object> payload = sink.get();
         if (payload == null) {
             throw new StructuredOutputMissingException(output.name());
         }
         return payload;
+    }
+
+    /** @deprecated callers should provide the complete run scope. */
+    @Deprecated
+    public Map<String, Object> run(String task, ExecutionContext ctx) {
+        Objects.requireNonNull(ctx, "ctx");
+        AgentRunContext runContext = AgentRunContext.of(
+                ctx.runId(), SessionId.fresh(), ctx.workspaceId(), ctx.cwd(),
+                ctx.cancellation(), ctx.budget());
+        return run(task, runContext);
     }
 
     private ToolRegistry buildRegistry(AtomicReference<Map<String, Object>> sink) {

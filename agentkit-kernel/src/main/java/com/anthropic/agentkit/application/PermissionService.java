@@ -1,6 +1,7 @@
 package com.anthropic.agentkit.application;
 
 import com.anthropic.agentkit.application.InteractivePrompter.UserPermissionResponse;
+import com.anthropic.agentkit.domain.agent.RunId;
 import com.anthropic.agentkit.domain.permission.Decision;
 import com.anthropic.agentkit.domain.permission.PermissionMode;
 import com.anthropic.agentkit.domain.permission.PermissionPolicy;
@@ -15,6 +16,7 @@ import org.slf4j.LoggerFactory;
 public final class PermissionService {
 
     private static final Logger log = LoggerFactory.getLogger(PermissionService.class);
+    private static final RunId LEGACY_RUN = RunId.of("legacy-permission-scope");
 
     private final PermissionPolicy policy;
     private final InteractivePrompter prompter;
@@ -38,7 +40,12 @@ public final class PermissionService {
     }
 
     public Decision check(ToolInvocation invocation, Tool tool) {
-        if (cache.allows(tool.name())) {
+        return check(LEGACY_RUN, invocation, tool);
+    }
+
+    public Decision check(RunId runId, ToolInvocation invocation, Tool tool) {
+        Objects.requireNonNull(runId, "runId");
+        if (cache.allows(runId, tool.name())) {
             log.debug("permission cache hit: tool={}, decision={}", tool.name(), Decision.ALLOW);
             log.info("permission check: tool={}, decision={}", tool.name(), Decision.ALLOW);
             return Decision.ALLOW;
@@ -48,14 +55,18 @@ public final class PermissionService {
             log.info("permission check: tool={}, decision={}", tool.name(), policyDecision);
             return policyDecision;
         }
-        Decision interactiveDecision = askInteractively(invocation, tool);
+        Decision interactiveDecision = askInteractively(runId, invocation, tool);
         log.info("permission check: tool={}, decision={}", tool.name(), interactiveDecision);
         return interactiveDecision;
     }
 
-    private Decision askInteractively(ToolInvocation invocation, Tool tool) {
+    public void clear(RunId runId) {
+        cache.clear(Objects.requireNonNull(runId, "runId"));
+    }
+
+    private Decision askInteractively(RunId runId, ToolInvocation invocation, Tool tool) {
         synchronized (prompterLock) {
-            if (cache.allows(tool.name())) {
+            if (cache.allows(runId, tool.name())) {
                 log.debug("permission cache hit during prompt lock: tool={}", tool.name());
                 return Decision.ALLOW;
             }
@@ -65,7 +76,7 @@ public final class PermissionService {
             return switch (response) {
                 case ALLOW_ONCE -> Decision.ALLOW;
                 case ALLOW_ALWAYS -> {
-                    cache.recordAllowAlways(tool.name());
+                    cache.recordAllowAlways(runId, tool.name());
                     yield Decision.ALLOW;
                 }
                 case DENY -> Decision.DENY;

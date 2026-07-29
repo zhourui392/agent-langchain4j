@@ -1,21 +1,25 @@
 package com.anthropic.agentkit.application;
 
+import com.anthropic.agentkit.domain.agent.RunId;
+
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 final class PermissionDecisionCache {
 
-    private final Set<String> allowedToolNames = ConcurrentHashMap.newKeySet();
+    private final Map<RunId, Set<String>> allowedToolNamesByRun = new ConcurrentHashMap<>();
 
-    boolean allows(String toolName) {
-        return allowedToolNames.contains(toolName);
+    boolean allows(RunId runId, String toolName) {
+        return allowedToolNamesByRun.getOrDefault(runId, Set.of()).contains(toolName);
     }
 
-    void recordAllowAlways(String toolName) {
-        allowedToolNames.add(toolName);
+    void recordAllowAlways(RunId runId, String toolName) {
+        allowedToolNamesByRun.computeIfAbsent(runId, ignored -> ConcurrentHashMap.newKeySet())
+                .add(toolName);
     }
 
-    void clear() {
-        allowedToolNames.clear();
+    void clear(RunId runId) {
+        allowedToolNamesByRun.remove(runId);
     }
 }
