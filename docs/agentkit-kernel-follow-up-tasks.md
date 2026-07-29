@@ -1,6 +1,6 @@
 # AgentKit Kernel：非高优先级与后续 Agent Runtime 任务
 
-> 状态：候选 backlog / 待按真实需求纳入 `TASKLIST.md`；高优先级 Gate A–C 已完成
+> 状态：`#47–#55` 已纳入 `TASKLIST.md` S10 并开始交付；`#56` 保持条件触发候选
 >
 > 审计日期：2026-07-29
 >
@@ -25,7 +25,8 @@
 
 ## 2. 编号与优先级
 
-- `#47`–`#56` 是候选 ID，尚未写入 `TASKLIST.md`。
+- `#47`–`#55` 已正式纳入 `TASKLIST.md` S10，实施状态以该文件为准。
+- `#56` 保持候选 ID，只有日志规模、多 writer 或 retention 需求触发时再立项。
 - `P2`：高优先级 Gate A–C 完成后，能明显提升通用 Agent runtime 能力。
 - `P3`：平台/产品成熟度任务，需有真实宿主或第二种接入需求再实施。
 - 所有 `[TDD]` 任务继续执行 Red → Green → Refactor 三提交。

@@ -1,6 +1,6 @@
 # AgentKit on LangChain4j — 任务清单
 
-> 本文档由 `DESIGN.md` 拆解而来，共 **46 个任务**，覆盖 10 个阶段。
+> 本文档由 `DESIGN.md` 与 Agent Runtime 对照审计拆解而来，共 **55 个任务**，覆盖 11 个阶段。
 >
 > **TDD 任务**遵循 Red → Green → Refactor 循环；**Infra 任务**只给目标 + 验收。
 > 每个任务的 DoD（Definition of Done）包含编码规范红线（函数 ≤50 行、嵌套 ≤3 层、命名自解释）。
@@ -20,6 +20,7 @@
 | S8 持久化 | #36–38 | 0.5d | JSONL store + /resume + SessionId |
 | MVP-Gate | #39 | — | 端到端冒烟，打 `v0.1.0-mvp` |
 | S9 Runtime Hardening | #40–46 | 已完成（7/7） | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
+| S10 Runtime Extensions | #47–55 | 进行中（0/9） | 子 Agent、interceptor、MCP、后台任务、暂停恢复、分支、模型策略、manifest、CLI |
 | **MVP 合计** | — | **≈8 人天** | — |
 
 ## 依赖图
@@ -36,6 +37,10 @@ S0 (1→2→3)
   │    └→ S8 (36, 38 ← 14, 37 ← 32,36)
   │                                            ↓
   │                                   MVP-Gate (#39)
+  │                                            ↓
+  └→ S9 (#40→41→42；40→43；40,42→44→45→46)
+                                               ↓
+     S10 (#47→50；#48→49；#47→54→55；#51/#52/#53 并行支线)
 ```
 
 注：#33 `CancellationToken` 被 #13 引用，应在 S1 后立即做，避免阻塞 S2。
@@ -748,6 +753,139 @@ S0 (1→2→3)
 **Refactor**：事实存储与 listener 分离；listener 失败不影响 run/event；落盘敏感字段递归脱敏且文本有界；schema v1/未来版本/必要字段/尾截断兼容测试齐全；旧 ChatMemoryStore/session 保持可读兼容路径。
 
 **DoD**：kill/restart 不重复已完成工具；终态可完整恢复；不猜测外部副作用；全量 verify 通过。
+
+---
+
+## S10 Agent Runtime Extensions
+
+> 来源：2026-07-29 Claude Code / Codex 后续能力对照审计。详细证据、测试矩阵、边界和非目标见
+> [`docs/agentkit-kernel-follow-up-tasks.md`](docs/agentkit-kernel-follow-up-tasks.md)。
+> 已确认交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`。
+> `#56` 事件索引、retention 与多 writer fencing 仍为条件触发候选，不属于本阶段。
+
+### #47 [S10-Kernel-TDD] AgentSpec + SubAgentRuntime / SubAgentHandle （blockedBy: 40, 42, 43, 44, 46）
+
+**状态**：进行中（Red）。
+
+**Red**：child capability 必须是 parent 子集；child budget 计入 parent；deadline 不得放大；depth/concurrency 受硬限制；follow-up 复用 child conversation；parent cancel 传播到 child LLM/工具；terminal payload 穿过 child boundary。
+
+**Green**：引入领域无关 `AgentSpec`、`AgentId`、`ToolCapabilitySet`、`ModelTier`、`SubAgentRuntime`、`SubAgentHandle` 与显式 child execution scope；每次 child run 使用独立 RunId/CancellationToken，共享分层预算账本与 workspace boundary。
+
+**Refactor**：`SubAgentTool` 退化为 runtime adapter；`StructuredAgent` 及 diagnosis/coding 角色只提供 spec 与 payload→VO 映射；javadoc 领域中立。
+
+**DoD**：能力、预算、deadline、depth/concurrency、取消方向和 conversation 归属由 runtime 强制；child handle 可 follow-up/cancel 并返回完整 `AgentRunResult`；不实现 peer 黑板、自动拆分或分布式调度。
+
+---
+
+### #48 [S10-Kernel-TDD] typed AgentInterceptor 生命周期扩展 （blockedBy: 41, 42, 46）
+
+**状态**：待开始。
+
+**Red**：pre-tool deny 仍 settle；observer failure 隔离；blocking failure 有明确 stop reason；声明顺序稳定；terminal validation 不破坏配对；sub-agent lifecycle 携带 parent/child RunId。
+
+**Green**：提供 typed pre/post lifecycle SPI 与 `Continue`、`Deny`、`ReplaceContext` 等显式 decision；接入 LLM、tool、compaction、run stop 和 sub-agent 边界。
+
+**Refactor**：固定 interceptor 顺序和失败分类；`PermissionPolicy` 继续作为独立安全决策；不允许 exception 充当正常控制流。
+
+**DoD**：宿主可组合审计、脱敏和策略扩展；tool-use 一旦进入 conversation，无论 interceptor 结果都完整 settle；不加入任意 shell/script hook。
+
+---
+
+### #49 [S10-Kernel-Infra-TDD] MCP client、工具适配与生命周期 （blockedBy: 43, 44, 45, 46, 48）
+
+**状态**：待开始。
+
+**Red**：fake stdio discover/call/close；HTTP timeout/cancel/reconnect；namespace 冲突；malformed schema/result settle；destructive tool 走 ASK/DENY；secret 不泄漏；catalog refresh 原子；大 catalog 延迟暴露。
+
+**Green**：实现 `McpToolAdapter`、`McpServerManager`、stdio/HTTP transport、`<server>.<tool>` 命名空间、认证、timeout/cancel 和动态 catalog。
+
+**Refactor**：MCP annotation 只作为 permission 输入，不能绕过本地 deny；统一走 tool batch、output policy 和 run event；关闭 server 时回收进程/线程。
+
+**DoD**：至少一个 fake stdio 集成测试和一个 HTTP 合同测试；不依赖真实 MCP 服务；不在 kernel 硬编码业务 server。
+
+---
+
+### #50 [S10-Kernel-TDD] Background TaskHandle + output artifact store （blockedBy: 41, 43, 44, 45, 46, 47）
+
+**状态**：待开始。
+
+**Red**：后台启动立即返回 handle；游标增量读不重复；workspace 间不可读/停；cancel 终止进程树；原 invocation 只 settle 一次；大输出保存 artifact；过期 artifact 不越界。
+
+**Green**：引入 `TaskId`、`TaskHandle`、task lifecycle、增量输出 cursor 和有 scope/size/TTL 的 artifact store；后台启动立即 settle 为 TaskId，status/read/stop 使用新工具调用。
+
+**Refactor**：统一 process tree 回收、run stop 清理、preview/reference 与脱敏策略；不让原始 tool-use 跨用户回合 pending。
+
+**DoD**：长 Bash/外部工具可后台运行、监控和停止；完整输出可受控引用；不实现分布式队列或跨机器 worker。
+
+---
+
+### #51 [S10-Kernel-TDD] WAITING_FOR_INPUT / WAITING_FOR_APPROVAL 可恢复运行态 （blockedBy: 42, 43, 46）
+
+**状态**：待开始。
+
+**Red**：ASK 在执行工具前暂停；批准后原 invocation 恰好执行一次；拒绝后 settle 为 denied；resume token 单次且不可跨 workspace；答案追加为新事件。
+
+**Green**：定义通用 `RunSuspension`、input/approval envelope 与 resume token；持久化 pending request 后返回 waiting，新 run segment 恢复同一 session。
+
+**Refactor**：CLI/Web 共用异步 suspension contract；coding/diagnosis 的计划与审批业务规则仍留各自领域包。
+
+**DoD**：application thread 不阻塞等待 prompt；旧事件不被改写；token 绑定 session/workspace/request 并单次消费。
+
+---
+
+### #52 [S10-Kernel-TDD] 高级 session fork / checkpoint / rewind （blockedBy: 43, 46；涉及后台进程时再 blockedBy: 50）
+
+**状态**：待开始。
+
+**Red**：fork 引用不可变 parent sequence；rewind 新建 branch 不删历史；kernel 文件 checkpoint 可恢复；报告不可逆副作用；branch 不可跨 workspace。
+
+**Green**：引入 `SessionBranchId`、fork metadata、append-only branch event 与 `FileCheckpointProvider`；文件外副作用显式标记 non-reversible。
+
+**Refactor**：区分 conversation 恢复、kernel 文件恢复和残余外部副作用；worktree 建立/合并仍属于 coding/platform。
+
+**DoD**：历史可审计且不物理重写；不承诺 Bash/MCP/数据库的通用事务回滚。
+
+---
+
+### #53 [S10-Kernel-TDD] provider-neutral ModelPolicy / RetryPolicy （blockedBy: 42, 44, 46；与 47 协同）
+
+**状态**：待开始。
+
+**Red**：assistant turn 被接受前可重试瞬态失败；认证错误不重试；retry 计入预算/deadline；不重放 settled tool；记录实际 fallback model。
+
+**Green**：定义 provider-neutral model/retry policy、有限次数退避、可测试时钟和可选 fallback；`ModelTier` 通过 selector 解析实际 client/model。
+
+**Refactor**：context overflow 继续由 context policy 专管；provider adapter 校验 prompt/tool schema 兼容性；默认关闭 fallback。
+
+**DoD**：重试只包围尚未形成完整 assistant turn 的 LLM call；工具副作用绝不因 provider retry 重放。
+
+---
+
+### #54 [S10-Platform-Infra-TDD] AgentManifest + coding 正式入口 （blockedBy: 42, 47）
+
+**状态**：待开始。
+
+**Red**：duplicate agent id 启动失败；缺 required config 在运行前失败；manifest capability 与实际 AgentSpec/tool boundary 一致；模块依赖单向。
+
+**Green**：agent 模块提供显式 `AgentManifest`；平台 registry 负责发现/派发；coding 增加稳定 `CodingEngine`/builder/entry point。
+
+**Refactor**：组合根不再硬编码具体 agent 拼装；ArchUnit 保证 kernel 不依赖 agent 包且 agent 包互不依赖。
+
+**DoD**：diagnosis/coding 可由同一宿主入口派发；不引入反射 classpath scanning、Spring/Guice 或插件子系统。
+
+---
+
+### #55 [S10-CLI-Platform-TDD] 组合根、slash command 与 SIGINT 接线清理 （blockedBy: 40, 46, 54）
+
+**状态**：待开始。
+
+**Red**：help 只列真实注册命令；`/clear` 重置 active conversation；`/resume` 走 event recovery；第一次 SIGINT 只取消 active run且不污染下一轮；agent 选择/配置错误可见。
+
+**Green**：slash command 声明与注册同源；CLI 用例端口实现 clear/resume；每次 run 新建 context/token；通过 manifest registry 选择 agent。
+
+**Refactor**：SIGINT 退出策略留 CLI；UI 逻辑不下沉 kernel；补齐 clear/resume/SIGINT 端到端测试。
+
+**DoD**：help 中命令全部可用；unknown in-flight invocation 恢复时明确展示；不增加富终端 UI、IDE bridge 或插件系统。
 
 ---
 
