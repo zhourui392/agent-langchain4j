@@ -137,7 +137,7 @@ class AgentExecutorTerminalTest {
         AgentRunResult result = executor(llm, terminalRegistry(new ArrayList<>()))
                 .run(conversation, runContext(conversation)).join();
 
-        assertThat(result.structuredOutput()).containsValue(Map.of("summary", "ready"));
+        assertThat(result.structuredOutput()).contains(Map.<String, Object>of("summary", "ready"));
         assertThat(result.usage().inputTokens()).isEqualTo(12);
         assertThat(result.usage().outputTokens()).isEqualTo(5);
         assertThat(result.usage().cacheReadInputTokens()).isEqualTo(3);

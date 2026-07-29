@@ -10,5 +10,9 @@ public interface Tool {
 
     boolean isReadOnly();
 
+    default ToolKind kind() {
+        return ToolKind.STANDARD;
+    }
+
     ToolResult execute(ToolArguments args, ExecutionContext ctx);
 }

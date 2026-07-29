@@ -4,6 +4,7 @@ import com.anthropic.agentkit.application.AgentEventListener;
 import com.anthropic.agentkit.application.AgentExecutor;
 import com.anthropic.agentkit.application.PermissionService;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
+import com.anthropic.agentkit.domain.agent.AgentRunResult;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.port.LlmClient;
@@ -14,7 +15,6 @@ import com.anthropic.agentkit.infrastructure.tools.StructuredOutputTool;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Runs a constrained "expert agent" turn and returns its structured payload.
@@ -51,24 +51,20 @@ public final class StructuredAgent {
     public Map<String, Object> run(String task, AgentRunContext ctx) {
         Objects.requireNonNull(task, "task");
         Objects.requireNonNull(ctx, "ctx");
-        AtomicReference<Map<String, Object>> sink = new AtomicReference<>();
         Conversation conversation = new Conversation(ctx.sessionId());
         conversation.append(UserMessage.of(task));
-        new AgentExecutor(llm, buildRegistry(sink), PermissionService.bypassing())
+        AgentRunResult result = new AgentExecutor(llm, buildRegistry(), PermissionService.bypassing())
                 .run(conversation, ctx, AgentEventListener.NO_OP, systemPrompt)
                 .join();
-        Map<String, Object> payload = sink.get();
-        if (payload == null) {
-            throw new StructuredOutputMissingException(output.name());
-        }
-        return payload;
+        return result.structuredOutput()
+                .orElseThrow(() -> new StructuredOutputMissingException(output.name()));
     }
 
-    private ToolRegistry buildRegistry(AtomicReference<Map<String, Object>> sink) {
+    private ToolRegistry buildRegistry() {
         ToolRegistry registry = new ToolRegistry();
         domainTools.forEach(registry::register);
         registry.register(new StructuredOutputTool(
-                output.name(), output.description(), output.schema(), sink::set));
+                output.name(), output.description(), output.schema(), ignored -> { }));
         return registry;
     }
 }

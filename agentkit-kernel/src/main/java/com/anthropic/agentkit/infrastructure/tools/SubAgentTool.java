@@ -5,6 +5,7 @@ import com.anthropic.agentkit.application.AgentExecutor;
 import com.anthropic.agentkit.application.InteractivePrompter;
 import com.anthropic.agentkit.application.PermissionService;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
+import com.anthropic.agentkit.domain.agent.AgentRunResult;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
 import com.anthropic.agentkit.domain.message.AiMessage;
@@ -79,9 +80,10 @@ public final class SubAgentTool implements Tool {
         Conversation child = new Conversation(SessionId.fresh());
         child.append(UserMessage.of(prompt));
         try {
-            AiMessage finalMessage = childExecutor()
+            AgentRunResult result = childExecutor()
                     .run(child, childContext(ctx, child.sessionId()), AgentEventListener.NO_OP)
                     .join();
+            AiMessage finalMessage = result.finalMessage();
             log.info("sub-agent completed: sessionId={}, turns={}, resultChars={}, durationMs={}",
                     child.sessionId(), assistantTurns(child), finalMessage.text().length(), elapsedMs(startNs));
             return ToolResult.ok(finalMessage.text());

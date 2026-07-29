@@ -11,6 +11,8 @@ import com.anthropic.agentkit.application.diagnosis.PlanGuardPolicy;
 import com.anthropic.agentkit.domain.agent.AgentBudget;
 import com.anthropic.agentkit.domain.agent.AgentBudgetExceededException;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
+import com.anthropic.agentkit.domain.agent.AgentRunResult;
+import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisCase;
@@ -108,11 +110,25 @@ public final class DiagnosisOrchestrator {
 
         AgentExecutor executor = new AgentExecutor(llm, tools, permissions(listener));
         try {
-            executor.run(conversation, context, listener, systemPrompt).join();
+            AgentRunResult result = executor.run(
+                    conversation, context, listener, systemPrompt).join();
+            finishNonModelStop(listener, result);
         } catch (CompletionException ex) {
             handleRunFailure(listener, ex);
         }
         return listener.result();
+    }
+
+    private static void finishNonModelStop(
+            DiagnosisStateListener listener, AgentRunResult result) {
+        if (result.stopReason() == StopReason.MODEL_COMPLETED) {
+            return;
+        }
+        if (result.stopReason() == StopReason.BUDGET_EXHAUSTED) {
+            listener.finishWithBudgetReport("agent budget exhausted");
+            return;
+        }
+        listener.finish(result.finalMessage());
     }
 
     private static String composeSystemPrompt(String promptPack) {
@@ -197,7 +213,7 @@ public final class DiagnosisOrchestrator {
     private void handleRunFailure(DiagnosisStateListener listener, CompletionException failure) {
         Throwable cause = failure.getCause();
         if (cause instanceof AgentBudgetExceededException budgetExceeded) {
-            listener.finishWithBudgetReport(budgetExceeded);
+            listener.finishWithBudgetReport(budgetExceeded.getMessage());
             return;
         }
         throw failure;
@@ -319,11 +335,11 @@ public final class DiagnosisOrchestrator {
             delegate.onTurnComplete(finalMessage);
         }
 
-        private synchronized void finishWithBudgetReport(AgentBudgetExceededException error) {
+        private synchronized void finishWithBudgetReport(String detail) {
             DiagnosisReport report = new DiagnosisReport(
                     "Diagnosis stopped because the configured budget was exceeded.",
                     List.of(), List.of(), List.of(),
-                    List.of(error.getMessage()), 0.0, true);
+                    List.of(detail), 0.0, true);
             delegate.emit("diagnosis_report", Map.of("session_id", sessionId, "report", report));
             if (diagnosisCase.status() == DiagnosisStatus.RUNNING) {
                 diagnosisCase.markDone();

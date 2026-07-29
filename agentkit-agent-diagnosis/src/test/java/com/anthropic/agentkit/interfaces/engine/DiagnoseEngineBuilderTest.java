@@ -280,11 +280,9 @@ class DiagnoseEngineBuilderTest {
         StubLlmClient llm = new StubLlmClient()
                 .enqueue(new AiMessage("", List.of(new ToolUseRequest(
                         new ToolUseId("plan-1"), "update_plan", planJson()))))
-                .enqueue(AiMessage.text("planned"))
                 .enqueue(AiMessage.text("done"))
                 .enqueue(new AiMessage("", List.of(new ToolUseRequest(
-                        new ToolUseId("report-1"), "submit_report", reportJson()))))
-                .enqueue(AiMessage.text("reported"));
+                        new ToolUseId("report-1"), "submit_report", reportJson()))));
         DiagnoseEngine engine = DiagnoseEngineBuilder.create()
                 .llm(llm)
                 .structuredDiagnosis()

@@ -2,6 +2,7 @@ package com.anthropic.agentkit.application;
 
 import com.anthropic.agentkit.domain.agent.AgentBudget;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
+import com.anthropic.agentkit.domain.agent.AgentRunResult;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
@@ -46,7 +47,7 @@ class AgentExecutorBashSmokeIT {
 
         AgentRunContext context = AgentRunContext.create(
                 conversation.sessionId(), cwd, cancel, AgentBudget.unlimited());
-        AiMessage finalMessage = executor.run(conversation, context).get(90, TimeUnit.SECONDS);
+        AgentRunResult result = executor.run(conversation, context).get(90, TimeUnit.SECONDS);
 
         assertThat(toolResults(conversation))
                 .as("Bash tool must be invoked through real Anthropic round-trip")
@@ -54,7 +55,7 @@ class AgentExecutorBashSmokeIT {
         assertThat(toolResults(conversation).stream().anyMatch(r -> r.text().contains("hello-from-bash-smoke")))
                 .as("Bash output captured in tool_result")
                 .isTrue();
-        assertThat(finalMessage.text())
+        assertThat(result.finalMessage().text())
                 .as("model summarized after tool use")
                 .isNotBlank();
     }

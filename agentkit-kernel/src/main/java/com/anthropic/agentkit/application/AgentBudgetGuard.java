@@ -2,6 +2,8 @@ package com.anthropic.agentkit.application;
 
 import com.anthropic.agentkit.domain.agent.AgentBudget;
 import com.anthropic.agentkit.domain.agent.AgentBudgetExceededException;
+import com.anthropic.agentkit.domain.agent.AgentUsage;
+import com.anthropic.agentkit.domain.agent.BudgetConsumption;
 
 import java.util.Objects;
 
@@ -17,6 +19,8 @@ final class AgentBudgetGuard {
     private int turns;
     private int toolCalls;
     private long inputTokens;
+    private long outputTokens;
+    private long cacheReadInputTokens;
 
     AgentBudgetGuard(AgentBudget budget) {
         this.budget = Objects.requireNonNull(budget, "budget");
@@ -45,10 +49,28 @@ final class AgentBudgetGuard {
         }
     }
 
+    void recordUsage(int input, int output, int cacheReadInput) {
+        recordInputTokens(input);
+        if (output > 0) {
+            outputTokens += output;
+        }
+        if (cacheReadInput > 0) {
+            cacheReadInputTokens += cacheReadInput;
+        }
+    }
+
     void ensureInputTokensWithinBudget() {
         if (budget.exceedsInputTokens(inputTokens)) {
             throw new AgentBudgetExceededException(
                     "agent budget exceeded: maxInputTokens=" + budget.maxInputTokens());
         }
+    }
+
+    AgentUsage usage() {
+        return new AgentUsage(inputTokens, outputTokens, cacheReadInputTokens);
+    }
+
+    BudgetConsumption consumption() {
+        return new BudgetConsumption(turns, toolCalls, inputTokens);
     }
 }

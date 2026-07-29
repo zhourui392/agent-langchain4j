@@ -2,6 +2,7 @@ package com.anthropic.agentkit.application;
 
 import com.anthropic.agentkit.domain.agent.AgentBudget;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
+import com.anthropic.agentkit.domain.agent.AgentRunResult;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
@@ -56,13 +57,13 @@ class AgentExecutorImplicitToolSmokeIT {
 
         AgentRunContext context = AgentRunContext.create(
                 conversation.sessionId(), cwd, cancel, AgentBudget.unlimited());
-        AiMessage finalMessage = executor.run(conversation, context).get(120, TimeUnit.SECONDS);
+        AgentRunResult result = executor.run(conversation, context).get(120, TimeUnit.SECONDS);
 
         List<ToolResultMessage> results = toolResults(conversation);
         assertThat(results)
                 .as("model should pick at least one tool when not told which to use")
                 .isNotEmpty();
-        assertThat(finalMessage.text())
+        assertThat(result.finalMessage().text())
                 .as("model produced a final answer after tool round-trip")
                 .isNotBlank();
     }

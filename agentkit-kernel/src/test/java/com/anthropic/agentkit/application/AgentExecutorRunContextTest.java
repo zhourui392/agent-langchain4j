@@ -2,9 +2,10 @@ package com.anthropic.agentkit.application;
 
 import com.anthropic.agentkit.application.InteractivePrompter.UserPermissionResponse;
 import com.anthropic.agentkit.domain.agent.AgentBudget;
-import com.anthropic.agentkit.domain.agent.AgentBudgetExceededException;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
+import com.anthropic.agentkit.domain.agent.AgentRunResult;
 import com.anthropic.agentkit.domain.agent.RunId;
+import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.agent.WorkspaceId;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
@@ -31,7 +32,6 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
@@ -109,16 +109,15 @@ class AgentExecutorRunContextTest {
         Conversation exhausted = conversation("budget-exhausted");
         Conversation allowed = conversation("budget-allowed");
 
-        assertThatThrownBy(() -> executor.run(exhausted, context(
+        AgentRunResult exhaustedResult = executor.run(exhausted, context(
                 "run-tight", "workspace", exhausted, workspace, new CancellationToken(),
-                AgentBudget.of(0, 0, 0))).join())
-                .isInstanceOf(CompletionException.class)
-                .hasCauseInstanceOf(AgentBudgetExceededException.class);
+                AgentBudget.of(0, 0, 0))).join();
 
-        AiMessage result = executor.run(allowed, context(
+        AgentRunResult result = executor.run(allowed, context(
                 "run-open", "workspace", allowed, workspace, new CancellationToken(),
                 AgentBudget.unlimited())).join();
-        assertThat(result.text()).isEqualTo("second succeeds");
+        assertThat(exhaustedResult.stopReason()).isEqualTo(StopReason.BUDGET_EXHAUSTED);
+        assertThat(result.finalMessage().text()).isEqualTo("second succeeds");
     }
 
     @Test

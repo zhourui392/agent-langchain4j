@@ -2,6 +2,8 @@ package com.anthropic.agentkit.application;
 
 import com.anthropic.agentkit.domain.agent.AgentBudgetExceededException;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
+import com.anthropic.agentkit.domain.agent.AgentRunResult;
+import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.message.AiMessage;
@@ -10,9 +12,14 @@ import com.anthropic.agentkit.domain.port.ChatRequest;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.port.LlmClient.StreamHandler;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
+import com.anthropic.agentkit.domain.tool.ToolKind;
 import com.anthropic.agentkit.domain.tool.ToolResultStatus;
+import com.anthropic.agentkit.domain.tool.ToolUseRequest;
 
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicReference;
@@ -35,17 +42,17 @@ public final class AgentExecutor {
         this.permissions = Objects.requireNonNull(permissions, "permissions");
     }
 
-    public CompletableFuture<AiMessage> run(Conversation conversation, AgentRunContext context) {
+    public CompletableFuture<AgentRunResult> run(Conversation conversation, AgentRunContext context) {
         return run(conversation, context, AgentEventListener.NO_OP, "");
     }
 
-    public CompletableFuture<AiMessage> run(Conversation conversation, AgentRunContext context,
-                                            AgentEventListener listener) {
+    public CompletableFuture<AgentRunResult> run(Conversation conversation, AgentRunContext context,
+                                                 AgentEventListener listener) {
         return run(conversation, context, listener, "");
     }
 
-    public CompletableFuture<AiMessage> run(Conversation conversation, AgentRunContext context,
-                                            AgentEventListener listener, String systemPrompt) {
+    public CompletableFuture<AgentRunResult> run(Conversation conversation, AgentRunContext context,
+                                                 AgentEventListener listener, String systemPrompt) {
         Objects.requireNonNull(conversation, "conversation");
         Objects.requireNonNull(context, "context");
         Objects.requireNonNull(listener, "listener");
@@ -56,19 +63,19 @@ public final class AgentExecutor {
         return CompletableFuture.supplyAsync(() -> loop(conversation, context, listener, systemPrompt));
     }
 
-    private AiMessage loop(Conversation conversation, AgentRunContext context,
-                           AgentEventListener listener, String systemPrompt) {
+    private AgentRunResult loop(Conversation conversation, AgentRunContext context,
+                                AgentEventListener listener, String systemPrompt) {
         MDC.put("session", conversation.sessionId().value());
         MDC.put("run", context.runId().value());
         listener.onRunStart(context);
         log.info("session started: runId={}, workspaceId={}, initialMessages={}, systemPromptChars={}",
                 context.runId(), context.workspaceId(), conversation.messages().size(), systemPrompt.length());
+        AgentRunState state = AgentRunState.create(context, tools, permissions);
         try {
-            return runLoop(conversation, AgentRunState.create(context, tools, permissions),
-                    listener, systemPrompt);
+            return runLoop(conversation, state, listener, systemPrompt);
         } catch (AgentBudgetExceededException ex) {
             log.warn("session stopped: budget exhausted: {}", ex.getMessage());
-            throw ex;
+            return state.finish(StopReason.BUDGET_EXHAUSTED);
         } catch (CancellationException ex) {
             log.warn("session stopped: cancelled");
             throw ex;
@@ -85,8 +92,8 @@ public final class AgentExecutor {
         }
     }
 
-    private AiMessage runLoop(Conversation conversation, AgentRunState state,
-                              AgentEventListener listener, String systemPrompt) {
+    private AgentRunResult runLoop(Conversation conversation, AgentRunState state,
+                                   AgentEventListener listener, String systemPrompt) {
         int turn = 0;
         while (true) {
             cancellationGuard(state.context().cancellation(), turn);
@@ -97,30 +104,69 @@ public final class AgentExecutor {
             log.info("turn {} started: messageCount={}", turn, conversation.messages().size());
             AiMessage aiMessage = executeTurn(
                     conversation, state.context().cancellation(), listener, state.budget(), systemPrompt);
+            state.remember(aiMessage);
             appendMessage(conversation, aiMessage, "assistant message");
             if (!aiMessage.hasToolUseRequests()) {
                 log.info("turn {} completed: stopReason=no_tool_use", turn);
                 listener.onTurnComplete(aiMessage);
-                return aiMessage;
+                return state.finish(StopReason.MODEL_COMPLETED);
             }
-            for (ToolResultMessage result : dispatchToolCalls(aiMessage, state, listener)) {
+            ToolBatchOutcome outcome = dispatchToolCalls(aiMessage, state, listener);
+            for (ToolResultMessage result : outcome.results()) {
                 appendMessage(conversation, result, "tool result");
+            }
+            if (outcome.stopReason().isPresent()) {
+                return state.finish(outcome.stopReason().orElseThrow(), outcome.structuredOutput());
             }
             log.info("turn {} completed: toolResults={}", turn, aiMessage.toolUseRequests().size());
         }
     }
 
-    private static java.util.List<ToolResultMessage> dispatchToolCalls(
+    private ToolBatchOutcome dispatchToolCalls(
             AiMessage message, AgentRunState state, AgentEventListener listener) {
+        if (violatesTerminalExclusivity(message)) {
+            String reason = "terminal tool must be exclusive in its tool batch";
+            List<ToolResultMessage> results = state.dispatcher().settleWithoutExecution(
+                    message, ToolResultStatus.ERROR, reason);
+            return ToolBatchOutcome.stopped(results, StopReason.TOOL_PROTOCOL_ERROR);
+        }
         try {
             state.budget().ensureInputTokensWithinBudget();
             state.budget().reserveToolCalls(message.toolUseRequests().size());
-            return state.dispatcher().dispatch(message, listener);
+            List<ToolResultMessage> results = state.dispatcher().dispatch(message, listener);
+            return terminalOutcome(message, results);
         } catch (AgentBudgetExceededException ex) {
             log.warn("tool batch rejected by budget: {}", ex.getMessage());
-            return state.dispatcher().settleWithoutExecution(
+            List<ToolResultMessage> results = state.dispatcher().settleWithoutExecution(
                     message, ToolResultStatus.BUDGET_EXHAUSTED, ex.getMessage());
+            return ToolBatchOutcome.stopped(results, StopReason.BUDGET_EXHAUSTED);
         }
+    }
+
+    private ToolBatchOutcome terminalOutcome(
+            AiMessage message, List<ToolResultMessage> results) {
+        if (!isTerminal(message.toolUseRequests().getFirst())) {
+            return ToolBatchOutcome.continuing(results);
+        }
+        ToolResultMessage terminalResult = results.getFirst();
+        if (terminalResult.isError()) {
+            return ToolBatchOutcome.continuing(results);
+        }
+        Map<String, Object> payload = InvocationFactory.from(
+                message.toolUseRequests().getFirst()).args().values();
+        return ToolBatchOutcome.terminal(results, payload);
+    }
+
+    private boolean violatesTerminalExclusivity(AiMessage message) {
+        long terminalCount = message.toolUseRequests().stream()
+                .filter(this::isTerminal)
+                .count();
+        return terminalCount > 0 && (terminalCount != 1 || message.toolUseRequests().size() != 1);
+    }
+
+    private boolean isTerminal(ToolUseRequest request) {
+        return tools.contains(request.toolName())
+                && tools.find(request.toolName()).kind() == ToolKind.TERMINAL;
     }
 
     private AiMessage executeTurn(Conversation conversation, CancellationToken cancel,
@@ -148,7 +194,7 @@ public final class AgentExecutor {
                 listener.onAssistantTextDelta(delta);
             }
             @Override public void onUsage(int inputTokens, int outputTokens, int cacheReadInputTokens) {
-                budgetGuard.recordInputTokens(inputTokens);
+                budgetGuard.recordUsage(inputTokens, outputTokens, cacheReadInputTokens);
                 log.info("llm usage: inputTokens={}, outputTokens={}, cacheReadInputTokens={}",
                         inputTokens, outputTokens, cacheReadInputTokens);
                 listener.onUsage(inputTokens, outputTokens, cacheReadInputTokens);
@@ -201,10 +247,19 @@ public final class AgentExecutor {
         return (System.nanoTime() - startNs) / 1_000_000L;
     }
 
-    private record AgentRunState(
-            AgentRunContext context,
-            AgentBudgetGuard budget,
-            ParallelToolDispatcher dispatcher) {
+    private static final class AgentRunState {
+
+        private final AgentRunContext context;
+        private final AgentBudgetGuard budget;
+        private final ParallelToolDispatcher dispatcher;
+        private AiMessage lastMessage = AiMessage.text("");
+
+        private AgentRunState(AgentRunContext context, AgentBudgetGuard budget,
+                              ParallelToolDispatcher dispatcher) {
+            this.context = context;
+            this.budget = budget;
+            this.dispatcher = dispatcher;
+        }
 
         private static AgentRunState create(AgentRunContext context, ToolRegistry tools,
                                             PermissionService permissions) {
@@ -212,6 +267,49 @@ public final class AgentExecutor {
             ParallelToolDispatcher dispatcher = new ParallelToolDispatcher(
                     tools, context.runId(), context.executionContext(), permissions);
             return new AgentRunState(context, budget, dispatcher);
+        }
+
+        private AgentRunContext context() { return context; }
+        private AgentBudgetGuard budget() { return budget; }
+        private ParallelToolDispatcher dispatcher() { return dispatcher; }
+
+        private void remember(AiMessage message) {
+            lastMessage = message;
+        }
+
+        private AgentRunResult finish(StopReason reason) {
+            return finish(reason, Optional.empty());
+        }
+
+        private AgentRunResult finish(
+                StopReason reason, Optional<Map<String, Object>> structuredOutput) {
+            return new AgentRunResult(context.runId(), reason, lastMessage,
+                    structuredOutput, budget.usage(), budget.consumption());
+        }
+    }
+
+    private record ToolBatchOutcome(
+            List<ToolResultMessage> results,
+            Optional<StopReason> stopReason,
+            Optional<Map<String, Object>> structuredOutput) {
+
+        private ToolBatchOutcome {
+            results = List.copyOf(results);
+            structuredOutput = structuredOutput.map(Map::copyOf);
+        }
+
+        private static ToolBatchOutcome continuing(List<ToolResultMessage> results) {
+            return new ToolBatchOutcome(results, Optional.empty(), Optional.empty());
+        }
+
+        private static ToolBatchOutcome stopped(List<ToolResultMessage> results, StopReason reason) {
+            return new ToolBatchOutcome(results, Optional.of(reason), Optional.empty());
+        }
+
+        private static ToolBatchOutcome terminal(
+                List<ToolResultMessage> results, Map<String, Object> payload) {
+            return new ToolBatchOutcome(
+                    results, Optional.of(StopReason.TERMINAL_TOOL), Optional.of(payload));
         }
     }
 

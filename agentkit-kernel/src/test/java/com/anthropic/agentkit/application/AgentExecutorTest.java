@@ -3,6 +3,7 @@ package com.anthropic.agentkit.application;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
+import com.anthropic.agentkit.domain.agent.AgentRunResult;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.message.ToolResultMessage;
@@ -43,10 +44,10 @@ class AgentExecutorTest {
         conv.append(UserMessage.of("say hi"));
 
         AgentExecutor executor = new AgentExecutor(stub, new ToolRegistry(), PermissionService.bypassing());
-        AiMessage result = executor.run(conv, runContext(conv)).join();
+        AgentRunResult result = executor.run(conv, runContext(conv)).join();
 
         assertThat(stub.capturedRequests()).hasSize(1);
-        assertThat(result.text()).isEqualTo("hello world");
+        assertThat(result.finalMessage().text()).isEqualTo("hello world");
         assertThat(conv.messages()).hasSize(2);
         assertThat(conv.messages().get(1)).isInstanceOf(AiMessage.class);
         assertThat(((AiMessage) conv.messages().get(1)).text()).isEqualTo("hello world");
@@ -67,10 +68,10 @@ class AgentExecutorTest {
         conv.append(UserMessage.of("list files"));
 
         AgentExecutor executor = new AgentExecutor(stub, tools, PermissionService.bypassing());
-        AiMessage result = executor.run(conv, runContext(conv)).join();
+        AgentRunResult result = executor.run(conv, runContext(conv)).join();
 
         assertThat(fakeBash.callCount()).isEqualTo(1);
-        assertThat(result.text()).isEqualTo("done: file.txt");
+        assertThat(result.finalMessage().text()).isEqualTo("done: file.txt");
         assertThat(conv.messages()).hasSize(4);
         assertThat(conv.messages().get(2)).isInstanceOf(ToolResultMessage.class);
         ToolResultMessage tr = (ToolResultMessage) conv.messages().get(2);
