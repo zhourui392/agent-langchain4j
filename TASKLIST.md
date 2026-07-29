@@ -835,7 +835,7 @@ S0 (1→2→3)
 
 ### #52 [S10-Kernel-TDD] 高级 session fork / checkpoint / rewind （blockedBy: 43, 46；涉及后台进程时再 blockedBy: 50）
 
-**状态**：待开始。
+**状态**：进行中（Red）。
 
 **Red**：fork 引用不可变 parent sequence；rewind 新建 branch 不删历史；kernel 文件 checkpoint 可恢复；报告不可逆副作用；branch 不可跨 workspace。
 

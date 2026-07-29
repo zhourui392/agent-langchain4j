@@ -1,6 +1,6 @@
 # AgentKit Kernel：非高优先级与后续 Agent Runtime 任务
 
-> 状态：`#47–#51` 已完成，下一项为 `#52/#53`；`#54–#55` 按 S10 顺序继续交付，`#56` 保持条件触发候选
+> 状态：`#47–#51` 已完成，`#52` 进行中（Red）；随后按 `#53 → #54 → #55` 继续交付，`#56` 保持条件触发候选
 >
 > 审计日期：2026-07-29
 >
@@ -56,7 +56,7 @@
                  └─→ #55 CLI composition cleanup
 ```
 
-建议交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`；当前 `#47–#51` 已完成，下一项是 `#52/#53`。`#56` 独立按日志规模或多 writer 需求触发，不为“对齐产品功能表”提前实现没有消费方的扩展。
+建议交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`；当前 `#47–#51` 已完成，`#52` 已进入 Red。`#56` 独立按日志规模或多 writer 需求触发，不为“对齐产品功能表”提前实现没有消费方的扩展。
 
 ## 4. 变化点地图
 
@@ -456,6 +456,8 @@ sealed interface RunSuspension {
 
 ### #52 [Kernel-TDD, P3] 高级 session fork / checkpoint / rewind
 
+**状态**：进行中（Red，2026-07-29）。
+
 **Goal**
 
 在 append-only run event 基础上支持会话分支、历史 rewind 和 kernel 文件编辑 checkpoint；明确区分消息回退与外部副作用回滚。
@@ -471,6 +473,27 @@ sealed interface RunSuspension {
 - kernel `FileWrite/FileEdit` 可通过 `FileCheckpointProvider` 保存变更前内容/metadata。
 - Bash、MCP、数据库等标记为 non-reversible；UI 必须展示 residual side effects。
 - worktree 建立/合并策略属于 coding/platform，不进入 kernel。
+
+**实施前领域建模审计（2026-07-29）**
+
+- Summary：rewind 不是对旧 session/event log 做原地截断，而是在不可变 `RunEventPointer` 上创建新 branch；conversation 投影、kernel 文件恢复与外部残余副作用是三类不同结果，必须分别建模和展示。强一致边界是 branch metadata/event stream，run event 与文件 checkpoint 分别作为不可变事实引用和可补偿资源。
+- Commands / Events：命令是 `CreateRootBranch`、`ForkBranch`、`RewindBranch`、`CaptureFileCheckpoint`、`RestoreCheckpoint`；事实是 `BranchCreated`、`ToolSideEffectObserved(CheckpointedFile|NonReversible)` 与既有 `RunEvent`。fork/rewind 只追加新 branch 事实，不发出删除或重写历史的命令。
+- Ubiquitous Language：`RunEventPointer(runId, sequence)` 是不可变事实坐标；`BranchPoint(branchId, event)` 是父分支引用；`SessionBranch` 是带 session/workspace scope、origin、parent point 与 head 的聚合投影；`CheckpointId` 引用 kernel 在文件写入前保存的快照；`ResidualSideEffect` 是 rewind 后仍存在、kernel 不声称已撤销的外部影响。
+- Domain Concept Map：`SessionBranch` 是聚合根；`SessionBranchId`、`SessionBranchScope`、`RunEventPointer`、`BranchPoint`、`CheckpointId` 是 VO；`RewindResult` 分别携带新 branch、conversation、已恢复 checkpoint 与 residual side effects；`SessionBranchStore`/`FileCheckpointProvider`/`RunEventStore` 是外部状态 port；application `SessionBranchService` 只协调投影与补偿。
+- Aggregate Boundary：单个 branch 的创建事实与后续 metadata 是一个 append-only 一致性边界；父 branch 只被引用，不参与 child 创建事务且永不被改写。`RunEventStore` 继续拥有 agent 执行事实，branch 只引用已存在且 scope 匹配的事件坐标；checkpoint 内容由 provider 独立持久化，branch/event 只保存 opaque id。文件恢复是显式补偿，不能和 branch 创建伪装成跨介质事务。
+- Invariants：parent event 必须已存在且 sequence 不超过已声明 head；parent point 创建后不可随 run 继续 append 而漂移；fork/rewind 的 session/workspace 必须与 parent 和目标 run 一致，scope 不匹配统一表现为不可用；rewind 必须创建新 branch，旧 branch/run/checkpoint 历史不得删除；同一文件多个 checkpoint 必须按副作用逆序恢复；只有 `FileWrite`/`FileEdit` 成功写入前产生的 checkpoint 可标记为可恢复；read-only 工具不产生副作用事实；Bash/MCP/数据库/远端 API 默认 non-reversible；started-but-unsettled 继续按 #46 报 UNKNOWN，绝不自动重放。
+- Variation Point Map：branch 持久化介质收敛到 `SessionBranchStore`；conversation 重建继续复用 `RunEventProjector`；文件捕获/恢复收敛到 `FileCheckpointProvider`；工具副作用分类由 provider-neutral `ToolSafety`/typed `ToolSideEffect` 表达；CLI 仅选择 conversation-only 或 conversation-and-files 并展示 residual，不拥有回滚规则；worktree 策略继续留 coding/platform。
+- Refactor Signals：当前 `RunEvent` 只有 invocation started/settled，无法区分只读、checkpointed 与外部副作用，需要增加 typed side-effect fact；`ExecutionContext` 尚未携带 SessionId，文件 checkpoint 无法绑定完整 session/workspace scope；`FileWriteTool`/`FileEditTool` 直接写文件，需要在实际写入前接入 provider，但必须保留先读后写与 workspace boundary；`ChatMemoryStore` 消息快照不能承担 branch 事实存储。
+- Review Questions：本阶段只恢复 kernel 自己捕获的 UTF-8 文件内容/存在性与基础 metadata，不承诺目录树、权限 ACL、symlink 或外部进程状态的通用事务恢复。文件补偿中途失败必须返回部分恢复与明确 residual，不能删除已创建 branch 或谎报全成功；多 writer fencing/retention 仍由条件任务 #56 处理。
+
+| 评分维度 | 实施前 | 证据与缺口 |
+|---|---:|---|
+| 聚合边界是否清晰 | 2/3 | append-only parent/child 边界已确定，但尚无 branch aggregate/store |
+| 变化是否被收敛 | 1/3 | conversation、文件补偿和外部副作用仍没有统一 typed 协调合同 |
+| 不变量是否可被模型守护 | 1/3 | RunEvent 能守序列/scope，但不能守 branch scope、parent point 或补偿顺序 |
+| 行为是否与模型一致 | 1/3 | 当前只能 resume 消息投影，无法表达 fork/rewind 或 residual effect |
+| 设计是否支持下一轮需求变化 | 2/3 | append-only run facts 与显式 workspace 已铺路，worktree/外部事务边界也明确 |
+| **总分** | **7/15** | Red 先固定五个跨聚合验收场景，再实现最小 branch/checkpoint 合同 |
 
 **Red**
 
