@@ -12,6 +12,15 @@ import com.anthropic.agentkit.domain.message.ToolResultMessage;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.run.RunEvent;
 import com.anthropic.agentkit.domain.run.RunEventMetadata;
+import com.anthropic.agentkit.domain.permission.Decision;
+import com.anthropic.agentkit.domain.suspension.ApprovalDecision;
+import com.anthropic.agentkit.domain.suspension.ApprovalRequest;
+import com.anthropic.agentkit.domain.suspension.InputAnswer;
+import com.anthropic.agentkit.domain.suspension.InputRequest;
+import com.anthropic.agentkit.domain.suspension.PlannedToolInvocation;
+import com.anthropic.agentkit.domain.suspension.RunSuspension;
+import com.anthropic.agentkit.domain.suspension.SuspensionId;
+import com.anthropic.agentkit.domain.suspension.SuspensionScope;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.domain.tool.ToolResultStatus;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
@@ -157,6 +166,29 @@ class FileRunEventStoreTest {
     }
 
     @Test
+    void suspensionEventsRoundTripAndRedactPendingSecrets() throws IOException {
+        RunSuspension.WaitingForApproval approval = approvalSuspension(
+                "{\"path\":\"a.txt\"}");
+        RunSuspension.WaitingForInput input = inputSuspension();
+        List<RunEvent> events = List.of(
+                new RunEvent.RunSuspended(metadata(1), approval),
+                new RunEvent.ApprovalSubmitted(
+                        metadata(2), approval, ApprovalDecision.APPROVE),
+                new RunEvent.InputAnswered(
+                        metadata(3), input, InputAnswer.of("main")));
+
+        assertThat(events.stream().map(FileRunEventStoreTest::roundTrip).toList())
+                .containsExactlyElementsOf(events);
+
+        RunEvent secret = new RunEvent.RunSuspended(
+                metadata(4), approvalSuspension("{\"api_key\":\"sk-secret\"}"));
+        String durable = RunEventJsonCodec.toJson(secret);
+        assertThat(durable).doesNotContain("sk-secret")
+                .contains(RunEventDataPolicy.REDACTED);
+        assertThat(roundTrip(secret)).isNotEqualTo(secret);
+    }
+
+    @Test
     void rejectsUnsupportedFutureSchemaVersion() throws IOException {
         String future = RunEventJsonCodec.toJson(started(1))
                 .replace("\"schemaVersion\":1", "\"schemaVersion\":2");
@@ -217,6 +249,29 @@ class FileRunEventStoreTest {
                 Optional.of(Map.of("answer", "kept")),
                 new AgentUsage(3, 2, 1),
                 new BudgetConsumption(1, 1, 3, 2, 8), Optional.of("detail"));
+    }
+
+    private static RunSuspension.WaitingForApproval approvalSuspension(
+            String argumentsJson) {
+        ToolUseRequest tool = new ToolUseRequest(
+                new ToolUseId("approval-tool"), "Write", argumentsJson);
+        return new RunSuspension.WaitingForApproval(
+                SuspensionId.of("approval-suspension"), suspensionScope(),
+                new ApprovalRequest(List.of(
+                        new PlannedToolInvocation(tool, Decision.ASK))),
+                AiMessage.of("approval", List.of(tool)));
+    }
+
+    private static RunSuspension.WaitingForInput inputSuspension() {
+        return new RunSuspension.WaitingForInput(
+                SuspensionId.of("input-suspension"), suspensionScope(),
+                InputRequest.of("Which branch?"));
+    }
+
+    private static SuspensionScope suspensionScope() {
+        return new SuspensionScope(
+                SessionId.of("session-events-1"),
+                WorkspaceId.of("workspace-events-1"), RUN);
     }
 
     private static RunEvent roundTrip(RunEvent event) {

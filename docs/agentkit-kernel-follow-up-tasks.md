@@ -1,6 +1,6 @@
 # AgentKit Kernel：非高优先级与后续 Agent Runtime 任务
 
-> 状态：`#47–#50` 已完成，下一项为 `#51`；`#52–#55` 按 S10 顺序继续交付，`#56` 保持条件触发候选
+> 状态：`#47–#51` 已完成，下一项为 `#52/#53`；`#54–#55` 按 S10 顺序继续交付，`#56` 保持条件触发候选
 >
 > 审计日期：2026-07-29
 >
@@ -56,7 +56,7 @@
                  └─→ #55 CLI composition cleanup
 ```
 
-建议交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`；当前 `#47–#50` 已完成，下一项是 `#51`。`#56` 独立按日志规模或多 writer 需求触发，不为“对齐产品功能表”提前实现没有消费方的扩展。
+建议交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`；当前 `#47–#51` 已完成，下一项是 `#52/#53`。`#56` 独立按日志规模或多 writer 需求触发，不为“对齐产品功能表”提前实现没有消费方的扩展。
 
 ## 4. 变化点地图
 
@@ -66,7 +66,7 @@
 | 运行前后干预 | `AgentEventListener`、permission、各入口手工调用 | typed `AgentInterceptor` | #48 |
 | 外部工具服务器 | `McpToolAdapter`、scope-keyed server/session 与 context-aware `ToolCatalog` 已落地 | `McpProtocolMapper` + `McpCatalogPolicy` + server lifecycle | #49（已完成） |
 | 长命令和大输出 | scoped `TaskHandle`、增量 cursor、进程树回收、受治理 artifact 已落地 | `BackgroundTaskLauncher` + output projection + `ArtifactStore` | #50（已完成） |
-| 用户问题和计划批准 | permission ASK、CLI prompt、自然语言约定 | `RunSuspension` / waiting stop reasons | #51 |
+| 用户问题和计划批准 | typed suspension、完整 permission preflight、单次 token claim 与 CLI host adapter 已落地 | `RunSuspension` + `RunSuspensionStore` + `ResumeCommand` | #51（已完成） |
 | fork/rewind/checkpoint | `ChatMemoryStore` 消息快照 | event-log branch + checkpoint provider | #52 |
 | provider retry/fallback | provider factory、异常文本、调用入口 | `ModelPolicy` / `RetryPolicy` | #53 |
 | Agent 发现与派发 | 手工 wiring、模块专属 builder | `AgentManifest`/registry（平台层） | #54 |
@@ -367,7 +367,7 @@ interface TaskHandle {
 
 ### #51 [Kernel-TDD, P2] `WAITING_FOR_INPUT` / `WAITING_FOR_APPROVAL` 可恢复运行态
 
-**状态**：进行中（Red，2026-07-29）。
+**状态**：已完成（2026-07-29）；Red/Green/Refactor 三提交交付，实施状态以 `TASKLIST.md` 为准。
 
 **Goal**
 
@@ -431,6 +431,24 @@ sealed interface RunSuspension {
 - CLI 和 Web 可以使用同一 suspension contract。
 - 不需要让 application thread 在 prompt 上阻塞。
 - 不把 coding/diagnosis 的业务审批规则下沉 kernel。
+
+**完成后领域建模复核（2026-07-29）**
+
+- Summary：`RunSuspension` 已成为 pending request/token 的强一致聚合，`AgentExecutor` 只编排首段与恢复段；CLI 只是 `RunSuspension`/`ResumeCommand` 的宿主 adapter。同步 `InteractivePrompter` 保留为无 suspension store 的兼容路径，但启用 resumable store 后，完整 batch 只评估一次 permission snapshot，dispatcher 不会二次 ASK。
+- Domain Concept Map：sealed `WaitingForApproval`/`WaitingForInput`、`SuspensionScope`、`ApprovalRequest`/`InputRequest`、`ResumeToken`/`ResumeScope` 与 typed command 已落地；`AgentRunResult` 一等返回 suspension/token；`FileRunSuspensionStore` 实现 durable save 与原子 claim。
+- Aggregate Boundary：approval 首段持久化完整 assistant batch 但不 append Conversation；claim 后的新 RunId 先追加 `ApprovalSubmitted`，再把原 batch 与有序 results 投影。input 问题可完成普通 assistant 投影，答案由新段追加 `InputAnswered` 与 `UserMessage`。event recovery 能区分合法 suspension 与 interrupted tool batch。
+- Invariants：token 使用 256-bit 随机值，文件名只保存 SHA-256 digest，raw token 不进 payload/event/log/异常；claim 的 `.pending`→`.claimed` 原子 move 在两个 store 实例并发下恰好一胜；错 session/workspace/kind/origin 不消费；run-stop interceptor 在 durable save 前校验，拒绝时不发布 token；批准沿原 permission plan 执行一次，原 DENY 不能被覆盖；拒绝全批配对且零执行。
+- Variation Point Map：durable 介质只经 `RunSuspensionStore`，CLI/Web 只需实现 host prompt/response adapter，permission 变化收敛到 `ToolPermissionPlan`，run event codec 与 projection 显式认识 suspension facts。coding plan、diagnosis hypothesis 等 payload 继续留各 agent 包。
+- Refactor Signals：当前 file store 是 L0 本机 durable claim，不提供 token 找回、TTL/retention 或分布式 lease；claim 成功后的外部副作用若进程崩溃仍只允许审计/对账，禁止 replay。后续若要让 sub-agent 自身跨请求等待，应把同一个 store/host resume contract 显式传入 sub-agent runtime，不能恢复同步 prompt。
+
+| 评分维度 | 完成后 | 证据 |
+|---|---:|---|
+| 聚合边界是否清晰 | 3/3 | suspension/scope/token claim 强一致，Conversation/RunEvent 仅 append-only 投影 |
+| 变化是否被收敛 | 3/3 | store、permission plan、host adapter、event codec/projection 各守单一变化轴 |
+| 不变量是否可被模型守护 | 3/3 | typed scope/kind、原子 claim、single-use token、完整 plan 与 batch pairing |
+| 行为是否与模型一致 | 3/3 | 首段不阻塞、不留悬空 tool-use；恢复段新 RunId，approve/deny/input 均为新事实 |
+| 设计是否支持下一轮需求变化 | 3/3 | CLI 已消费通用 contract，Web 可复用；领域审批 payload 未下沉 kernel |
+| **总分** | **15/15** | 五个 Red 场景、并发 store、codec/recovery 与 CLI adapter 均有定向测试 |
 
 **blockedBy**：#42、#43、#46。
 

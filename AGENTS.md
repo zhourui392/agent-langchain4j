@@ -50,8 +50,8 @@ interfaces/cli  →  application  →  domain  ←  infrastructure
 
 1. 通过 `SystemPromptComposer` 组装 system prompt（稳定前缀供 prompt cache），context policy 与 typed interceptor 治理本轮请求投影。
 2. 通过 `LlmClient` port 流式获取 LLM 响应——部分 token 走 `StreamHandler.onPartialText`；`ReplaceContext` 只影响这次请求，不改写 conversation。
-3. 把 assistant `AiMessage` append 进 conversation。若无 `toolUseRequests` → break。
-4. 每个工具调用先过 typed `beforeToolDispatch`，继续执行的调用仍必须经过独立 `PermissionService.check`（ALLOW/ASK/DENY）。
+3. 启用 resumable store 时，先对完整 tool batch 形成不可变 permission plan；任一 ASK 先持久化 `RunSuspension` 并返回 waiting，pending assistant batch 暂不 append conversation。无 tool-use 或无 ASK 才把 assistant `AiMessage` append 进 conversation。
+4. 每个实际分发的工具调用先过 typed `beforeToolDispatch`；legacy 路径仍调用独立 `PermissionService.check`，resumable 路径只消费 preflight 的 ALLOW/DENY snapshot，批准不能覆盖原 DENY。
 5. 工具经 `ParallelToolDispatcher`（虚拟线程）分发，但 `ToolResultMessage` 按**原始 `tool_use` 顺序** append——这条不变量没有商量余地（Anthropic API 要求配对顺序）。
 6. `CancellationToken` 在每次循环开始和流式 handler 内部都检查；停止前的 typed 校验不会删除已配对结果，取消时循环优雅收尾。
 
@@ -65,6 +65,7 @@ interfaces/cli  →  application  →  domain  ←  infrastructure
 - **Session 存储**：`FileChatMemoryStore` 把 JSONL 写到 `~/.agentkit/sessions/<id>.jsonl`（路径经 `SessionPaths`）。`/resume <id>` 重载消息历史**但不重跑工具调用**——`tool_use` 和 `tool_result` 仅作数据持久化。
 - **后台任务即时配对**：`BashBackground` 启动成功即把原 tool-use settle 为 scoped `TaskId`；后台 completion 只能更新 `TaskSnapshot`/artifact，禁止再次 append 原 Conversation。status/read/stop 必须是新工具调用，run stop/cancel/close 必须回收该 scope 的进程树。
 - **Artifact 受 scope 治理**：完整输出写入前先过 `ArtifactContentPolicy`，并受 `TaskScope`、size、TTL 与 owner-only 权限约束；对外只发布 `artifact://`，禁止暴露文件路径或把已截断正文伪装成完整 artifact。
+- **Suspension 不留悬空配对**：approval 首段只持久化 pending assistant batch，不写 Conversation；新 segment 原子 claim token 后才 append 原 batch 并按序 settle。token 绑定 session/workspace/kind/origin RunId、只能消费一次且 raw 值不得进入 event/log/prompt；input answer 必须追加为新 `UserMessage`/`InputAnswered` 事实。
 
 ## TDD 纪律（项目规则，非可选）
 
@@ -111,7 +112,7 @@ interfaces/cli  →  application  →  domain  ←  infrastructure
 > 扩展方向原则。`agentkit-kernel` 是基座（agent 运行时 + SPI），每个 agent 是 kernel 之上的一个**包**。`agentkit-agent-diagnosis` 是第一个 agent 包；"Devin 式多角色协作开发" 不是独立产品，而是**另一个平级的 agent 包**（会编排子 Agent 的 coding agent），复用同一套 kernel。
 
 ### 职责边界
-- **kernel 提供（领域无关、稳定）**：`AgentExecutor` 回合循环、`ParallelToolDispatcher`；扩展点 SPI —— `Tool`、context-aware `ToolCatalog`、`SubAgentTool`（起隔离子 Agent）、`StructuredOutputTool`（终结工具/结构化交接）、typed `AgentInterceptor`（进程内生命周期策略）、`ContextProvider`、`PermissionPolicy`、`BackgroundTaskLauncher`、`ArtifactStore`；provider-neutral `ToolSafety`、`AgentBudget`（配额）、`TaskHandle`/output cursor、`governance/`（审计/脱敏）及 scope-keyed MCP lifecycle。
+- **kernel 提供（领域无关、稳定）**：`AgentExecutor` 回合循环、`ParallelToolDispatcher`；扩展点 SPI —— `Tool`、context-aware `ToolCatalog`、`SubAgentTool`（起隔离子 Agent）、`StructuredOutputTool`（终结工具/结构化交接）、typed `AgentInterceptor`（进程内生命周期策略）、`ContextProvider`、`PermissionPolicy`、`RunSuspensionStore`、`BackgroundTaskLauncher`、`ArtifactStore`；provider-neutral `ToolSafety`、`AgentBudget`（配额）、`RunSuspension`/`ResumeCommand`、`TaskHandle`/output cursor、`governance/`（审计/脱敏）及 scope-keyed MCP lifecycle。
 - **每个 agent 包提供（领域特定）**：领域工具（`DubboInvokeTool`/`EsReadTool`…）、终结工具 schema、领域 VO（交接载体，如 `DiagnosisPlan`，未来 `Patch`/`ReviewVerdict`）、payload→VO 映射、**自己的 orchestrator**。
 - **编排不下沉 kernel**：诊断循环（假设→取证→更新计划）与写码循环（拆任务→改→评审→打回）是不同领域工作流 = 业务规则，按分层纪律留在各包 application 层。kernel 只给积木（`SubAgentTool`/`StructuredOutputTool`），不给工作流——内置某种编排会被某个领域的形状污染。
 
@@ -124,4 +125,5 @@ interfaces/cli  →  application  →  domain  ←  infrastructure
 2. **typed `AgentInterceptor`（S10 #48，已完成）**：blocking hook 只返回 `Continue` / `Deny` / `ReplaceContext` 等合法 decision；observer failure 隔离，blocking failure 映射为明确终态；LLM/tool/compaction/run-stop/sub-agent 生命周期共用声明有序的链。它不替代 `PermissionPolicy`，也不开放 shell/script hook。
 3. **scope-keyed MCP lifecycle（S10 #49，已完成）**：`McpServerManager` 按 `(SecretScope, serverId)` 隔离认证 session，`ToolCatalog` 原子发布动态 generation，大目录延迟暴露；MCP 工具必须与本地工具共用 permission/interceptor/output/event/ordered-settle 路径，annotation 不能绕过本地 deny，断线不能 replay 当前调用。
 4. **scoped background runtime（S10 #50，已完成）**：`TaskHandle` 独占单任务 state/completion/append-only output，`TaskScope=(RunId, WorkspaceId)` 强制 ownership；启动即时 settle，status/read/stop 走新工具调用。进程树、artifact projection、脱敏/TTL/size 与 run-stop cleanup 各由 launcher/policy/port/interceptor 收敛，不在 executor 增加 process 分支。
-5. **`AgentManifest`（S10 #54）**：agent 自描述（id / description / entryPoint / requiredConfigKeys），让运行时/CLI 发现与派发，取代 `AgentKitApplication.main` 手工 wiring。等 #47–#53 基座稳定后实施，不引入反射扫描或插件子系统。
+5. **resumable run suspension（S10 #51，已完成）**：`RunSuspension`/`ResumeCommand` 是 CLI/Web 共用 typed contract；完整 permission batch 在执行前一次规划，ASK 持久化后返回 waiting。token 以 digest 定位并原子 single-use claim，approval 首段不污染 Conversation，input answer 作为新 event/message；CLI 在首段结束后提示并以新 RunId 恢复。
+6. **`AgentManifest`（S10 #54）**：agent 自描述（id / description / entryPoint / requiredConfigKeys），让运行时/CLI 发现与派发，取代 `AgentKitApplication.main` 手工 wiring。等 #47–#53 基座稳定后实施，不引入反射扫描或插件子系统。

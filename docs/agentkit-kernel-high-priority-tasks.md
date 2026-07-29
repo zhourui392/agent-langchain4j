@@ -45,9 +45,9 @@
 | 上下文 | executor 每次主 LLM 调用前统一执行策略；显式边界、单次 overflow 恢复与全局工具输出限制已落地 | 成熟 runtime 在每轮调用前治理上下文，并可从 overflow 恢复 | 已补齐运行期治理；事件恢复见 #46 |
 | 会话恢复 | per-run append-only `RunEventStore`；settled 不重放、in-flight 标 UNKNOWN；终态/usage/compaction 可投影 | 支持 resume/fork/checkpoint，并区分已完成和 in-flight action | 安全 run resume 已补齐；fork/rewind 与 CLI 新入口后置 |
 | 子 Agent | S10 #47 已补 `AgentSpec`、有界 runtime/handle、独立 RunId/取消、共享预算、follow-up 与 terminal payload；#48 已补 parent/child typed lifecycle correlation | 支持角色、模型、预算、取消、跟进和独立生命周期 | runtime 与 in-process lifecycle 基座已补齐 |
-| MCP / hooks / background | #48 已补 typed in-process hook；#49 已补 scope-keyed MCP lifecycle；#50 已补 scoped TaskHandle、增量输出、进程树回收和 artifact store | 两者均提供 MCP、生命周期扩展及长任务管理能力 | hook/MCP/background runtime 基座均已补齐 |
+| MCP / hooks / background / waiting | #48 已补 typed in-process hook；#49 已补 scope-keyed MCP lifecycle；#50 已补 scoped TaskHandle；#51 已补 durable suspension、原子 resume token 与异步 CLI host adapter | 两者均提供 MCP、生命周期扩展、长任务管理及跨请求批准能力 | hook/MCP/background/waiting runtime 基座均已补齐 |
 
-成熟度是定性判断，不是兼容性百分比承诺。审计开始时的估计约为成熟 Claude Code / Codex runtime 的 **55%–65%**；完成 `#40–#46` 后，异常、scope、安全、取消、上下文和恢复这组首要控制面缺口已关闭，S10 #47–#50 又补齐通用子 Agent、typed in-process lifecycle、受治理的 MCP 工具服务器与 scoped background runtime。本文不重新给出百分比，因为剩余差异主要是可等待运行态、fork/rewind、模型策略和宿主产品能力，是否实现取决于项目边界而非单一“完成度”。
+成熟度是定性判断，不是兼容性百分比承诺。审计开始时的估计约为成熟 Claude Code / Codex runtime 的 **55%–65%**；完成 `#40–#46` 后，异常、scope、安全、取消、上下文和恢复这组首要控制面缺口已关闭，S10 #47–#51 又补齐通用子 Agent、typed in-process lifecycle、受治理的 MCP 工具服务器、scoped background runtime 与可恢复 waiting states。本文不重新给出百分比，因为剩余差异主要是 fork/rewind、模型策略和宿主产品能力，是否实现取决于项目边界而非单一“完成度”。
 
 ## 4. 领域模型审计
 
@@ -62,7 +62,7 @@
 | 是否支持下一轮需求变化 | 1/3 | MCP、可恢复任务和通用子 Agent 若现在接入，会复制当前作用域与生命周期问题 |
 | **合计** | **7/15** | 先修运行时聚合与不变量，再扩功能 |
 
-上表保留的是本轮 hardening 开始前的基线，不是当前分数。`#40–#46` 关闭 run/tool/context/recovery 不变量后，`#47` 将通用子 Agent 提升到 14/15；`#48` 补齐 typed lifecycle 与 parent/child correlation 后，当前建模复核为 **15/15**。这只评价 kernel 建模质量，不表示 MCP、后台任务、waiting states 或产品宿主能力已经完成。
+上表保留的是本轮 hardening 开始前的基线，不是当前分数。`#40–#46` 关闭 run/tool/context/recovery 不变量后，`#47` 将通用子 Agent 提升到 14/15；`#48` 补齐 typed lifecycle 与 parent/child correlation 后，当前建模复核为 **15/15**。这只评价 kernel 建模质量；MCP、后台任务和 waiting states 现已分别由 #49–#51 补齐，仍不表示产品宿主能力与 Claude Code/Codex 等价。
 
 ### 4.2 建议统一语言
 

@@ -98,6 +98,13 @@ final class ParallelToolDispatcher {
         return dispatchOutcome(aiMessage, listener, permissionPlan(request, response));
     }
 
+    ToolDispatchBatch dispatchPlanned(
+            AiMessage aiMessage, AgentEventListener listener,
+            ToolPermissionPlan plan) {
+        return dispatchOutcome(
+                aiMessage, listener, permissionPlan(plan.invocations()));
+    }
+
     private ToolDispatchBatch dispatchOutcome(
             AiMessage aiMessage, AgentEventListener listener,
             Map<ToolUseId, Decision> permissionPlan) {
@@ -234,6 +241,15 @@ final class ParallelToolDispatcher {
             Decision decision = response == ApprovalDecision.DENY
                     ? Decision.DENY : approved(item.decision());
             plan.put(item.request().id(), decision);
+        }
+        return Map.copyOf(plan);
+    }
+
+    private static Map<ToolUseId, Decision> permissionPlan(
+            List<PlannedToolInvocation> invocations) {
+        Map<ToolUseId, Decision> plan = new java.util.LinkedHashMap<>();
+        for (PlannedToolInvocation item : invocations) {
+            plan.put(item.request().id(), item.decision());
         }
         return Map.copyOf(plan);
     }

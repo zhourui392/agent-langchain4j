@@ -13,6 +13,15 @@ import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.port.RunEventStore;
 import com.anthropic.agentkit.domain.run.RunEvent;
 import com.anthropic.agentkit.domain.run.RunEventMetadata;
+import com.anthropic.agentkit.domain.permission.Decision;
+import com.anthropic.agentkit.domain.suspension.ApprovalDecision;
+import com.anthropic.agentkit.domain.suspension.ApprovalRequest;
+import com.anthropic.agentkit.domain.suspension.InputAnswer;
+import com.anthropic.agentkit.domain.suspension.InputRequest;
+import com.anthropic.agentkit.domain.suspension.PlannedToolInvocation;
+import com.anthropic.agentkit.domain.suspension.RunSuspension;
+import com.anthropic.agentkit.domain.suspension.SuspensionId;
+import com.anthropic.agentkit.domain.suspension.SuspensionScope;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.domain.tool.ToolResultStatus;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
@@ -120,6 +129,66 @@ class RunEventProjectionTest {
                 .containsExactly(boundary.asMessage(), recent);
     }
 
+    @Test
+    void suspendedApprovalDoesNotProjectAnUnpairedToolBatch() {
+        RunSuspension.WaitingForApproval suspension = approvalSuspension();
+        List<RunEvent> events = List.of(
+                started(1, List.of(UserMessage.of("inspect"))),
+                new RunEvent.RunSuspended(metadata(2), suspension),
+                stopped(3, StopReason.WAITING_FOR_APPROVAL,
+                        suspension.pendingAssistantMessage(), Optional.empty()));
+
+        RecoveredRun recovered = new RunEventProjector().project(events);
+
+        assertThat(recovered.conversation().messages())
+                .containsExactly(UserMessage.of("inspect"));
+        assertThat(recovered.invocations()).isEmpty();
+        assertThat(recovered.terminalResult()).get().satisfies(result -> {
+            assertThat(result.suspension()).contains(suspension);
+            assertThat(result.resumeToken()).isEmpty();
+        });
+    }
+
+    @Test
+    void approvalSubmittedProjectsOriginalBatchBeforeSettlement() {
+        RunSuspension.WaitingForApproval suspension = approvalSuspension();
+        AiMessage finished = AiMessage.text("finished");
+        List<RunEvent> events = List.of(
+                started(1, List.of(UserMessage.of("inspect"))),
+                new RunEvent.ApprovalSubmitted(
+                        metadata(2), suspension, ApprovalDecision.APPROVE),
+                new RunEvent.ToolInvocationSettled(
+                        metadata(3), TOOL_USE, ToolResult.ok("file body")),
+                new RunEvent.AssistantTurnReceived(metadata(4), finished));
+
+        RecoveredRun recovered = new RunEventProjector().project(events);
+
+        assertThat(recovered.conversation().messages())
+                .extracting(message -> message.text())
+                .containsExactly("inspect", "calling", "file body", "finished");
+        assertThat(recovered.invocations()).singleElement()
+                .extracting(RecoveredToolInvocation::status)
+                .isEqualTo(RecoveryStatus.SETTLED);
+    }
+
+    @Test
+    void inputAnswerIsProjectedAsNewUserMessage() {
+        RunSuspension.WaitingForInput suspension = new RunSuspension.WaitingForInput(
+                SuspensionId.of("input-1"), suspensionScope(),
+                InputRequest.of("Which branch?"));
+        List<RunEvent> events = List.of(
+                started(1, List.of(
+                        UserMessage.of("inspect"), AiMessage.text("Which branch?"))),
+                new RunEvent.InputAnswered(
+                        metadata(2), suspension, InputAnswer.of("main")));
+
+        RecoveredRun recovered = new RunEventProjector().project(events);
+
+        assertThat(recovered.conversation().messages())
+                .containsExactly(UserMessage.of("inspect"),
+                        AiMessage.text("Which branch?"), UserMessage.of("main"));
+    }
+
     private static List<RunEvent> completedToolRun() {
         AiMessage finalMessage = AiMessage.text("finished");
         return List.of(
@@ -139,6 +208,20 @@ class RunEventProjectionTest {
     private static AiMessage toolTurn() {
         return AiMessage.of("calling", List.of(new ToolUseRequest(
                 TOOL_USE, "Read", "{\"path\":\"a.txt\"}")));
+    }
+
+    private static RunSuspension.WaitingForApproval approvalSuspension() {
+        AiMessage pending = toolTurn();
+        return new RunSuspension.WaitingForApproval(
+                SuspensionId.of("approval-1"), suspensionScope(),
+                new ApprovalRequest(List.of(new PlannedToolInvocation(
+                        pending.toolUseRequests().getFirst(), Decision.ASK))), pending);
+    }
+
+    private static SuspensionScope suspensionScope() {
+        return new SuspensionScope(
+                SessionId.of("recover-session"),
+                WorkspaceId.of("recover-workspace"), RUN);
     }
 
     private static RunEvent.RunStopped stopped(

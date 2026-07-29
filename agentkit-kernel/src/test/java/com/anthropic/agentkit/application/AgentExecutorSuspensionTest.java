@@ -1,5 +1,11 @@
 package com.anthropic.agentkit.application;
 
+import com.anthropic.agentkit.application.context.ContextPolicy;
+import com.anthropic.agentkit.application.interception.AgentInterceptor;
+import com.anthropic.agentkit.application.interception.AgentInterceptors;
+import com.anthropic.agentkit.application.interception.RunStopContext;
+import com.anthropic.agentkit.application.interception.RunStopDecision;
+import com.anthropic.agentkit.application.tool.ToolOutputPolicy;
 import com.anthropic.agentkit.domain.agent.AgentBudget;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.agent.AgentRunResult;
@@ -138,6 +144,61 @@ class AgentExecutorSuspensionTest {
             assertThat(event).isInstanceOf(RunEvent.InputAnswered.class);
             assertThat(((RunEvent.InputAnswered) event).answer().value()).isEqualTo("main");
         });
+    }
+
+    @Test
+    void resumableModeDispatchesFromOnePermissionSnapshot() {
+        Conversation conversation = conversation("single-permission-snapshot");
+        FakeTool tool = FakeTool.returning("Write", "changed");
+        AtomicInteger policyCalls = new AtomicInteger();
+        AtomicInteger prompts = new AtomicInteger();
+        PermissionService permissions = new PermissionService(
+                (invocation, candidate, mode) -> policyCalls.incrementAndGet() == 1
+                        ? Decision.ALLOW : Decision.ASK,
+                (invocation, candidate) -> {
+                    prompts.incrementAndGet();
+                    return InteractivePrompter.UserPermissionResponse.DENY;
+                }, PermissionMode.DEFAULT);
+        StubLlmClient llm = new StubLlmClient()
+                .enqueue(toolTurn()).enqueue(AiMessage.text("done"));
+        AgentExecutor executor = executor(
+                llm, new ToolRegistry().register(tool), permissions,
+                new MemoryEventStore(), suspensionStore("single-snapshot"));
+
+        AgentRunResult result = executor.run(
+                conversation, context(conversation.sessionId(), "snapshot-run", WORKSPACE)).join();
+
+        assertThat(result.stopReason()).isEqualTo(StopReason.MODEL_COMPLETED);
+        assertThat(tool.callCount()).isOne();
+        assertThat(policyCalls).hasValue(1);
+        assertThat(prompts).hasValue(0);
+    }
+
+    @Test
+    void runStopDenialPreventsPublishingResumeToken() {
+        Conversation conversation = conversation("stop-denies-suspension");
+        FakeTool tool = FakeTool.returning("Write", "changed");
+        FileRunSuspensionStore suspensions = suspensionStore("stop-denied");
+        StubLlmClient llm = new StubLlmClient().enqueue(toolTurn());
+        AgentInterceptor denyStop = new AgentInterceptor() {
+            @Override
+            public RunStopDecision beforeRunStop(RunStopContext context) {
+                return RunStopDecision.deny("host rejected waiting state");
+            }
+        };
+        AgentExecutor executor = new AgentExecutor(
+                llm, new ToolRegistry().register(tool),
+                askingPermissions(new AtomicInteger()), ContextPolicy.none(),
+                ToolOutputPolicy.defaultLimited(), new MemoryEventStore(),
+                AgentInterceptors.ordered(denyStop), suspensions);
+
+        AgentRunResult result = executor.run(
+                conversation, context(conversation.sessionId(), "denied-stop", WORKSPACE)).join();
+
+        assertThat(result.stopReason()).isEqualTo(StopReason.INTERCEPTOR_DENIED);
+        assertThat(result.suspension()).isEmpty();
+        assertThat(result.resumeToken()).isEmpty();
+        assertThat(tool.callCount()).isZero();
     }
 
     private Fixture fixture(String name, AiMessage afterResume) {

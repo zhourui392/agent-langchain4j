@@ -168,10 +168,21 @@ public final class AgentExecutor {
     public CompletableFuture<AgentRunResult> resume(
             Conversation conversation, AgentRunContext context,
             ResumeCommand command) {
+        return resume(conversation, context, command, AgentEventListener.NO_OP, "");
+    }
+
+    public CompletableFuture<AgentRunResult> resume(
+            Conversation conversation, AgentRunContext context,
+            ResumeCommand command, AgentEventListener listener,
+            String systemPrompt) {
         validateScope(conversation, context);
         Objects.requireNonNull(command, "command");
+        Objects.requireNonNull(listener, "listener");
+        Objects.requireNonNull(systemPrompt, "systemPrompt");
+        AgentEventListener safeListener = SafeAgentEventListener.protect(listener);
         return CompletableFuture.supplyAsync(
-                () -> resumeSegment(conversation, context, command));
+                () -> resumeSegment(
+                        conversation, context, command, safeListener, systemPrompt));
     }
 
     private AgentRunResult suspendForInput(
@@ -200,16 +211,20 @@ public final class AgentExecutor {
 
     private AgentRunResult resumeSegment(
             Conversation conversation, AgentRunContext context,
-            ResumeCommand command) {
+            ResumeCommand command, AgentEventListener listener,
+            String systemPrompt) {
         RunSuspension suspension = suspensionStore.claim(
                 command.token(), resumeScope(context), command.expectedKind());
         setMdc(context);
         AgentRunState state = newState(context);
         try {
             state.recorder().runStarted(conversation);
+            listener.onRunStart(context);
             AgentRunResult result = resumeClaimed(
-                    conversation, state, suspension, command);
-            result = interceptRunStop(context, result);
+                    conversation, state, suspension, command, listener, systemPrompt);
+            if (!state.stopIntercepted()) {
+                result = interceptRunStop(context, result);
+            }
             state.recorder().runStopped(result);
             return result;
         } catch (RunEventPersistenceException | RunSuspensionStoreException failure) {
@@ -222,14 +237,18 @@ public final class AgentExecutor {
 
     private AgentRunResult resumeClaimed(
             Conversation conversation, AgentRunState state,
-            RunSuspension suspension, ResumeCommand command) {
+            RunSuspension suspension, ResumeCommand command,
+            AgentEventListener listener, String systemPrompt) {
         if (suspension instanceof RunSuspension.WaitingForApproval approval
                 && command instanceof ResumeCommand.Approval response) {
-            return resumeApproval(conversation, state, approval, response.decision());
+            return resumeApproval(
+                    conversation, state, approval, response.decision(),
+                    listener, systemPrompt);
         }
         if (suspension instanceof RunSuspension.WaitingForInput input
                 && command instanceof ResumeCommand.Answer response) {
-            return resumeInput(conversation, state, input, response);
+            return resumeInput(
+                    conversation, state, input, response, listener, systemPrompt);
         }
         throw new IllegalStateException("claimed suspension does not match resume command");
     }
@@ -237,31 +256,32 @@ public final class AgentExecutor {
     private AgentRunResult resumeApproval(
             Conversation conversation, AgentRunState state,
             RunSuspension.WaitingForApproval suspension,
-            ApprovalDecision decision) {
+            ApprovalDecision decision, AgentEventListener listener,
+            String systemPrompt) {
         AiMessage pending = suspension.pendingAssistantMessage();
         state.recorder().approvalSubmitted(suspension, decision);
         state.remember(pending);
         appendMessage(conversation, pending, "resumed assistant message");
         ToolBatchOutcome outcome = dispatchApprovedTools(
-                pending, state, AgentEventListener.NO_OP,
-                suspension.request(), decision);
+                pending, state, listener, suspension.request(), decision);
         appendToolResults(conversation, outcome.results());
         if (outcome.stopReason().isPresent()) {
             return state.finish(
                     outcome.stopReason().orElseThrow(), outcome.structuredOutput(),
                     outcome.errorDetail());
         }
-        return runWithBudgetHandling(conversation, state, AgentEventListener.NO_OP, "");
+        return runWithBudgetHandling(conversation, state, listener, systemPrompt);
     }
 
     private AgentRunResult resumeInput(
             Conversation conversation, AgentRunState state,
             RunSuspension.WaitingForInput suspension,
-            ResumeCommand.Answer response) {
+            ResumeCommand.Answer response, AgentEventListener listener,
+            String systemPrompt) {
         state.recorder().inputAnswered(suspension, response.answer());
         state.remember(suspension.finalMessage());
         appendMessage(conversation, UserMessage.of(response.answer().value()), "input answer");
-        return runWithBudgetHandling(conversation, state, AgentEventListener.NO_OP, "");
+        return runWithBudgetHandling(conversation, state, listener, systemPrompt);
     }
 
     private AgentRunResult loop(Conversation conversation, AgentRunContext context,
@@ -275,7 +295,9 @@ public final class AgentExecutor {
                     context.runId(), context.workspaceId(), conversation.messages().size(), systemPrompt.length());
             AgentRunResult result = runWithBudgetHandling(
                     conversation, state, listener, systemPrompt);
-            result = interceptRunStop(context, result);
+            if (!state.stopIntercepted()) {
+                result = interceptRunStop(context, result);
+            }
             state.recorder().runStopped(result);
             return result;
         } catch (RunEventPersistenceException | RunSuspensionStoreException ex) {
@@ -346,7 +368,9 @@ public final class AgentExecutor {
             }
             AiMessage aiMessage = turnOutcome.message().orElseThrow();
             state.remember(aiMessage);
-            Optional<AgentRunResult> suspended = suspendForApproval(aiMessage, state);
+            Optional<ToolPermissionPlan> permissionPlan = permissionPlan(aiMessage, state);
+            Optional<AgentRunResult> suspended = suspendForApproval(
+                    aiMessage, state, permissionPlan);
             if (suspended.isPresent()) {
                 return suspended.orElseThrow();
             }
@@ -362,7 +386,8 @@ public final class AgentExecutor {
                 listener.onTurnComplete(aiMessage);
                 return state.finish(StopReason.MODEL_COMPLETED);
             }
-            ToolBatchOutcome outcome = dispatchToolCalls(aiMessage, state, listener);
+            ToolBatchOutcome outcome = dispatchToolCalls(
+                    aiMessage, state, listener, permissionPlan);
             appendToolResults(conversation, outcome.results());
             if (outcome.stopReason().isPresent()) {
                 return state.finish(
@@ -373,28 +398,39 @@ public final class AgentExecutor {
         }
     }
 
-    private Optional<AgentRunResult> suspendForApproval(
+    private Optional<ToolPermissionPlan> permissionPlan(
             AiMessage message, AgentRunState state) {
         if (!suspensionStore.enabled() || !message.hasToolUseRequests()) {
             return Optional.empty();
         }
-        Optional<ApprovalRequest> request = new ToolPermissionPlanner(tools, permissions)
-                .plan(message, state.context().executionContext());
-        if (request.isEmpty()) {
+        return Optional.of(new ToolPermissionPlanner(tools, permissions)
+                .plan(message, state.context().executionContext()));
+    }
+
+    private Optional<AgentRunResult> suspendForApproval(
+            AiMessage message, AgentRunState state,
+            Optional<ToolPermissionPlan> permissionPlan) {
+        if (permissionPlan.filter(ToolPermissionPlan::requiresApproval).isEmpty()) {
             return Optional.empty();
         }
         RunSuspension suspension = new RunSuspension.WaitingForApproval(
                 SuspensionId.fresh(), suspensionScope(state.context()),
-                request.orElseThrow(), message);
+                permissionPlan.orElseThrow().approvalRequest(), message);
         return Optional.of(persistSuspension(state, suspension));
     }
 
     private AgentRunResult persistSuspension(
             AgentRunState state, RunSuspension suspension) {
         ResumeToken token = ResumeToken.fresh();
+        AgentRunResult proposed = state.finishSuspended(suspension, token);
+        AgentRunResult validated = interceptRunStop(state.context(), proposed);
+        state.markStopIntercepted();
+        if (validated.suspension().isEmpty()) {
+            return validated;
+        }
         suspensionStore.save(suspension, token);
         state.recorder().runSuspended(suspension);
-        return state.finishSuspended(suspension, token);
+        return validated;
     }
 
     private ToolBatchOutcome dispatchApprovedTools(
@@ -426,7 +462,8 @@ public final class AgentExecutor {
     }
 
     private ToolBatchOutcome dispatchToolCalls(
-            AiMessage message, AgentRunState state, AgentEventListener listener) {
+            AiMessage message, AgentRunState state, AgentEventListener listener,
+            Optional<ToolPermissionPlan> permissionPlan) {
         if (violatesTerminalExclusivity(message, state.context())) {
             String reason = "terminal tool must be exclusive in its tool batch";
             List<ToolResultMessage> results = state.dispatcher().settleWithoutExecution(
@@ -436,8 +473,10 @@ public final class AgentExecutor {
         try {
             state.budget().ensureInputTokensWithinBudget();
             state.budget().reserveToolCalls(message.toolUseRequests().size());
-            ParallelToolDispatcher.ToolDispatchBatch batch =
-                    state.dispatcher().dispatchOutcome(message, listener);
+            ParallelToolDispatcher.ToolDispatchBatch batch = permissionPlan
+                    .map(plan -> state.dispatcher().dispatchPlanned(
+                            message, listener, plan))
+                    .orElseGet(() -> state.dispatcher().dispatchOutcome(message, listener));
             if (batch.interceptorFailure().isPresent()) {
                 return ToolBatchOutcome.stopped(
                         batch.results(), StopReason.INTERCEPTOR_ERROR,
@@ -760,6 +799,7 @@ public final class AgentExecutor {
         private final ParallelToolDispatcher dispatcher;
         private final RunEventRecorder recorder;
         private AiMessage lastMessage = AiMessage.text("");
+        private boolean stopIntercepted;
 
         private AgentRunState(AgentRunContext context, AgentBudgetGuard budget,
                               ParallelToolDispatcher dispatcher, RunEventRecorder recorder) {
@@ -786,6 +826,11 @@ public final class AgentExecutor {
         private AgentBudgetGuard budget() { return budget; }
         private ParallelToolDispatcher dispatcher() { return dispatcher; }
         private RunEventRecorder recorder() { return recorder; }
+        private boolean stopIntercepted() { return stopIntercepted; }
+
+        private void markStopIntercepted() {
+            stopIntercepted = true;
+        }
 
         private void remember(AiMessage message) {
             lastMessage = message;

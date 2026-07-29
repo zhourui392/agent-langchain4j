@@ -15,6 +15,7 @@ import com.anthropic.agentkit.application.tool.ArtifactToolOutputPolicy;
 import com.anthropic.agentkit.application.tool.LimitedToolOutputPolicy;
 import com.anthropic.agentkit.domain.agent.AgentBudget;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
+import com.anthropic.agentkit.domain.agent.AgentRunResult;
 import com.anthropic.agentkit.domain.context.ContextProvider;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
@@ -34,6 +35,7 @@ import com.anthropic.agentkit.infrastructure.context.GitStatusProvider;
 import com.anthropic.agentkit.infrastructure.llm.LlmClientFactories;
 import com.anthropic.agentkit.infrastructure.memory.FileChatMemoryStore;
 import com.anthropic.agentkit.infrastructure.memory.FileRunEventStore;
+import com.anthropic.agentkit.infrastructure.memory.FileRunSuspensionStore;
 import com.anthropic.agentkit.infrastructure.memory.SessionPaths;
 import com.anthropic.agentkit.infrastructure.permission.DefaultPermissionPolicy;
 import com.anthropic.agentkit.infrastructure.skill.DirectorySkillSource;
@@ -120,6 +122,8 @@ public final class AgentKitApplication {
         FileChatMemoryStore store = new FileChatMemoryStore(SessionPaths.defaultLocation().baseDirectory());
         FileRunEventStore eventStore = new FileRunEventStore(
                 SessionPaths.defaultLocation().baseDirectory().resolve("runs"));
+        FileRunSuspensionStore suspensionStore = new FileRunSuspensionStore(
+                SessionPaths.defaultLocation().baseDirectory().resolve("suspensions"));
         SessionResumer resumer = new SessionResumer(store);
 
         CancellationToken cancel = new CancellationToken();
@@ -136,7 +140,7 @@ public final class AgentKitApplication {
                     new TerminalIoPrompter(terminalIo),
                     config.permissionMode());
             AgentExecutor executor = createExecutor(
-                    llm, tools, permissions, eventStore, background);
+                    llm, tools, permissions, eventStore, suspensionStore, background);
 
             OutputRenderer renderer = new OutputRenderer(terminalIo);
             terminalIo.writeLine("(permission mode: " + config.permissionMode() + ")");
@@ -194,6 +198,7 @@ public final class AgentKitApplication {
             ToolRegistry tools,
             PermissionService permissions,
             FileRunEventStore eventStore,
+            FileRunSuspensionStore suspensionStore,
             BackgroundTaskRuntime background) {
         return new AgentExecutor(
                 llm, tools, permissions, ContextPolicy.standard(llm),
@@ -202,7 +207,8 @@ public final class AgentKitApplication {
                         background.artifacts(), ArtifactContentPolicy.redactInlineSecrets()),
                 eventStore,
                 AgentInterceptors.ordered(
-                        new BackgroundTaskCleanupInterceptor(background.tasks())));
+                        new BackgroundTaskCleanupInterceptor(background.tasks())),
+                suspensionStore);
     }
 
     private static List<ContextProvider> contextProviders() {
@@ -269,7 +275,8 @@ public final class AgentKitApplication {
             case SlashCommandParser.UserMessage userText -> {
                 Conversation conversation = active.get();
                 conversation.append(UserMessage.of(userText.text()));
-                runTurn(conversation, executor, composer, cwd, cancel, renderer, secrets);
+                runTurn(conversation, executor, composer, cwd, cancel,
+                        renderer, terminalIo, secrets);
                 store.save(conversation.sessionId(), conversation.messages());
                 sigint.turnFinished();
             }
@@ -282,12 +289,27 @@ public final class AgentKitApplication {
                                  Path cwd,
                                  CancellationToken cancel,
                                  OutputRenderer renderer,
+                                 TerminalIo terminalIo,
                                  SecretProvider secrets) {
         try {
             String systemPrompt = composer.compose(cwd).full();
             AgentRunContext context = AgentRunContext.create(
                     conversation.sessionId(), cwd, cancel, AgentBudget.unlimited(), secrets);
-            executor.run(conversation, context, renderer, systemPrompt).join();
+            AgentRunResult result = executor.run(
+                    conversation, context, renderer, systemPrompt).join();
+            RunSuspensionPrompter prompter = new RunSuspensionPrompter(terminalIo);
+            while (result.suspension().isPresent()) {
+                var command = prompter.prompt(result);
+                if (command.isEmpty()) {
+                    break;
+                }
+                AgentRunContext resumed = AgentRunContext.create(
+                        conversation.sessionId(), cwd, cancel,
+                        AgentBudget.unlimited(), secrets);
+                result = executor.resume(
+                        conversation, resumed, command.orElseThrow(),
+                        renderer, systemPrompt).join();
+            }
         } catch (RuntimeException ex) {
             renderer.onError(ex);
         }

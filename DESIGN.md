@@ -817,8 +817,26 @@ MCP server 是外部工具来源，不是第二条 agent 执行通道。远端�
 
 ---
 
+### 16.19 可持久化 Run Suspension 与单次恢复（2026-07-29）
+
+等待用户批准或输入不是 application 调用栈中的同步分支，而是一个已持久化、可跨请求恢复的 run 终态。kernel 只认识领域无关的 input/approval envelope；coding plan、diagnosis hypothesis 等业务审批规则仍由各 agent 包拥有。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| 聚合与 scope | sealed `RunSuspension` 包含 `WaitingForApproval` / `WaitingForInput`；`SuspensionScope=(SessionId, WorkspaceId, originating RunId)` 与 expected response kind 共同约束恢复 | 新 segment 必须同 session/workspace、不同 RunId；错 scope/kind 统一表现 unavailable，不能探测或误消费 pending request |
+| Permission preflight | 启用 suspension store 后，`ToolPermissionPlanner` 在任何 tool/interceptor 执行前生成完整不可变 batch snapshot | batch 中任一 ASK 则全批暂停；无 ASK 时 dispatcher 也只消费同一 snapshot，不二次调用 policy 或同步 prompter；批准不能覆盖原 DENY |
+| Conversation 配对 | approval 首段持久化 pending assistant batch，但不 append `Conversation`；input 问题是无 tool-use 的完整 assistant message | waiting 返回时 Conversation 永不含悬空 tool-use；恢复批准/拒绝后才按原顺序 append assistant batch 与全量 results；input answer 作为新 `UserMessage` 追加 |
+| Token claim | `ResumeToken` 使用 256-bit 随机值；file adapter 只以 SHA-256 digest 派生 owner-only 文件名，通过 `.pending`→`.claimed` 原子 move 消费 | raw token 不写入 suspension payload、run event、prompt、日志或异常；跨 store 实例并发 resume 恰好一个成功；claim 后崩溃也不得用原 token replay 外部副作用 |
+| 事件与恢复 | schema v1 增加 `RunSuspended`、`ApprovalSubmitted`、`InputAnswered` typed fact；event codec 继续治理敏感参数/答案 | 原 waiting run 的 projection 不把 pending batch误判为 interrupted；新 segment 能从事实重建原 batch、settlement 与答案；event 中不保存 bearer token |
+| Stop interceptor | suspension 在 durable save 前先经过 `beforeRunStop`；拒绝/失败不发布 token | required stop policy 只执行一次，不留下宿主不可见的 orphan credential；save 成功仍先于 waiting result 返回 |
+| 宿主边界 | `AgentExecutor.resume(..., listener, systemPrompt)` 是 CLI/Web 共用 use-case contract；CLI 的 `RunSuspensionPrompter` 在首段 future 完成后读取终端并创建新 context | application 执行线程不占住等待用户；UI 文案/输入循环留 interfaces；无 store 的 legacy executor 保留同步 prompter 兼容路径 |
+
+File store 为 L0 本机持久化：保存的是执行所需的完整 pending payload，依赖 owner-only 目录/文件保护；append-only run event 则执行脱敏后只用于审计/恢复投影。当前不提供 token 找回、TTL/retention、分布式 lease、claim 后自动重试或外部副作用通用 reconciliation。需要这些能力时必须扩展 store/宿主协议，不能放宽 single-use 或自动重放规则。
+
+---
+
 ## 17. 下一步
 
-1. 在同一 runtime 不变量上补 #51 可恢复 waiting/input/approval states。
-2. 完成 #52 session branch/checkpoint 与 #53 provider-neutral model/retry policy。
-3. 最后用 #54 manifest 和 #55 CLI 组合根形成 diagnosis/coding 的统一派发入口。
+1. 完成 #52 session branch/checkpoint 与 #53 provider-neutral model/retry policy。
+2. 用 #54 manifest 建立 diagnosis/coding 的统一派发入口。
+3. 最后以 #55 清理 slash command、run recovery 与每轮 SIGINT/context 接线。

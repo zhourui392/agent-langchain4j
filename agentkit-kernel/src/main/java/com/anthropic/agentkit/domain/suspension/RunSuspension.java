@@ -2,6 +2,7 @@ package com.anthropic.agentkit.domain.suspension;
 
 import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.message.AiMessage;
+import com.anthropic.agentkit.domain.tool.ToolUseRequest;
 
 import java.util.List;
 import java.util.Objects;
@@ -32,7 +33,7 @@ public sealed interface RunSuspension permits
             Objects.requireNonNull(scope, "scope");
             Objects.requireNonNull(request, "request");
             Objects.requireNonNull(pendingAssistantMessage, "pendingAssistantMessage");
-            List<?> planned = request.invocations().stream()
+            List<ToolUseRequest> planned = request.invocations().stream()
                     .map(PlannedToolInvocation::request).toList();
             if (!planned.equals(pendingAssistantMessage.toolUseRequests())) {
                 throw new IllegalArgumentException(
