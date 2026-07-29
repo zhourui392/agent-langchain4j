@@ -22,12 +22,14 @@ import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.port.LlmClient;
+import com.anthropic.agentkit.domain.port.FileCheckpointProvider;
 import com.anthropic.agentkit.domain.port.SecretProvider;
 import com.anthropic.agentkit.domain.skill.SkillCatalog;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.infrastructure.config.AppConfig;
 import com.anthropic.agentkit.infrastructure.config.ConfigLoader;
 import com.anthropic.agentkit.infrastructure.config.EnvironmentSecretProvider;
+import com.anthropic.agentkit.infrastructure.checkpoint.FileSystemCheckpointProvider;
 import com.anthropic.agentkit.infrastructure.context.AgentsMdProvider;
 import com.anthropic.agentkit.infrastructure.context.CwdProvider;
 import com.anthropic.agentkit.infrastructure.context.DateProvider;
@@ -124,6 +126,8 @@ public final class AgentKitApplication {
                 SessionPaths.defaultLocation().baseDirectory().resolve("runs"));
         FileRunSuspensionStore suspensionStore = new FileRunSuspensionStore(
                 SessionPaths.defaultLocation().baseDirectory().resolve("suspensions"));
+        FileSystemCheckpointProvider checkpoints = new FileSystemCheckpointProvider(
+                SessionPaths.defaultLocation().baseDirectory().resolve("checkpoints"));
         SessionResumer resumer = new SessionResumer(store);
 
         CancellationToken cancel = new CancellationToken();
@@ -131,7 +135,8 @@ public final class AgentKitApplication {
 
         try (BackgroundTaskRuntime background = openBackgroundRuntime();
              JLineTerminalIo terminalIo = JLineTerminalIo.openSystem(historyFile())) {
-            ToolRegistry tools = registerTools(fileStateCache, skills, background.tasks());
+            ToolRegistry tools = registerTools(
+                    fileStateCache, skills, background.tasks(), checkpoints);
             log.info("agentkit starting: provider={}, model={}, permissionMode={}, skillsEnabled={}, registeredTools={}",
                     config.provider(), config.model(), config.permissionMode(),
                     skills.isPresent(), tools.names().size());
@@ -162,11 +167,18 @@ public final class AgentKitApplication {
 
     private static ToolRegistry registerTools(FileStateCache fileStateCache,
                                               java.util.Optional<SkillCatalog> skills) {
+        return registerTools(fileStateCache, skills, FileCheckpointProvider.none());
+    }
+
+    private static ToolRegistry registerTools(
+            FileStateCache fileStateCache,
+            java.util.Optional<SkillCatalog> skills,
+            FileCheckpointProvider checkpoints) {
         ToolRegistry registry = new ToolRegistry()
                 .register(new BashTool())
                 .register(new FileReadTool(fileStateCache))
-                .register(new FileWriteTool(fileStateCache))
-                .register(new FileEditTool(fileStateCache))
+                .register(new FileWriteTool(fileStateCache, checkpoints))
+                .register(new FileEditTool(fileStateCache, checkpoints))
                 .register(new GlobTool())
                 .register(new GrepTool());
         skills.ifPresent(catalog -> registry.register(new SkillTool(catalog)));
@@ -177,7 +189,16 @@ public final class AgentKitApplication {
             FileStateCache fileStateCache,
             java.util.Optional<SkillCatalog> skills,
             BackgroundTaskService backgroundTasks) {
-        return registerTools(fileStateCache, skills)
+        return registerTools(
+                fileStateCache, skills, backgroundTasks, FileCheckpointProvider.none());
+    }
+
+    private static ToolRegistry registerTools(
+            FileStateCache fileStateCache,
+            java.util.Optional<SkillCatalog> skills,
+            BackgroundTaskService backgroundTasks,
+            FileCheckpointProvider checkpoints) {
+        return registerTools(fileStateCache, skills, checkpoints)
                 .register(new BackgroundBashTool(backgroundTasks))
                 .register(new TaskStatusTool(backgroundTasks))
                 .register(new TaskReadTool(backgroundTasks))

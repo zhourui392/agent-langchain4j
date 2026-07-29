@@ -25,6 +25,9 @@ public final class FileSessionBranchStore implements SessionBranchStore {
 
     private static final Set<PosixFilePermission> OWNER_ONLY = EnumSet.of(
             PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
+    private static final Set<PosixFilePermission> OWNER_DIRECTORY = EnumSet.of(
+            PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE,
+            PosixFilePermission.OWNER_EXECUTE);
 
     private final Path baseDirectory;
 
@@ -37,6 +40,9 @@ public final class FileSessionBranchStore implements SessionBranchStore {
         Objects.requireNonNull(event, "event");
         SessionBranchId branchId = event.branch().id();
         List<SessionBranchEvent> existing = load(branchId);
+        if (!existing.isEmpty()) {
+            throw new IllegalArgumentException("session branch creation is immutable");
+        }
         long expected = existing.size() + 1L;
         if (event.sequence() != expected) {
             throw new IllegalArgumentException(
@@ -44,8 +50,9 @@ public final class FileSessionBranchStore implements SessionBranchStore {
         }
         try {
             Files.createDirectories(baseDirectory);
+            restrictPermissions(baseDirectory, OWNER_DIRECTORY);
             appendLine(pathFor(branchId), SessionBranchJsonCodec.toJson(event) + "\n");
-            restrictPermissions(pathFor(branchId));
+            restrictPermissions(pathFor(branchId), OWNER_ONLY);
         } catch (IOException failure) {
             throw persistence("append", branchId, failure);
         }
@@ -115,9 +122,10 @@ public final class FileSessionBranchStore implements SessionBranchStore {
         }
     }
 
-    private static void restrictPermissions(Path file) {
+    private static void restrictPermissions(
+            Path file, Set<PosixFilePermission> permissions) {
         try {
-            Files.setPosixFilePermissions(file, OWNER_ONLY);
+            Files.setPosixFilePermissions(file, permissions);
         } catch (UnsupportedOperationException | IOException ignored) {
             // Non-POSIX systems rely on their native user profile ACLs.
         }

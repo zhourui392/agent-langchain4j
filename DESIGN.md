@@ -835,8 +835,25 @@ File store 为 L0 本机持久化：保存的是执行所需的完整 pending pa
 
 ---
 
+### 16.20 Append-only Session Branch 与文件补偿（2026-07-29）
+
+session rewind 是从不可变 run fact 创建新分支并选择性补偿 kernel 文件，不是截断旧日志或回滚任意外部世界。conversation、文件 checkpoint 与不可逆副作用必须分别投影；即使文件补偿部分失败，branch 审计事实仍保留且结果显式报告 residual。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| Branch 聚合 | `SessionBranch` 持有 `SessionBranchId`、`SessionBranchScope`、`BranchOrigin`、不可变 `BranchPoint` 与 `RunEventPointer head`；`FileSessionBranchStore` 每个 branch 只 append 一次 `BranchCreated` | fork/rewind 始终创建 child；parent branch/run log 不删除、不重写；父序列不会随原 run 后续 append 漂移 |
+| Scope 与坐标 | 每次 create/fork/rewind/load 都验证目标 event 存在，且 SessionId/WorkspaceId 与 branch 完全一致；target sequence 不得越过 parent head | 跨 workspace 与 unknown branch 统一 `SessionBranchUnavailableException`，不能通过 ID 探测或把别处事件拼入当前 session |
+| Side-effect fact | `ToolSafety` 增加 `ToolReversibility`；dispatcher 在已 started 的 mutating tool settle 前写 `ToolSideEffectObserved(CheckpointedFile|NonReversible)` | read-only 无 effect；Bash/MCP/一般 mutating tool 保守标 non-reversible；decorator 必须透传 delegate safety；未知/中断仍沿 #46 报 reconciliation，不 replay |
+| 文件捕获 | `FileWriteTool`/`FileEditTool` 在 workspace boundary 与先读后写校验通过后、实际写入前调用 `FileCheckpointProvider.capture`；`ExecutionContext` 显式携带 SessionId | snapshot owner 绑定 session/workspace，记录原存在性、内容与 mtime；拿不到 checkpoint 的文件执行不会被误报为 reversible |
+| Rewind 投影 | `SessionBranchService` 复用 `RunEventProjector` 重建目标 conversation；checkpoint effect 按事件逆序补偿，non-reversible effect 转 `ResidualSideEffect` | 同一文件多次写能回到目标时点；`CONVERSATION_ONLY` 返回 unrestored checkpoint；恢复失败保留 child 并返回 unrestored/residual，不伪造全成功 |
+| 本地持久化 | branch/checkpoint 目录尝试 `0700`、文件 `0600`，opaque ID 安全编码后派生文件名；CLI 为 Write/Edit 注入 `~/.agentkit/sessions/checkpoints` provider | checkpoint 保存恢复所需完整文件内容，依赖 L0 owner-only 保护；branch/checkpoint 不是审计脱敏日志，也不是多租户隔离或分布式事务 |
+
+本节只承诺 kernel 管理的普通文件内容、存在性和 mtime 补偿；目录树、ACL、symlink、Bash、MCP、数据库、远端 API、后台进程与 worktree 建立/合并都不在通用回滚范围。branch 的 CLI 选择/展示留 #55；索引、retention 和多 writer fencing 仍按 #56 的真实规模条件触发。
+
+---
+
 ## 17. 下一步
 
-1. 完成 #52 session branch/checkpoint 与 #53 provider-neutral model/retry policy。
+1. 完成 #53 provider-neutral model/retry policy。
 2. 用 #54 manifest 建立 diagnosis/coding 的统一派发入口。
-3. 最后以 #55 清理 slash command、run recovery 与每轮 SIGINT/context 接线。
+3. 最后以 #55 清理 slash command、run recovery、branch host UX 与每轮 SIGINT/context 接线。

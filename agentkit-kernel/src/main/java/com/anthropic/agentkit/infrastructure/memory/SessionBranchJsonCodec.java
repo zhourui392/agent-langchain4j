@@ -83,23 +83,22 @@ final class SessionBranchJsonCodec {
         SessionBranchScope scope = new SessionBranchScope(
                 SessionId.of(requiredText(node, "sessionId")),
                 WorkspaceId.of(requiredText(node, "workspaceId")));
-        Optional<BranchPoint> parent = optional(node, "parent").map(parentNode -> {
-            try {
-                return new BranchPoint(
-                        SessionBranchId.of(requiredText(parentNode, "branchId")),
-                        readPointer(required(parentNode, "event")));
-            } catch (IOException failure) {
-                throw new InvalidBranchJson(failure);
-            }
-        });
-        try {
-            return new SessionBranch(
-                    SessionBranchId.of(requiredText(node, "id")), scope,
-                    BranchOrigin.valueOf(requiredText(node, "origin")), parent,
-                    readPointer(required(node, "head")));
-        } catch (InvalidBranchJson failure) {
-            throw failure.ioFailure();
+        Optional<BranchPoint> parent = readParent(node);
+        return new SessionBranch(
+                SessionBranchId.of(requiredText(node, "id")), scope,
+                BranchOrigin.valueOf(requiredText(node, "origin")), parent,
+                readPointer(required(node, "head")));
+    }
+
+    private static Optional<BranchPoint> readParent(JsonNode node) throws IOException {
+        Optional<JsonNode> parent = optional(node, "parent");
+        if (parent.isEmpty()) {
+            return Optional.empty();
         }
+        JsonNode value = parent.orElseThrow();
+        return Optional.of(new BranchPoint(
+                SessionBranchId.of(requiredText(value, "branchId")),
+                readPointer(required(value, "event"))));
     }
 
     private static RunEventPointer readPointer(JsonNode node) throws IOException {
@@ -145,15 +144,4 @@ final class SessionBranchJsonCodec {
         return value == null || value.isNull() ? Optional.empty() : Optional.of(value);
     }
 
-    private static final class InvalidBranchJson extends RuntimeException {
-        private final IOException ioFailure;
-
-        private InvalidBranchJson(IOException ioFailure) {
-            this.ioFailure = ioFailure;
-        }
-
-        private IOException ioFailure() {
-            return ioFailure;
-        }
-    }
 }

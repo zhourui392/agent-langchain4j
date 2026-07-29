@@ -5,6 +5,7 @@ import com.anthropic.agentkit.domain.agent.BudgetConsumption;
 import com.anthropic.agentkit.domain.agent.RunId;
 import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.agent.WorkspaceId;
+import com.anthropic.agentkit.domain.checkpoint.CheckpointId;
 import com.anthropic.agentkit.domain.conversation.CompactionBoundary;
 import com.anthropic.agentkit.domain.conversation.SessionId;
 import com.anthropic.agentkit.domain.message.AiMessage;
@@ -23,6 +24,7 @@ import com.anthropic.agentkit.domain.suspension.SuspensionId;
 import com.anthropic.agentkit.domain.suspension.SuspensionScope;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.domain.tool.ToolResultStatus;
+import com.anthropic.agentkit.domain.tool.ToolSideEffect;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
 import com.anthropic.agentkit.domain.tool.ToolUseRequest;
 import org.junit.jupiter.api.Test;
@@ -154,11 +156,15 @@ class FileRunEventStoreTest {
                 new RunEvent.LlmCallStarted(metadata(2), 1),
                 new RunEvent.AssistantTurnReceived(metadata(3), AiMessage.text("done")),
                 new RunEvent.ToolInvocationStarted(metadata(4), new ToolUseId("tool-1")),
-                new RunEvent.ToolInvocationSettled(metadata(5), new ToolUseId("tool-1"),
+                new RunEvent.ToolSideEffectObserved(
+                        metadata(5), new ToolUseId("tool-1"),
+                        new ToolSideEffect.CheckpointedFile(
+                                CheckpointId.of("checkpoint-1"))),
+                new RunEvent.ToolInvocationSettled(metadata(6), new ToolUseId("tool-1"),
                         ToolResult.of(ToolResultStatus.SUCCESS, "body", Map.of("source", "test"))),
                 new RunEvent.CompactionCompleted(
-                        metadata(6), boundary, List.of(UserMessage.of("recent"))),
-                stoppedWithSafePayload(7, AiMessage.text("finished")));
+                        metadata(7), boundary, List.of(UserMessage.of("recent"))),
+                stoppedWithSafePayload(8, AiMessage.text("finished")));
 
         List<RunEvent> decoded = events.stream().map(FileRunEventStoreTest::roundTrip).toList();
 

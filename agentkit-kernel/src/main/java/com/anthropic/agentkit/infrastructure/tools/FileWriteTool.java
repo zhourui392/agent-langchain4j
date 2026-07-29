@@ -50,6 +50,11 @@ public final class FileWriteTool implements Tool {
     }
 
     public FileWriteTool(
+            FileStateCache fileStateCache, FileCheckpointProvider checkpoints) {
+        this(fileStateCache, new WorkspaceBoundary(), checkpoints);
+    }
+
+    public FileWriteTool(
             FileStateCache fileStateCache, WorkspaceBoundary boundary,
             FileCheckpointProvider checkpoints) {
         this.fileStateCache = Objects.requireNonNull(fileStateCache, "fileStateCache");

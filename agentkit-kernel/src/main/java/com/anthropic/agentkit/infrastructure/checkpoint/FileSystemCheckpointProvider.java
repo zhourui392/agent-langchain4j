@@ -69,7 +69,9 @@ public final class FileSystemCheckpointProvider implements FileCheckpointProvide
     }
 
     public Path pathFor(CheckpointId checkpointId) {
-        return baseDirectory.resolve(checkpointId.value() + ".checkpoint.json");
+        String encoded = Base64.getUrlEncoder().withoutPadding().encodeToString(
+                checkpointId.value().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return baseDirectory.resolve(encoded + ".checkpoint.json");
     }
 
     private Snapshot snapshot(FileCheckpointScope scope, Path file) throws IOException {
@@ -78,7 +80,7 @@ public final class FileSystemCheckpointProvider implements FileCheckpointProvide
             throw new FileCheckpointException("only regular files can be checkpointed");
         }
         byte[] content = existed ? Files.readAllBytes(file) : new byte[0];
-        long modified = existed ? Files.getLastModifiedTime(file).toMillis() : -1L;
+        String modified = existed ? Files.getLastModifiedTime(file).toString() : "";
         CheckpointId id = CheckpointId.fresh();
         Path relative = scope.workspaceRoot().relativize(file);
         return new Snapshot(
@@ -122,8 +124,9 @@ public final class FileSystemCheckpointProvider implements FileCheckpointProvide
             Files.createDirectories(file.getParent());
         }
         Files.write(file, Base64.getDecoder().decode(snapshot.contentBase64()));
-        if (snapshot.modifiedMillis() >= 0) {
-            Files.setLastModifiedTime(file, FileTime.fromMillis(snapshot.modifiedMillis()));
+        if (!snapshot.modifiedTime().isBlank()) {
+            Files.setLastModifiedTime(
+                    file, FileTime.from(java.time.Instant.parse(snapshot.modifiedTime())));
         }
     }
 
@@ -179,7 +182,7 @@ public final class FileSystemCheckpointProvider implements FileCheckpointProvide
             String workspaceRoot,
             String relativePath,
             boolean existed,
-            long modifiedMillis,
+            String modifiedTime,
             String contentBase64) {
     }
 }

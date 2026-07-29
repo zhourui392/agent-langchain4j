@@ -2,6 +2,7 @@ package com.anthropic.agentkit.application.session;
 
 import com.anthropic.agentkit.application.recovery.RunEventProjector;
 import com.anthropic.agentkit.domain.checkpoint.CheckpointId;
+import com.anthropic.agentkit.domain.checkpoint.FileCheckpointException;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.port.FileCheckpointProvider;
 import com.anthropic.agentkit.domain.port.RunEventStore;
@@ -169,7 +170,8 @@ public final class SessionBranchService {
             List<ResidualSideEffect> residuals) {
         switch (event.sideEffect()) {
             case ToolSideEffect.CheckpointedFile file ->
-                    compensateFile(scope, mode, file.checkpointId(), restored, unrestored);
+                    compensateFile(event, scope, mode, file.checkpointId(),
+                            restored, unrestored, residuals);
             case ToolSideEffect.NonReversible external -> residuals.add(
                     new ResidualSideEffect(pointer(event), event.toolUseId(),
                             external.toolName(), external.detail()));
@@ -177,14 +179,26 @@ public final class SessionBranchService {
     }
 
     private void compensateFile(
-            SessionBranchScope scope, RewindMode mode, CheckpointId checkpoint,
-            List<CheckpointId> restored, List<CheckpointId> unrestored) {
+            RunEvent.ToolSideEffectObserved event,
+            SessionBranchScope scope,
+            RewindMode mode,
+            CheckpointId checkpoint,
+            List<CheckpointId> restored,
+            List<CheckpointId> unrestored,
+            List<ResidualSideEffect> residuals) {
         if (mode == RewindMode.CONVERSATION_ONLY) {
             unrestored.add(checkpoint);
             return;
         }
-        checkpoints.restore(scope.checkpointOwner(), checkpoint);
-        restored.add(checkpoint);
+        try {
+            checkpoints.restore(scope.checkpointOwner(), checkpoint);
+            restored.add(checkpoint);
+        } catch (FileCheckpointException failure) {
+            unrestored.add(checkpoint);
+            residuals.add(new ResidualSideEffect(
+                    pointer(event), event.toolUseId(), "FileCheckpoint",
+                    "file checkpoint could not be restored: " + failure.getMessage()));
+        }
     }
 
     private static RunEventPointer pointer(RunEvent event) {

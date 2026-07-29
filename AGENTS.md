@@ -66,6 +66,7 @@ interfaces/cli  →  application  →  domain  ←  infrastructure
 - **后台任务即时配对**：`BashBackground` 启动成功即把原 tool-use settle 为 scoped `TaskId`；后台 completion 只能更新 `TaskSnapshot`/artifact，禁止再次 append 原 Conversation。status/read/stop 必须是新工具调用，run stop/cancel/close 必须回收该 scope 的进程树。
 - **Artifact 受 scope 治理**：完整输出写入前先过 `ArtifactContentPolicy`，并受 `TaskScope`、size、TTL 与 owner-only 权限约束；对外只发布 `artifact://`，禁止暴露文件路径或把已截断正文伪装成完整 artifact。
 - **Suspension 不留悬空配对**：approval 首段只持久化 pending assistant batch，不写 Conversation；新 segment 原子 claim token 后才 append 原 batch 并按序 settle。token 绑定 session/workspace/kind/origin RunId、只能消费一次且 raw 值不得进入 event/log/prompt；input answer 必须追加为新 `UserMessage`/`InputAnswered` 事实。
+- **Branch/rewind 只追加不改写**：fork/rewind 必须引用 scope 匹配的不可变 `(RunId, sequence)` 并创建新 branch，禁止截断 parent run/branch 日志。conversation、已恢复/未恢复文件 checkpoint 与 external residual 必须分开返回；同一文件多次 checkpoint 按副作用逆序恢复，Bash/MCP/数据库不得标成可回滚。
 
 ## TDD 纪律（项目规则，非可选）
 
@@ -112,7 +113,7 @@ interfaces/cli  →  application  →  domain  ←  infrastructure
 > 扩展方向原则。`agentkit-kernel` 是基座（agent 运行时 + SPI），每个 agent 是 kernel 之上的一个**包**。`agentkit-agent-diagnosis` 是第一个 agent 包；"Devin 式多角色协作开发" 不是独立产品，而是**另一个平级的 agent 包**（会编排子 Agent 的 coding agent），复用同一套 kernel。
 
 ### 职责边界
-- **kernel 提供（领域无关、稳定）**：`AgentExecutor` 回合循环、`ParallelToolDispatcher`；扩展点 SPI —— `Tool`、context-aware `ToolCatalog`、`SubAgentTool`（起隔离子 Agent）、`StructuredOutputTool`（终结工具/结构化交接）、typed `AgentInterceptor`（进程内生命周期策略）、`ContextProvider`、`PermissionPolicy`、`RunSuspensionStore`、`BackgroundTaskLauncher`、`ArtifactStore`；provider-neutral `ToolSafety`、`AgentBudget`（配额）、`RunSuspension`/`ResumeCommand`、`TaskHandle`/output cursor、`governance/`（审计/脱敏）及 scope-keyed MCP lifecycle。
+- **kernel 提供（领域无关、稳定）**：`AgentExecutor` 回合循环、`ParallelToolDispatcher`；扩展点 SPI —— `Tool`、context-aware `ToolCatalog`、`SubAgentTool`（起隔离子 Agent）、`StructuredOutputTool`（终结工具/结构化交接）、typed `AgentInterceptor`（进程内生命周期策略）、`ContextProvider`、`PermissionPolicy`、`RunSuspensionStore`、`SessionBranchStore`、`FileCheckpointProvider`、`BackgroundTaskLauncher`、`ArtifactStore`；provider-neutral `ToolSafety`/`ToolSideEffect`、`AgentBudget`（配额）、`RunSuspension`/`ResumeCommand`、`SessionBranch`/`RewindResult`、`TaskHandle`/output cursor、`governance/`（审计/脱敏）及 scope-keyed MCP lifecycle。
 - **每个 agent 包提供（领域特定）**：领域工具（`DubboInvokeTool`/`EsReadTool`…）、终结工具 schema、领域 VO（交接载体，如 `DiagnosisPlan`，未来 `Patch`/`ReviewVerdict`）、payload→VO 映射、**自己的 orchestrator**。
 - **编排不下沉 kernel**：诊断循环（假设→取证→更新计划）与写码循环（拆任务→改→评审→打回）是不同领域工作流 = 业务规则，按分层纪律留在各包 application 层。kernel 只给积木（`SubAgentTool`/`StructuredOutputTool`），不给工作流——内置某种编排会被某个领域的形状污染。
 
@@ -126,4 +127,5 @@ interfaces/cli  →  application  →  domain  ←  infrastructure
 3. **scope-keyed MCP lifecycle（S10 #49，已完成）**：`McpServerManager` 按 `(SecretScope, serverId)` 隔离认证 session，`ToolCatalog` 原子发布动态 generation，大目录延迟暴露；MCP 工具必须与本地工具共用 permission/interceptor/output/event/ordered-settle 路径，annotation 不能绕过本地 deny，断线不能 replay 当前调用。
 4. **scoped background runtime（S10 #50，已完成）**：`TaskHandle` 独占单任务 state/completion/append-only output，`TaskScope=(RunId, WorkspaceId)` 强制 ownership；启动即时 settle，status/read/stop 走新工具调用。进程树、artifact projection、脱敏/TTL/size 与 run-stop cleanup 各由 launcher/policy/port/interceptor 收敛，不在 executor 增加 process 分支。
 5. **resumable run suspension（S10 #51，已完成）**：`RunSuspension`/`ResumeCommand` 是 CLI/Web 共用 typed contract；完整 permission batch 在执行前一次规划，ASK 持久化后返回 waiting。token 以 digest 定位并原子 single-use claim，approval 首段不污染 Conversation，input answer 作为新 event/message；CLI 在首段结束后提示并以新 RunId 恢复。
-6. **`AgentManifest`（S10 #54）**：agent 自描述（id / description / entryPoint / requiredConfigKeys），让运行时/CLI 发现与派发，取代 `AgentKitApplication.main` 手工 wiring。等 #47–#53 基座稳定后实施，不引入反射扫描或插件子系统。
+6. **append-only session branch（S10 #52，已完成）**：fork/rewind 引用 immutable run event pointer 并只创建 child branch；`FileWrite`/`FileEdit` 写前捕获 owner-scoped checkpoint，rewind 逆序补偿且显式返回 unrestored/residual。一般 mutating、Bash/MCP 默认 non-reversible，worktree/通用事务不下沉 kernel。
+7. **`AgentManifest`（S10 #54）**：agent 自描述（id / description / entryPoint / requiredConfigKeys），让运行时/CLI 发现与派发，取代 `AgentKitApplication.main` 手工 wiring。等 #47–#53 基座稳定后实施，不引入反射扫描或插件子系统。

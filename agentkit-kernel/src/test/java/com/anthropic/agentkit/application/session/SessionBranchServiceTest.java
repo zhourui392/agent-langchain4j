@@ -130,6 +130,67 @@ class SessionBranchServiceTest {
     }
 
     @Test
+    void fileCheckpointsAreRestoredInReverseSideEffectOrder() throws IOException {
+        Fixture fixture = fixture("checkpoint-order");
+        Path file = fixture.workspace().resolve("ordered.txt");
+        Files.writeString(file, "zero");
+        ToolResult first = executeWrite(fixture, file, "one");
+        ToolResult second = executeWrite(fixture, file, "two");
+        CheckpointId firstId = checkpointOf(first);
+        CheckpointId secondId = checkpointOf(second);
+        appendTwoFileWriteEvents(fixture.events(), first, firstId, second, secondId);
+        SessionBranch parent = fixture.service().createRoot(SCOPE, pointer(8));
+
+        RewindResult rewind = fixture.service().rewind(
+                SCOPE, parent.id(), pointer(1), RewindMode.CONVERSATION_AND_FILES);
+
+        assertThat(Files.readString(file)).isEqualTo("zero");
+        assertThat(rewind.restoredCheckpoints()).containsExactly(secondId, firstId);
+        assertThat(rewind.unrestoredCheckpoints()).isEmpty();
+    }
+
+    @Test
+    void conversationOnlyRewindReportsUnrestoredFileCheckpoint() throws IOException {
+        Fixture fixture = fixture("conversation-only");
+        Path file = fixture.workspace().resolve("note.txt");
+        Files.writeString(file, "before");
+        ToolUseRequest request = writeRequest("write-only");
+        ToolResult result = executeWrite(fixture, file, "after");
+        CheckpointId checkpoint = checkpointOf(result);
+        appendFileWriteEvents(fixture.events(), request, result, checkpoint);
+        SessionBranch parent = fixture.service().createRoot(SCOPE, pointer(5));
+
+        RewindResult rewind = fixture.service().rewind(
+                SCOPE, parent.id(), pointer(1), RewindMode.CONVERSATION_ONLY);
+
+        assertThat(Files.readString(file)).isEqualTo("after");
+        assertThat(rewind.restoredCheckpoints()).isEmpty();
+        assertThat(rewind.unrestoredCheckpoints()).containsExactly(checkpoint);
+    }
+
+    @Test
+    void failedFileRestoreReturnsResidualWithoutDeletingBranch() throws IOException {
+        Fixture fixture = fixture("restore-failure");
+        Path file = fixture.workspace().resolve("note.txt");
+        Files.writeString(file, "before");
+        ToolUseRequest request = writeRequest("write-failure");
+        ToolResult result = executeWrite(fixture, file, "after");
+        CheckpointId checkpoint = checkpointOf(result);
+        appendFileWriteEvents(fixture.events(), request, result, checkpoint);
+        SessionBranch parent = fixture.service().createRoot(SCOPE, pointer(5));
+        Files.delete(fixture.checkpoints().pathFor(checkpoint));
+
+        RewindResult rewind = fixture.service().rewind(
+                SCOPE, parent.id(), pointer(1), RewindMode.CONVERSATION_AND_FILES);
+
+        assertThat(rewind.unrestoredCheckpoints()).containsExactly(checkpoint);
+        assertThat(rewind.residualSideEffects()).singleElement()
+                .extracting(residual -> residual.toolName())
+                .isEqualTo("FileCheckpoint");
+        assertThat(fixture.branches().load(rewind.branch().id())).isNotEmpty();
+    }
+
+    @Test
     void branchCannotCrossWorkspaceBoundary() {
         Fixture fixture = fixture("scope");
         seedConversation(fixture.events());
@@ -187,6 +248,30 @@ class SessionBranchServiceTest {
         events.append(new RunEvent.ToolInvocationSettled(metadata(5), request.id(), result));
     }
 
+    private static void appendTwoFileWriteEvents(
+            FileRunEventStore events,
+            ToolResult first, CheckpointId firstId,
+            ToolResult second, CheckpointId secondId) {
+        ToolUseRequest firstRequest = writeRequest("write-1");
+        ToolUseRequest secondRequest = writeRequest("write-2");
+        events.append(started(1));
+        events.append(new RunEvent.AssistantTurnReceived(
+                metadata(2), AiMessage.of("write twice", List.of(firstRequest, secondRequest))));
+        appendFileEffect(events, 3, firstRequest, first, firstId);
+        appendFileEffect(events, 6, secondRequest, second, secondId);
+    }
+
+    private static void appendFileEffect(
+            FileRunEventStore events, long sequence,
+            ToolUseRequest request, ToolResult result, CheckpointId checkpoint) {
+        events.append(new RunEvent.ToolInvocationStarted(metadata(sequence), request.id()));
+        events.append(new RunEvent.ToolSideEffectObserved(
+                metadata(sequence + 1), request.id(),
+                new ToolSideEffect.CheckpointedFile(checkpoint)));
+        events.append(new RunEvent.ToolInvocationSettled(
+                metadata(sequence + 2), request.id(), result));
+    }
+
     private static void appendExternalEffectEvents(
             FileRunEventStore events, ToolUseId invocation) {
         ToolUseRequest request = new ToolUseRequest(invocation, "Bash", "{\"command\":\"deploy\"}");
@@ -205,6 +290,16 @@ class SessionBranchServiceTest {
         return ExecutionContext.of(
                 RUN, SESSION, WORKSPACE, workspace,
                 new CancellationToken(), AgentBudget.unlimited());
+    }
+
+    private static CheckpointId checkpointOf(ToolResult result) {
+        return CheckpointId.of(
+                result.metadata().get(FileCheckpointMetadata.CHECKPOINT_ID_KEY));
+    }
+
+    private static ToolUseRequest writeRequest(String id) {
+        return new ToolUseRequest(
+                new ToolUseId(id), "Write", "{\"path\":\"note.txt\"}");
     }
 
     private static RunEvent.RunStarted started(long sequence) {

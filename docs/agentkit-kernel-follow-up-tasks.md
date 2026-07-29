@@ -1,6 +1,6 @@
 # AgentKit Kernel：非高优先级与后续 Agent Runtime 任务
 
-> 状态：`#47–#51` 已完成，`#52` 进行中（Red）；随后按 `#53 → #54 → #55` 继续交付，`#56` 保持条件触发候选
+> 状态：`#47–#52` 已完成，下一项为 `#53`；随后按 `#54 → #55` 继续交付，`#56` 保持条件触发候选
 >
 > 审计日期：2026-07-29
 >
@@ -56,7 +56,7 @@
                  └─→ #55 CLI composition cleanup
 ```
 
-建议交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`；当前 `#47–#51` 已完成，`#52` 已进入 Red。`#56` 独立按日志规模或多 writer 需求触发，不为“对齐产品功能表”提前实现没有消费方的扩展。
+建议交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`；当前 `#47–#52` 已完成，下一项为 `#53`。`#56` 独立按日志规模或多 writer 需求触发，不为“对齐产品功能表”提前实现没有消费方的扩展。
 
 ## 4. 变化点地图
 
@@ -67,7 +67,7 @@
 | 外部工具服务器 | `McpToolAdapter`、scope-keyed server/session 与 context-aware `ToolCatalog` 已落地 | `McpProtocolMapper` + `McpCatalogPolicy` + server lifecycle | #49（已完成） |
 | 长命令和大输出 | scoped `TaskHandle`、增量 cursor、进程树回收、受治理 artifact 已落地 | `BackgroundTaskLauncher` + output projection + `ArtifactStore` | #50（已完成） |
 | 用户问题和计划批准 | typed suspension、完整 permission preflight、单次 token claim 与 CLI host adapter 已落地 | `RunSuspension` + `RunSuspensionStore` + `ResumeCommand` | #51（已完成） |
-| fork/rewind/checkpoint | `ChatMemoryStore` 消息快照 | event-log branch + checkpoint provider | #52 |
+| fork/rewind/checkpoint | immutable parent pointer、append-only branch journal、typed side effect 与文件补偿已落地 | `SessionBranchService` + `FileCheckpointProvider` | #52（已完成） |
 | provider retry/fallback | provider factory、异常文本、调用入口 | `ModelPolicy` / `RetryPolicy` | #53 |
 | Agent 发现与派发 | 手工 wiring、模块专属 builder | `AgentManifest`/registry（平台层） | #54 |
 | CLI 命令和取消接线 | `AgentKitApplication.main`、slash commands | CLI composition root | #55 |
@@ -456,7 +456,7 @@ sealed interface RunSuspension {
 
 ### #52 [Kernel-TDD, P3] 高级 session fork / checkpoint / rewind
 
-**状态**：进行中（Red，2026-07-29）。
+**状态**：已完成（2026-07-29）；Red/Green/Refactor 三提交交付，实施状态以 `TASKLIST.md` 为准。
 
 **Goal**
 
@@ -508,6 +508,25 @@ sealed interface RunSuspension {
 - 用户可以区分“仅恢复 conversation”“恢复 kernel 文件编辑”“外部副作用无法撤销”。
 - event history 保持 append-only，可审计。
 - 不承诺通用 transaction/rollback。
+
+**完成后领域建模复核（2026-07-29）**
+
+- Summary：`SessionBranch` 已成为不可变 parent point/head 的聚合投影，fork/rewind 只创建新 branch journal，旧 run/branch 文件保持字节级不变。`RewindResult` 将 conversation、已恢复/未恢复 checkpoint 与 external residual 分开返回，kernel 不再把消息回退包装成通用副作用回滚。
+- Domain Concept Map：`SessionBranch` 是聚合根；`SessionBranchId`、`SessionBranchScope`、`RunEventPointer`、`BranchPoint`、`CheckpointId`/`CheckpointOwner` 是 VO；`BranchOrigin`/`RewindMode` 收敛合法状态；`ToolSideEffect.CheckpointedFile|NonReversible` 是 typed fact；`SessionBranchStore`、`FileCheckpointProvider` 与既有 `RunEventStore` 是独立 port。
+- Aggregate Boundary：branch file 只接受一次 `BranchCreated`，以 owner-only JSONL 保存完整不可变 metadata；父 branch 仅按 `(branchId, runId, sequence)` 引用，不参与 child 写入。run facts、branch journal 与 checkpoint snapshot 是三个介质边界；application 先保存新 branch，再执行显式文件补偿，失败不会回删审计事实或伪装成跨介质原子事务。
+- Invariants：目标 run event 必须存在且 session/workspace 与 branch 完全匹配；目标 sequence 不能越过 parent head；错 scope 与 unknown branch 统一 unavailable；rewind 只新增 branch，不改 parent；多个 checkpoint 按 side-effect 逆序恢复；conversation-only 把 checkpoint 放进 `unrestoredCheckpoints`；恢复失败继续返回 branch、unrestored 与 residual；read-only 工具无 side-effect event，默认 mutating/Bash/MCP 是 non-reversible；FileWrite/Edit 只有拿到写前 checkpoint 才产生 checkpointed fact。
+- Variation Point Map：branch 介质在 `SessionBranchStore`，文件内容/存在性/mtime 补偿在 `FileCheckpointProvider`，tool effect 分类在 provider-neutral `ToolSafety.reversibility`，事实持久化在 `ToolSideEffectObserved`，conversation 继续复用 `RunEventProjector`。CLI 组合根只注入本地 checkpoint provider；具体 fork/rewind 命令展示留 #55，worktree 继续属于 coding/platform。
+- Refactor Signals：`ExecutionContext` 现显式携带 SessionId，checkpoint owner 不再由全局推断；`TruncatingTool`/`GovernedTool` 透传 delegate safety，避免装饰器把 checkpointed mutation 降级；checkpoint/branch 目录分别尝试 `0700`、文件 `0600`，opaque ID 以安全编码派生文件名。完整 checkpoint payload 为本机 L0 恢复所需，和 suspension 一样依赖 owner-only 保护而非审计脱敏。
+- Remaining Limitations：当前补偿只覆盖 kernel 自己捕获的普通文件内容、存在性与 mtime；不覆盖目录树、ACL、symlink、Bash/MCP/数据库/远端 API、后台进程或 worktree merge。branch 创建/选择尚无 CLI 命令，按任务边界留 #55；多 writer fencing、索引和 retention 仍只在 #56 的真实规模条件触发。
+
+| 评分维度 | 完成后 | 证据 |
+|---|---:|---|
+| 聚合边界是否清晰 | 3/3 | branch、run facts 与 checkpoint 三个介质/一致性边界显式分离 |
+| 变化是否被收敛 | 3/3 | journal、projection、checkpoint、effect classification 与 host wiring 各守单一变化轴 |
+| 不变量是否可被模型守护 | 3/3 | typed scope/pointer/origin/mode、immutable create、逆序补偿与 residual 结果 |
+| 行为是否与模型一致 | 3/3 | rewind 创建 child、旧历史字节不变，文件恢复与外部残余分别报告 |
+| 设计是否支持下一轮需求变化 | 3/3 | port 可替换介质，typed event 可供 CLI/Web 使用，同时拒绝通用事务/worktree 下沉 |
+| **总分** | **15/15** | 五个 Red 场景及逆序、部分失败、codec、owner/path、安全分类与 CLI wiring 均有测试 |
 
 **blockedBy**：#43、#46；若需后台进程状态，还 blockedBy #50。
 

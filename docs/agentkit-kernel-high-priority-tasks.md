@@ -43,11 +43,11 @@
 | 运行结果 | executor 返回 `AgentRunResult`，含 stop reason、payload、usage 和预算消费 | stop reason、usage、取消、超时、任务结果都是一等运行结果 | 基础终态已补齐，主动取消/超时见 #44 |
 | LLM 取消 | `LlmCall` 提供 completion/cancel；deadline、provider/tool timeout、late callback 隔离均由 run scope 统一控制 | 运行取消应终止正在进行的模型/工具 I/O | 已补齐 kernel 终态与 best-effort provider 取消；SDK 无原生 cancel handle 的限制已记录 |
 | 上下文 | executor 每次主 LLM 调用前统一执行策略；显式边界、单次 overflow 恢复与全局工具输出限制已落地 | 成熟 runtime 在每轮调用前治理上下文，并可从 overflow 恢复 | 已补齐运行期治理；事件恢复见 #46 |
-| 会话恢复 | per-run append-only `RunEventStore`；settled 不重放、in-flight 标 UNKNOWN；终态/usage/compaction 可投影 | 支持 resume/fork/checkpoint，并区分已完成和 in-flight action | 安全 run resume 已补齐；fork/rewind 与 CLI 新入口后置 |
+| 会话恢复 | per-run append-only `RunEventStore`；#52 已补 immutable branch point、append-only branch journal、kernel 文件 checkpoint 与 residual side effect | 支持 resume/fork/checkpoint，并区分已完成和 in-flight action | runtime fork/rewind/checkpoint 基座已补齐；CLI branch UX 留 #55 |
 | 子 Agent | S10 #47 已补 `AgentSpec`、有界 runtime/handle、独立 RunId/取消、共享预算、follow-up 与 terminal payload；#48 已补 parent/child typed lifecycle correlation | 支持角色、模型、预算、取消、跟进和独立生命周期 | runtime 与 in-process lifecycle 基座已补齐 |
 | MCP / hooks / background / waiting | #48 已补 typed in-process hook；#49 已补 scope-keyed MCP lifecycle；#50 已补 scoped TaskHandle；#51 已补 durable suspension、原子 resume token 与异步 CLI host adapter | 两者均提供 MCP、生命周期扩展、长任务管理及跨请求批准能力 | hook/MCP/background/waiting runtime 基座均已补齐 |
 
-成熟度是定性判断，不是兼容性百分比承诺。审计开始时的估计约为成熟 Claude Code / Codex runtime 的 **55%–65%**；完成 `#40–#46` 后，异常、scope、安全、取消、上下文和恢复这组首要控制面缺口已关闭，S10 #47–#51 又补齐通用子 Agent、typed in-process lifecycle、受治理的 MCP 工具服务器、scoped background runtime 与可恢复 waiting states。本文不重新给出百分比，因为剩余差异主要是 fork/rewind、模型策略和宿主产品能力，是否实现取决于项目边界而非单一“完成度”。
+成熟度是定性判断，不是兼容性百分比承诺。审计开始时的估计约为成熟 Claude Code / Codex runtime 的 **55%–65%**；完成 `#40–#46` 后，异常、scope、安全、取消、上下文和恢复这组首要控制面缺口已关闭，S10 #47–#52 又补齐通用子 Agent、typed in-process lifecycle、受治理的 MCP 工具服务器、scoped background runtime、可恢复 waiting states 与 append-only fork/rewind/checkpoint。本文不重新给出百分比，因为剩余差异主要是模型策略和宿主产品能力，是否实现取决于项目边界而非单一“完成度”。
 
 ## 4. 领域模型审计
 

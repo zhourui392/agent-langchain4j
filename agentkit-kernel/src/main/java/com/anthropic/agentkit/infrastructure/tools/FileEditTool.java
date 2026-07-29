@@ -55,6 +55,11 @@ public final class FileEditTool implements Tool {
     }
 
     public FileEditTool(
+            FileStateCache fileStateCache, FileCheckpointProvider checkpoints) {
+        this(fileStateCache, new WorkspaceBoundary(), checkpoints);
+    }
+
+    public FileEditTool(
             FileStateCache fileStateCache, WorkspaceBoundary boundary,
             FileCheckpointProvider checkpoints) {
         this.fileStateCache = Objects.requireNonNull(fileStateCache, "fileStateCache");

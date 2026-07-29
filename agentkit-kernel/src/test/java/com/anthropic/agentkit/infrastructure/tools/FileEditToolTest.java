@@ -3,11 +3,15 @@ package com.anthropic.agentkit.infrastructure.tools;
 import com.anthropic.agentkit.domain.agent.AgentBudget;
 import com.anthropic.agentkit.domain.agent.RunId;
 import com.anthropic.agentkit.domain.agent.WorkspaceId;
+import com.anthropic.agentkit.domain.checkpoint.CheckpointId;
+import com.anthropic.agentkit.domain.checkpoint.CheckpointOwner;
+import com.anthropic.agentkit.domain.checkpoint.FileCheckpointMetadata;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.ToolArguments;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.infrastructure.tools.support.FileStateCache;
+import com.anthropic.agentkit.infrastructure.checkpoint.FileSystemCheckpointProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -131,6 +135,27 @@ class FileEditToolTest {
 
         assertThat(result.success()).isFalse();
         assertThat(result.content()).contains("not found");
+    }
+
+    @Test
+    void successfulEditPublishesRestorableCheckpoint(@TempDir Path dir) throws IOException {
+        Path file = writeFile(dir, "a.txt", "before");
+        FileStateCache cache = new FileStateCache();
+        ExecutionContext context = context(dir);
+        cache.recordRead(context, file);
+        FileSystemCheckpointProvider checkpoints =
+                new FileSystemCheckpointProvider(dir.resolve(".checkpoints"));
+        FileEditTool tool = new FileEditTool(cache, checkpoints);
+
+        ToolResult result = tool.execute(ToolArguments.of(Map.of(
+                "path", file.toString(), "old_string", "before",
+                "new_string", "after")), context);
+        CheckpointId checkpoint = CheckpointId.of(
+                result.metadata().get(FileCheckpointMetadata.CHECKPOINT_ID_KEY));
+        checkpoints.restore(new CheckpointOwner(
+                context.sessionId(), context.workspaceId()), checkpoint);
+
+        assertThat(Files.readString(file)).isEqualTo("before");
     }
 
     private static Path writeFile(Path dir, String name, String content) throws IOException {

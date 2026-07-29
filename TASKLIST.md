@@ -20,7 +20,7 @@
 | S8 持久化 | #36–38 | 0.5d | JSONL store + /resume + SessionId |
 | MVP-Gate | #39 | — | 端到端冒烟，打 `v0.1.0-mvp` |
 | S9 Runtime Hardening | #40–46 | 已完成（7/7） | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
-| S10 Runtime Extensions | #47–55 | 进行中（5/9） | 子 Agent、interceptor、MCP、后台任务、暂停恢复、分支、模型策略、manifest、CLI |
+| S10 Runtime Extensions | #47–55 | 进行中（6/9） | 子 Agent、interceptor、MCP、后台任务、暂停恢复、分支、模型策略、manifest、CLI |
 | **MVP 合计** | — | **≈8 人天** | — |
 
 ## 依赖图
@@ -835,7 +835,7 @@ S0 (1→2→3)
 
 ### #52 [S10-Kernel-TDD] 高级 session fork / checkpoint / rewind （blockedBy: 43, 46；涉及后台进程时再 blockedBy: 50）
 
-**状态**：进行中（Red）。
+**状态**：已完成（2026-07-29）。
 
 **Red**：fork 引用不可变 parent sequence；rewind 新建 branch 不删历史；kernel 文件 checkpoint 可恢复；报告不可逆副作用；branch 不可跨 workspace。
 

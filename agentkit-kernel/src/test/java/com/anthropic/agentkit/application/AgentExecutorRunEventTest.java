@@ -21,6 +21,7 @@ import com.anthropic.agentkit.domain.port.RunEventStore;
 import com.anthropic.agentkit.domain.run.RunEvent;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.domain.tool.ToolResult;
+import com.anthropic.agentkit.domain.tool.ToolSideEffect;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
 import com.anthropic.agentkit.domain.tool.ToolUseRequest;
 import com.anthropic.agentkit.testsupport.FakeTool;
@@ -70,6 +71,28 @@ class AgentExecutorRunEventTest {
         assertThat(result.stopReason()).isEqualTo(StopReason.PERSISTENCE_ERROR);
         assertThat(write.callCount()).isZero();
         assertThat(store.events).hasSize(3);
+    }
+
+    @Test
+    void mutatingToolPersistsNonReversibleSideEffectFact() {
+        MemoryStore store = new MemoryStore();
+        FakeTool write = FakeTool.returning("Write", "changed");
+        StubLlmClient llm = new StubLlmClient()
+                .enqueue(toolTurn("Write")).enqueue(AiMessage.text("done"));
+        Conversation conversation = conversation("side-effect-event");
+
+        AgentRunResult result = executor(
+                llm, new ToolRegistry().register(write), store)
+                .run(conversation, runContext(conversation)).join();
+
+        assertThat(result.stopReason()).isEqualTo(StopReason.MODEL_COMPLETED);
+        assertThat(store.events)
+                .filteredOn(RunEvent.ToolSideEffectObserved.class::isInstance)
+                .singleElement().satisfies(event -> {
+                    ToolSideEffect effect = ((RunEvent.ToolSideEffectObserved) event).sideEffect();
+                    assertThat(effect).isEqualTo(new ToolSideEffect.NonReversible(
+                            "Write", "external side effects are not reversible"));
+                });
     }
 
     @Test
