@@ -1,6 +1,6 @@
 # AgentKit Kernel：非高优先级与后续 Agent Runtime 任务
 
-> 状态：`#47–#49` 已完成，`#50` 进行中（Red），`#51–#55` 按 S10 顺序继续交付；`#56` 保持条件触发候选
+> 状态：`#47–#50` 已完成，下一项为 `#51`；`#52–#55` 按 S10 顺序继续交付，`#56` 保持条件触发候选
 >
 > 审计日期：2026-07-29
 >
@@ -56,7 +56,7 @@
                  └─→ #55 CLI composition cleanup
 ```
 
-建议交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`；当前 `#47–#49` 已完成，下一项是 `#50/#51`。`#56` 独立按日志规模或多 writer 需求触发，不为“对齐产品功能表”提前实现没有消费方的扩展。
+建议交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`；当前 `#47–#50` 已完成，下一项是 `#51`。`#56` 独立按日志规模或多 writer 需求触发，不为“对齐产品功能表”提前实现没有消费方的扩展。
 
 ## 4. 变化点地图
 
@@ -65,7 +65,7 @@
 | 角色 prompt、工具、模型、预算 | `StructuredAgent` 构造参数、`SubAgentTool` 固定逻辑、各 agent 包 | `AgentSpec` + `SubAgentRuntime` | #47 |
 | 运行前后干预 | `AgentEventListener`、permission、各入口手工调用 | typed `AgentInterceptor` | #48 |
 | 外部工具服务器 | `McpToolAdapter`、scope-keyed server/session 与 context-aware `ToolCatalog` 已落地 | `McpProtocolMapper` + `McpCatalogPolicy` + server lifecycle | #49（已完成） |
-| 长命令和大输出 | 同步 Bash、一次性结果字符串 | `TaskHandle` + artifact/output store | #50 |
+| 长命令和大输出 | scoped `TaskHandle`、增量 cursor、进程树回收、受治理 artifact 已落地 | `BackgroundTaskLauncher` + output projection + `ArtifactStore` | #50（已完成） |
 | 用户问题和计划批准 | permission ASK、CLI prompt、自然语言约定 | `RunSuspension` / waiting stop reasons | #51 |
 | fork/rewind/checkpoint | `ChatMemoryStore` 消息快照 | event-log branch + checkpoint provider | #52 |
 | provider retry/fallback | provider factory、异常文本、调用入口 | `ModelPolicy` / `RetryPolicy` | #53 |
@@ -285,13 +285,13 @@ pre-hook 返回 typed decision，如 `Continue`、`Deny(reason)`、`ReplaceConte
 
 ### #50 [Kernel-TDD, P2] Background `TaskHandle` + output artifact store
 
-**状态**：进行中（Red）；先固定 task scope、单调 cursor、即时 settle、process-tree cancellation 与 artifact ownership 合同。
+**状态**：已完成（2026-07-29）；Red/Green/Refactor 三提交交付，实施状态以 `TASKLIST.md` 为准。
 
 **Goal**
 
 让长时间 Bash/外部工具可以后台运行、增量读取、监控和停止；大输出保存在受控 artifact store，模型上下文只接收 preview/reference。
 
-**当前问题**
+**实施前问题（已关闭）**
 
 - `BashTool` 同步等待进程结束并一次性返回完整 stdout/stderr。
 - 没有 background task ID、status、partial output cursor、stop、ownership 或过期清理。
@@ -342,7 +342,26 @@ interface TaskHandle {
 - artifact store 有大小、TTL、scope 和脱敏策略。
 - 不实现分布式队列或跨机器 worker。
 
-**blockedBy**：#41、#43、#44、#45、#46。
+**完成后领域建模审计**
+
+- Summary：单个 `(TaskId, TaskScope)` 任务成为明确一致性边界；启动命令即时 settle，后台 completion 只更新 task projection，不再接触原 Conversation。process、artifact 与 run-stop 分别经 port、policy 和 typed interceptor 收敛，未向 `AgentExecutor` 添加后台进程分支。
+- Domain Concept Map：`TaskHandle` 是任务聚合行为边界，`TaskId`/`TaskScope`/`OutputCursor`/`ArtifactReference` 是 VO，`TaskSnapshot`/`TaskStopResult` 是只读命令结果；`BackgroundTaskService` 是 scope registry 与用例协调器，`BackgroundTaskLauncher`/`ArtifactStore` 是外部状态 port。
+- Aggregate Boundary：state、completion 和 append-only output 由一个 handle 独占；registry 只按显式 run/workspace scope 暴露 handle。artifact 是 completion 后的独立一致性边缘，写失败只降级为明确 omission，不把已成功任务伪装成失败，也不发布虚假 reference。
+- Invariants：`TaskState.transitionTo` 与 terminal claim 保证终态不回退且 completion 恰好一次；同 cursor 重读稳定、next cursor 单调；异 scope 统一表现为 unknown；scope close 先封口再回收，不能并发遗留新任务；cancel/timeout 只允许一个终态获胜并回收所有已观察进程；artifact 写前治理且受 scope/size/TTL/owner-only 权限约束。
+- Variation Point Map：命令启动在 `BackgroundTaskLauncher`，process-tree 策略在 `ProcessTreeTerminator`，active/terminal projection 在 `BackgroundTaskOutputProjector`，preview/reference 在 `BackgroundTaskPolicy`，脱敏在 `ArtifactContentPolicy`，介质在 `ArtifactStore`，run-stop 清理在 `BackgroundTaskCleanupInterceptor`。普通工具若已截断，artifact policy 不会把残缺正文重新标成完整输出。
+- Refactor Signals：`TaskStopResult` 取代固定 `CANCELLED` 投影；`ArtifactStoreException` 上移到 domain port 合同；默认 CLI 组合根显式管理 launcher/service 生命周期并注册四个 task tool。后续若出现跨 run 持续任务需求，应新建有 durable ownership 的任务模型，不能放宽当前 RunId scope。
+- Review Questions：当前 L0 合同有意在 run stop 时回收任务；不支持 scheduler、跨机器 worker、跨 run 持续任务或通用进程沙箱。artifact 到期采用读时拒绝与 best-effort 删除，若规模触发集中清理需求，应另立 retention 任务。
+
+| 评分维度 | 完成后 | 证据 |
+|---|---:|---|
+| 聚合边界是否清晰 | 3/3 | handle 独占任务状态/output/completion，service 只管 scope registry 与 projection |
+| 变化是否被收敛 | 3/3 | launcher、terminator、content/preview policy、artifact port、cleanup interceptor 各有单一变化轴 |
+| 不变量是否可被模型守护 | 3/3 | typed state transition、terminal CAS、scope ownership/close fence、cursor VO 与 artifact reference VO |
+| 行为是否与模型一致 | 3/3 | start/status/read/stop 均为普通配对工具调用，stop 返回实际 terminal snapshot，completion 不回写 Conversation |
+| 设计是否支持下一轮变化 | 3/3 | 显式 ExecutionContext/TaskScope 与 port 可替换介质/launcher，同时明确拒绝分布式与跨 run 语义漂移 |
+| **总分** | **15/15** | 从实施前 6/15 提升，所有 DoD 均有定向测试与全仓门禁覆盖 |
+
+**blockedBy**：#41、#43、#44、#45、#46、#47。
 
 ---
 

@@ -31,6 +31,6 @@ public final class TaskStopTool implements Tool {
     @Override
     public ToolResult execute(ToolArguments arguments, ExecutionContext context) {
         TaskId id = TaskId.of(arguments.getString("task_id"));
-        return BackgroundTaskToolJson.stopped(id, tasks.stop(id, context));
+        return BackgroundTaskToolJson.stopped(tasks.stop(id, context));
     }
 }

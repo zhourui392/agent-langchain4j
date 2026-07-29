@@ -4,6 +4,7 @@ import com.anthropic.agentkit.application.AgentExecutor;
 import com.anthropic.agentkit.application.SessionResumer;
 import com.anthropic.agentkit.application.SystemPromptComposer;
 import com.anthropic.agentkit.application.io.TerminalIo;
+import com.anthropic.agentkit.application.task.BackgroundTaskService;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.context.ContextProvider;
 import com.anthropic.agentkit.domain.conversation.SessionId;
@@ -13,6 +14,8 @@ import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.port.SecretProvider;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.infrastructure.memory.FileChatMemoryStore;
+import com.anthropic.agentkit.infrastructure.task.FileArtifactStore;
+import com.anthropic.agentkit.infrastructure.task.ProcessBackgroundTaskLauncher;
 import com.anthropic.agentkit.infrastructure.tools.support.FileStateCache;
 import com.anthropic.agentkit.testsupport.io.ScriptedTerminalIo;
 import org.junit.jupiter.api.Test;
@@ -24,7 +27,10 @@ import java.io.PrintStream;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -80,6 +86,24 @@ class AgentKitApplicationTest {
             assertThat(providers).extracting(ContextProvider::key).contains("skills");
         } finally {
             System.clearProperty("AK_SKILLS_DIR");
+        }
+    }
+
+    @Test
+    void backgroundRuntimeToolsAreRegisteredByCompositionRoot(@TempDir Path tempDir)
+            throws Exception {
+        try (ProcessBackgroundTaskLauncher launcher = new ProcessBackgroundTaskLauncher();
+             BackgroundTaskService tasks = new BackgroundTaskService(
+                     launcher, new FileArtifactStore(
+                             tempDir, 1_024, Duration.ofMinutes(5), Clock.systemUTC()))) {
+            ToolRegistry registry = (ToolRegistry) invoke("registerTools",
+                    new Class<?>[]{FileStateCache.class, Optional.class,
+                            BackgroundTaskService.class},
+                    new FileStateCache(), Optional.empty(), tasks);
+
+            assertThat(registry.names()).containsExactly(
+                    "Bash", "Read", "Write", "Edit", "Glob", "Grep",
+                    "BashBackground", "TaskStatus", "TaskRead", "TaskStop");
         }
     }
 

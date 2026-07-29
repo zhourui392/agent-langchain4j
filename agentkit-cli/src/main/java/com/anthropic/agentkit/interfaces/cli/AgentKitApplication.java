@@ -4,20 +4,25 @@ import com.anthropic.agentkit.application.AgentExecutor;
 import com.anthropic.agentkit.application.PermissionService;
 import com.anthropic.agentkit.application.SessionResumer;
 import com.anthropic.agentkit.application.SystemPromptComposer;
+import com.anthropic.agentkit.application.TerminalIoPrompter;
+import com.anthropic.agentkit.application.context.ContextPolicy;
+import com.anthropic.agentkit.application.interception.AgentInterceptors;
+import com.anthropic.agentkit.application.io.TerminalIo;
+import com.anthropic.agentkit.application.task.ArtifactContentPolicy;
+import com.anthropic.agentkit.application.task.BackgroundTaskCleanupInterceptor;
+import com.anthropic.agentkit.application.task.BackgroundTaskService;
+import com.anthropic.agentkit.application.tool.ArtifactToolOutputPolicy;
+import com.anthropic.agentkit.application.tool.LimitedToolOutputPolicy;
 import com.anthropic.agentkit.domain.agent.AgentBudget;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
-import com.anthropic.agentkit.application.TerminalIoPrompter;
-import com.anthropic.agentkit.application.io.TerminalIo;
 import com.anthropic.agentkit.domain.context.ContextProvider;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
-import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.port.SecretProvider;
 import com.anthropic.agentkit.domain.skill.SkillCatalog;
-import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.infrastructure.config.AppConfig;
 import com.anthropic.agentkit.infrastructure.config.ConfigLoader;
@@ -34,19 +39,27 @@ import com.anthropic.agentkit.infrastructure.permission.DefaultPermissionPolicy;
 import com.anthropic.agentkit.infrastructure.skill.DirectorySkillSource;
 import com.anthropic.agentkit.infrastructure.skill.SkillCatalogContextProvider;
 import com.anthropic.agentkit.infrastructure.skill.SkillFrontmatterParser;
+import com.anthropic.agentkit.infrastructure.task.FileArtifactStore;
+import com.anthropic.agentkit.infrastructure.task.ProcessBackgroundTaskLauncher;
 import com.anthropic.agentkit.infrastructure.tools.BashTool;
+import com.anthropic.agentkit.infrastructure.tools.BackgroundBashTool;
 import com.anthropic.agentkit.infrastructure.tools.FileEditTool;
 import com.anthropic.agentkit.infrastructure.tools.FileReadTool;
 import com.anthropic.agentkit.infrastructure.tools.FileWriteTool;
 import com.anthropic.agentkit.infrastructure.tools.GlobTool;
 import com.anthropic.agentkit.infrastructure.tools.GrepTool;
 import com.anthropic.agentkit.infrastructure.tools.SkillTool;
+import com.anthropic.agentkit.infrastructure.tools.TaskReadTool;
+import com.anthropic.agentkit.infrastructure.tools.TaskStatusTool;
+import com.anthropic.agentkit.infrastructure.tools.TaskStopTool;
 import com.anthropic.agentkit.infrastructure.tools.support.FileStateCache;
 import com.anthropic.agentkit.interfaces.cli.io.JLineTerminalIo;
 
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -62,6 +75,8 @@ public final class AgentKitApplication {
             Use available tools to read, search, and modify files when asked. \
             Always summarize your actions briefly.""";
     private static final String SKILLS_DIR_ENV = "AK_SKILLS_DIR";
+    private static final int ARTIFACT_MAX_CHARACTERS = 1_000_000;
+    private static final Duration ARTIFACT_TTL = Duration.ofHours(1);
 
     private AgentKitApplication() {
     }
@@ -100,9 +115,6 @@ public final class AgentKitApplication {
         Path cwd = Paths.get(System.getProperty("user.dir", "."));
         FileStateCache fileStateCache = new FileStateCache();
         java.util.Optional<SkillCatalog> skills = loadSkills();
-        ToolRegistry tools = registerTools(fileStateCache, skills);
-        log.info("agentkit starting: provider={}, model={}, permissionMode={}, skillsEnabled={}, registeredTools={}",
-                config.provider(), config.model(), config.permissionMode(), skills.isPresent(), tools.names().size());
 
         SystemPromptComposer composer = new SystemPromptComposer(SYSTEM_INSTRUCTIONS, contextProviders(skills));
         FileChatMemoryStore store = new FileChatMemoryStore(SessionPaths.defaultLocation().baseDirectory());
@@ -113,12 +125,18 @@ public final class AgentKitApplication {
         CancellationToken cancel = new CancellationToken();
         SigintHandler sigint = new SigintHandler(cancel, () -> System.exit(130));
 
-        try (JLineTerminalIo terminalIo = JLineTerminalIo.openSystem(historyFile())) {
+        try (BackgroundTaskRuntime background = openBackgroundRuntime();
+             JLineTerminalIo terminalIo = JLineTerminalIo.openSystem(historyFile())) {
+            ToolRegistry tools = registerTools(fileStateCache, skills, background.tasks());
+            log.info("agentkit starting: provider={}, model={}, permissionMode={}, skillsEnabled={}, registeredTools={}",
+                    config.provider(), config.model(), config.permissionMode(),
+                    skills.isPresent(), tools.names().size());
             PermissionService permissions = new PermissionService(
                     new DefaultPermissionPolicy(),
                     new TerminalIoPrompter(terminalIo),
                     config.permissionMode());
-            AgentExecutor executor = new AgentExecutor(llm, tools, permissions, eventStore);
+            AgentExecutor executor = createExecutor(
+                    llm, tools, permissions, eventStore, background);
 
             OutputRenderer renderer = new OutputRenderer(terminalIo);
             terminalIo.writeLine("(permission mode: " + config.permissionMode() + ")");
@@ -149,6 +167,42 @@ public final class AgentKitApplication {
                 .register(new GrepTool());
         skills.ifPresent(catalog -> registry.register(new SkillTool(catalog)));
         return registry;
+    }
+
+    private static ToolRegistry registerTools(
+            FileStateCache fileStateCache,
+            java.util.Optional<SkillCatalog> skills,
+            BackgroundTaskService backgroundTasks) {
+        return registerTools(fileStateCache, skills)
+                .register(new BackgroundBashTool(backgroundTasks))
+                .register(new TaskStatusTool(backgroundTasks))
+                .register(new TaskReadTool(backgroundTasks))
+                .register(new TaskStopTool(backgroundTasks));
+    }
+
+    private static BackgroundTaskRuntime openBackgroundRuntime() {
+        Path root = SessionPaths.defaultLocation().baseDirectory().resolve("artifacts");
+        ProcessBackgroundTaskLauncher launcher = new ProcessBackgroundTaskLauncher();
+        FileArtifactStore artifacts = new FileArtifactStore(
+                root, ARTIFACT_MAX_CHARACTERS, ARTIFACT_TTL, Clock.systemUTC());
+        return new BackgroundTaskRuntime(
+                launcher, new BackgroundTaskService(launcher, artifacts), artifacts);
+    }
+
+    private static AgentExecutor createExecutor(
+            LlmClient llm,
+            ToolRegistry tools,
+            PermissionService permissions,
+            FileRunEventStore eventStore,
+            BackgroundTaskRuntime background) {
+        return new AgentExecutor(
+                llm, tools, permissions, ContextPolicy.standard(llm),
+                ArtifactToolOutputPolicy.of(
+                        LimitedToolOutputPolicy.DEFAULT_MAX_CHARACTERS,
+                        background.artifacts(), ArtifactContentPolicy.redactInlineSecrets()),
+                eventStore,
+                AgentInterceptors.ordered(
+                        new BackgroundTaskCleanupInterceptor(background.tasks())));
     }
 
     private static List<ContextProvider> contextProviders() {
@@ -269,5 +323,17 @@ public final class AgentKitApplication {
         Package pkg = AgentKitApplication.class.getPackage();
         String implementationVersion = pkg.getImplementationVersion();
         return implementationVersion != null ? implementationVersion : "0.2.0";
+    }
+
+    private record BackgroundTaskRuntime(
+            ProcessBackgroundTaskLauncher launcher,
+            BackgroundTaskService tasks,
+            FileArtifactStore artifacts) implements AutoCloseable {
+
+        @Override
+        public void close() {
+            tasks.close();
+            launcher.close();
+        }
     }
 }

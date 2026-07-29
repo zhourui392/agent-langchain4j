@@ -2,12 +2,16 @@ package com.anthropic.agentkit.application.tool;
 
 import com.anthropic.agentkit.application.task.ArtifactContentPolicy;
 import com.anthropic.agentkit.domain.port.ArtifactStore;
+import com.anthropic.agentkit.domain.port.ArtifactStoreException;
+import com.anthropic.agentkit.domain.task.ArtifactLimitExceededException;
 import com.anthropic.agentkit.domain.task.ArtifactReference;
 import com.anthropic.agentkit.domain.task.TaskScope;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.ToolInvocation;
 import com.anthropic.agentkit.domain.tool.ToolOutputMetadata;
 import com.anthropic.agentkit.domain.tool.ToolResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -16,6 +20,9 @@ import java.util.Optional;
 
 /** Persists governed full output before returning a bounded preview and stable reference. */
 public final class ArtifactToolOutputPolicy implements ToolOutputPolicy {
+
+    private static final Logger log = LoggerFactory.getLogger(
+            ArtifactToolOutputPolicy.class);
 
     private final int maxCharacters;
     private final ArtifactStore artifacts;
@@ -46,7 +53,7 @@ public final class ArtifactToolOutputPolicy implements ToolOutputPolicy {
         Objects.requireNonNull(invocation, "invocation");
         Objects.requireNonNull(raw, "raw");
         Objects.requireNonNull(context, "context");
-        if (raw.content().length() <= maxCharacters) {
+        if (raw.content().length() <= maxCharacters || alreadyIncomplete(raw)) {
             return fallback.govern(invocation, raw, context);
         }
         String governed = contentPolicy.govern(raw.content(), context);
@@ -58,7 +65,9 @@ public final class ArtifactToolOutputPolicy implements ToolOutputPolicy {
             String content, ExecutionContext context) {
         try {
             return Optional.of(artifacts.write(TaskScope.from(context), content));
-        } catch (RuntimeException failure) {
+        } catch (ArtifactStoreException | ArtifactLimitExceededException failure) {
+            log.warn("tool output artifact unavailable: failure={}",
+                    failure.getClass().getSimpleName());
             return Optional.empty();
         }
     }
@@ -83,5 +92,10 @@ public final class ArtifactToolOutputPolicy implements ToolOutputPolicy {
         return reference
                 .map(value -> "\n\n[agentkit: full tool output stored as " + value.uri() + "]")
                 .orElse("\n\n[agentkit: remaining tool output omitted; artifact unavailable]");
+    }
+
+    private static boolean alreadyIncomplete(ToolResult result) {
+        String disposition = result.metadata().get(ToolOutputMetadata.DISPOSITION_KEY);
+        return disposition != null && !ToolOutputMetadata.COMPLETE.equals(disposition);
     }
 }

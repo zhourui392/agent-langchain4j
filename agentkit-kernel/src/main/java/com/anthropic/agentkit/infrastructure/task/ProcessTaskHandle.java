@@ -17,7 +17,6 @@ import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Process-backed task aggregate with append-only output and exactly-once completion. */
@@ -28,8 +27,7 @@ final class ProcessTaskHandle implements TaskHandle {
     private final CompletableFuture<ToolResult> completion = new CompletableFuture<>();
     private final AtomicReference<TaskState> state =
             new AtomicReference<>(TaskState.STARTING);
-    private final AtomicBoolean cancellationRequested = new AtomicBoolean();
-    private final AtomicBoolean settled = new AtomicBoolean();
+    private final AtomicReference<TaskState> terminalClaim = new AtomicReference<>();
     private volatile Process process;
     private volatile Thread outputReader;
 
@@ -43,7 +41,7 @@ final class ProcessTaskHandle implements TaskHandle {
                     .directory(spec.workingDirectory().toFile())
                     .redirectErrorStream(true)
                     .start();
-            state.set(TaskState.RUNNING);
+            transitionTo(TaskState.RUNNING);
             outputReader = Thread.ofVirtual().name("agentkit-task-output-" + id()).start(
                     this::drainOutput);
             Thread.ofVirtual().name("agentkit-task-wait-" + id()).start(this::awaitProcess);
@@ -74,12 +72,12 @@ final class ProcessTaskHandle implements TaskHandle {
 
     @Override
     public boolean cancel() {
-        if (state().terminal() || !cancellationRequested.compareAndSet(false, true)) {
+        if (!claimTerminal(TaskState.CANCELLED)) {
             return false;
         }
         ProcessTreeTerminator.terminate(process);
         joinOutputReader();
-        settle(TaskState.CANCELLED, ToolResult.of(
+        completeClaimed(TaskState.CANCELLED, ToolResult.of(
                 ToolResultStatus.CANCELLED, withOutput("cancelled")));
         return true;
     }
@@ -104,29 +102,49 @@ final class ProcessTaskHandle implements TaskHandle {
     }
 
     private void timeOut() {
+        if (!claimTerminal(TaskState.TIMED_OUT)) {
+            return;
+        }
         ProcessTreeTerminator.terminate(process);
         joinOutputReader();
-        settle(TaskState.TIMED_OUT, ToolResult.of(
+        completeClaimed(TaskState.TIMED_OUT, ToolResult.of(
                 ToolResultStatus.TIMEOUT,
                 withOutput("timeout after " + spec.timeout().toMillis() + "ms")));
     }
 
     private void settleFromExit(int exitCode) {
-        if (cancellationRequested.get()) {
-            settle(TaskState.CANCELLED, ToolResult.of(
-                    ToolResultStatus.CANCELLED, withOutput("cancelled")));
-        } else if (exitCode == 0) {
+        if (exitCode == 0) {
             settle(TaskState.COMPLETED, ToolResult.ok(output()));
         } else {
             settle(TaskState.FAILED, ToolResult.error(withOutput("exit " + exitCode)));
         }
     }
 
-    private void settle(TaskState terminal, ToolResult result) {
-        if (settled.compareAndSet(false, true)) {
-            state.set(terminal);
-            completion.complete(result);
+    private boolean settle(TaskState terminal, ToolResult result) {
+        if (!claimTerminal(terminal)) {
+            return false;
         }
+        completeClaimed(terminal, result);
+        return true;
+    }
+
+    private boolean claimTerminal(TaskState terminal) {
+        if (!terminal.terminal()) {
+            throw new IllegalArgumentException("task can settle only in a terminal state");
+        }
+        return terminalClaim.compareAndSet(null, terminal);
+    }
+
+    private void completeClaimed(TaskState terminal, ToolResult result) {
+        if (terminalClaim.get() != terminal) {
+            throw new IllegalStateException("task terminal state was not claimed: " + terminal);
+        }
+        transitionTo(terminal);
+        completion.complete(result);
+    }
+
+    private void transitionTo(TaskState target) {
+        state.updateAndGet(current -> current.transitionTo(target));
     }
 
     private void drainOutput() {
@@ -162,6 +180,10 @@ final class ProcessTaskHandle implements TaskHandle {
         }
         try {
             reader.join(Duration.ofSeconds(1));
+            if (reader.isAlive()) {
+                reader.interrupt();
+                reader.join(Duration.ofMillis(250));
+            }
         } catch (InterruptedException failure) {
             Thread.currentThread().interrupt();
         }

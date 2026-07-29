@@ -5,6 +5,7 @@ import com.anthropic.agentkit.domain.task.TaskId;
 import com.anthropic.agentkit.domain.task.TaskOutputMetadata;
 import com.anthropic.agentkit.domain.task.TaskSnapshot;
 import com.anthropic.agentkit.domain.task.TaskState;
+import com.anthropic.agentkit.domain.task.TaskStopResult;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.domain.tool.ToolOutputMetadata;
 import com.anthropic.agentkit.domain.tool.ToolResultStatus;
@@ -52,12 +53,13 @@ final class BackgroundTaskToolJson {
         return ToolResult.of(ToolResultStatus.SUCCESS, encode(value), metadata);
     }
 
-    static ToolResult stopped(TaskId id, boolean changed) {
+    static ToolResult stopped(TaskStopResult stopped) {
+        TaskSnapshot snapshot = stopped.snapshot();
         Map<String, Object> value = Map.of(
-                "task_id", id.value(),
-                "state", TaskState.CANCELLED.name(),
-                "changed", changed);
-        return result(value, id, TaskState.CANCELLED);
+                "task_id", snapshot.id().value(),
+                "state", snapshot.state().name(),
+                "changed", stopped.changed());
+        return result(value, snapshot.id(), snapshot.state());
     }
 
     private static ToolResult result(

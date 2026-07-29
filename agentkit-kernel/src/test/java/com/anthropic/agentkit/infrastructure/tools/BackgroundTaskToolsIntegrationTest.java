@@ -121,6 +121,24 @@ class BackgroundTaskToolsIntegrationTest {
         }
     }
 
+    @Test
+    void stopToolPreservesAnAlreadyCompletedTaskState() {
+        ControlledLauncher launcher = new ControlledLauncher();
+        try (BackgroundTaskService service = service(launcher)) {
+            ExecutionContext context = context(SessionId.fresh()).executionContext();
+            TaskId id = service.start(new BackgroundTaskRequest(
+                    "test", List.of("unused"), Duration.ofSeconds(30)), context).id();
+            launcher.handle.complete(ToolResult.ok("done"));
+
+            ToolResult stopped = new TaskStopTool(service).execute(
+                    ToolArguments.of(Map.of("task_id", id.value())), context);
+
+            assertThat(stopped.content()).contains("COMPLETED", "\"changed\":false");
+            assertThat(stopped.metadata()).containsEntry(
+                    TaskOutputMetadata.TASK_STATE_KEY, TaskState.COMPLETED.name());
+        }
+    }
+
     private BackgroundTaskService service(BackgroundTaskLauncher launcher) {
         return new BackgroundTaskService(
                 launcher, new NoArtifactStore(), ArtifactContentPolicy.identity(),
@@ -187,7 +205,10 @@ class BackgroundTaskToolsIntegrationTest {
         @Override public CompletionStage<ToolResult> completion() { return completion; }
 
         @Override
-        public boolean cancel() {
+        public synchronized boolean cancel() {
+            if (state.terminal()) {
+                return false;
+            }
             cancelled = true;
             state = TaskState.CANCELLED;
             completion.complete(ToolResult.of(ToolResultStatus.CANCELLED, "cancelled"));

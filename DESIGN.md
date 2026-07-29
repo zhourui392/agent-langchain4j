@@ -798,8 +798,27 @@ MCP server 是外部工具来源，不是第二条 agent 执行通道。远端�
 
 ---
 
+### 16.18 Scoped Background Task 与受治理 Artifact（2026-07-29）
+
+长命令不能让原始 tool-use 跨 LLM/user 回合保持 pending。后台启动本身是一个立即完成的普通工具调用，结果只发布 scoped `TaskId`；后续 status/read/stop 各自形成新的 permission/interceptor/output/event/ordered-settle 调用。后台 completion 只更新任务投影和可选 artifact，绝不再次 append 原 Conversation。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| 聚合与 ownership | 单个 `TaskHandle` 独占 state、completion 与 append-only output；`TaskScope=(RunId, WorkspaceId)` 是 registry、artifact 和操作授权的一致边界 | 另一个 run/workspace 对 task 统一得到 unknown，不能通过 TaskId 探测、读取或停止；scope close 先封口再回收，不能并发遗留新任务 |
+| 启动与工作目录 | `BackgroundTaskLauncher` 接收完整 `TaskLaunchSpec`，cwd 与 timeout 从 `ExecutionContext` 显式传入，timeout 取请求值与 `toolWait` 的较小值 | domain 不持有 `Process`/PID；实现不读取进程 CWD/`user.dir`；未来可替换 launcher 而不改 application 协议 |
+| 状态与竞态 | `TaskState.transitionTo` 只允许 STARTING→RUNNING/terminal、RUNNING→terminal；process handle 以单一 terminal claim 决定 complete/fail/cancel/timeout | completion 恰好一次，cancel 与 timeout 不能互相覆盖或让 terminal state 回退；`TaskStopResult` 返回实际快照，不把已完成任务伪报为 CANCELLED |
+| 增量输出 | `OutputCursor` 是零起点、单调的字符位置，`readSince(cursor)` 返回稳定 slice 与 next cursor | 同一 cursor 重读不漂移，后续读取不重复已消费内容；非法越界 cursor 明确失败，不静默跳过输出 |
+| 进程树回收 | `ProcessTreeTerminator` 捕获并持续补充已观察 descendants，先 children 后 root 发 graceful destroy，再对 survivor 强制回收；每阶段使用总 grace deadline | run cancel、显式 TaskStop、timeout、scope close 与 runtime close 复用同一回收策略；这是 L0 best-effort 跨平台进程树回收，不宣称容器级隔离 |
+| 输出投影 | `BackgroundTaskOutputProjector` 统一 active/terminal snapshot；`ArtifactContentPolicy` 在 durable write 前治理正文，`BackgroundTaskPolicy` 只负责 bounded preview/reference 文案 | artifact 失败只发布明确 omission，不改变已成功任务的 terminal state；治理失败不回显 raw output；已截断的普通工具正文不能再次伪装成“完整 artifact” |
+| Artifact 合同 | domain `ArtifactStore` port 使用显式 `TaskScope`，`ArtifactReference` 只允许 `artifact://`；文件实现以 scope/id digest 派生路径并限制 characters、TTL、目录 `0700`、文件 `0600` | URI 不泄漏文件路径或 workspace 名；过期/异 scope读取为空；介质错误通过稳定 `ArtifactStoreException` 分类，日志只记录失败类型、不记录内容或异常 message |
+| 生命周期接线 | `BackgroundTaskCleanupInterceptor` 在 run stop 清理该 scope；CLI 组合根显式管理 launcher/service，注册 `BashBackground`、`TaskStatus`、`TaskRead`、`TaskStop` 并安装 artifact output policy | `AgentExecutor` 保持无 process 分支、无跨 run 状态；资源由宿主组合根关闭，不依赖 JVM 退出 |
+
+本节不实现 scheduler、队列、跨机器 worker、跨 run 持续任务、通用 process sandbox 或后台 completion 自动唤醒 LLM。若以后需要 durable long-running job，应另建持久 ownership/lease/reconciliation 模型，不能通过放宽当前 RunId scope 或重放原始 tool-use 实现。
+
+---
+
 ## 17. 下一步
 
-1. 在同一 runtime 不变量上补 #50 background task 与 #51 可恢复 waiting states。
+1. 在同一 runtime 不变量上补 #51 可恢复 waiting/input/approval states。
 2. 完成 #52 session branch/checkpoint 与 #53 provider-neutral model/retry policy。
 3. 最后用 #54 manifest 和 #55 CLI 组合根形成 diagnosis/coding 的统一派发入口。

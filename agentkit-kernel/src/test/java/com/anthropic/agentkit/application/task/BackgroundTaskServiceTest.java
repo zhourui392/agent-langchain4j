@@ -7,6 +7,7 @@ import com.anthropic.agentkit.domain.agent.RunId;
 import com.anthropic.agentkit.domain.agent.WorkspaceId;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.port.ArtifactStore;
+import com.anthropic.agentkit.domain.port.ArtifactStoreException;
 import com.anthropic.agentkit.domain.port.BackgroundTaskLauncher;
 import com.anthropic.agentkit.domain.port.SecretProvider;
 import com.anthropic.agentkit.domain.task.ArtifactId;
@@ -20,6 +21,7 @@ import com.anthropic.agentkit.domain.task.TaskLaunchSpec;
 import com.anthropic.agentkit.domain.task.TaskScope;
 import com.anthropic.agentkit.domain.task.TaskSnapshot;
 import com.anthropic.agentkit.domain.task.TaskState;
+import com.anthropic.agentkit.domain.task.TaskStopResult;
 import com.anthropic.agentkit.domain.task.UnknownTaskException;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.ToolResult;
@@ -83,6 +85,9 @@ class BackgroundTaskServiceTest {
             assertThatThrownBy(() -> service.read(id, OutputCursor.START, intruder))
                     .isInstanceOf(UnknownTaskException.class);
             assertThatThrownBy(() -> service.stop(id, intruder))
+                    .isInstanceOf(UnknownTaskException.class);
+            assertThatThrownBy(() -> service.status(
+                    id, context("run-b", "workspace-a")))
                     .isInstanceOf(UnknownTaskException.class);
             assertThat(launcher.handle.cancelled).isFalse();
         }
@@ -151,6 +156,123 @@ class BackgroundTaskServiceTest {
         }
     }
 
+    @Test
+    void terminalCompletionReleasesCancellationAndCleanupIsIdempotent() {
+        ControlledLauncher launcher = new ControlledLauncher();
+        CancellationToken cancellation = new CancellationToken();
+        ExecutionContext context = context("run-a", "workspace-a", cancellation);
+        try (BackgroundTaskService service = service(
+                launcher, new MemoryArtifactStore(), 128)) {
+            service.start(request(), context);
+            launcher.handle.complete(ToolResult.ok("done"), TaskState.COMPLETED);
+
+            cancellation.cancel();
+            assertThat(launcher.handle.cancelAttempts).isZero();
+            service.close(context);
+            service.close(context);
+
+            assertThat(launcher.handle.cancellations).isZero();
+            assertThat(launcher.handle.cancelAttempts).isEqualTo(1);
+            assertThat(launcher.handle.state()).isEqualTo(TaskState.COMPLETED);
+        }
+    }
+
+    @Test
+    void stoppingCompletedTaskReportsActualStateWithoutChangingIt() {
+        ControlledLauncher launcher = new ControlledLauncher();
+        try (BackgroundTaskService service = service(
+                launcher, new MemoryArtifactStore(), 128)) {
+            ExecutionContext context = context("run-a", "workspace-a");
+            TaskId id = service.start(request(), context).id();
+            launcher.handle.complete(ToolResult.ok("done"), TaskState.COMPLETED);
+
+            TaskStopResult stopped = service.stop(id, context);
+
+            assertThat(stopped.changed()).isFalse();
+            assertThat(stopped.snapshot().state()).isEqualTo(TaskState.COMPLETED);
+            assertThat(launcher.handle.state()).isEqualTo(TaskState.COMPLETED);
+        }
+    }
+
+    @Test
+    void closedRunScopeRejectsNewTasksWithoutAffectingAnotherScope() {
+        ControlledLauncher launcher = new ControlledLauncher();
+        try (BackgroundTaskService service = service(
+                launcher, new MemoryArtifactStore(), 128)) {
+            ExecutionContext closed = context("run-a", "workspace-a");
+            service.close(closed);
+
+            assertThatThrownBy(() -> service.start(request(), closed))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("scope is closed");
+            assertThat(service.start(
+                    request(), context("run-b", "workspace-a")).state())
+                    .isEqualTo(TaskState.RUNNING);
+        }
+    }
+
+    @Test
+    void artifactFailureKeepsTerminalStateAndReturnsExplicitOmission() {
+        ControlledLauncher launcher = new ControlledLauncher();
+        ArtifactStore failing = new FailingArtifactStore();
+        try (BackgroundTaskService service = service(launcher, failing, 16)) {
+            ExecutionContext context = context("run-a", "workspace-a");
+            TaskId id = service.start(request(), context).id();
+            launcher.handle.complete(
+                    ToolResult.ok("x".repeat(100)), TaskState.COMPLETED);
+
+            TaskSnapshot snapshot = service.status(id, context);
+
+            assertThat(snapshot.state()).isEqualTo(TaskState.COMPLETED);
+            assertThat(snapshot.artifact()).isEmpty();
+            assertThat(snapshot.preview()).contains("artifact unavailable")
+                    .hasSizeLessThan(120);
+        }
+    }
+
+    @Test
+    void contentGovernanceFailureNeverExposesRawOutput() {
+        ControlledLauncher launcher = new ControlledLauncher();
+        ArtifactContentPolicy failing = (content, context) -> {
+            throw new IllegalStateException("policy unavailable");
+        };
+        try (BackgroundTaskService service = new BackgroundTaskService(
+                launcher, new MemoryArtifactStore(), failing,
+                BackgroundTaskPolicy.of(16))) {
+            ExecutionContext context = context("run-a", "workspace-a");
+            TaskId id = service.start(request(), context).id();
+            launcher.handle.complete(
+                    ToolResult.ok("token=raw-secret"), TaskState.COMPLETED);
+
+            TaskSnapshot snapshot = service.status(id, context);
+
+            assertThat(snapshot.state()).isEqualTo(TaskState.FAILED);
+            assertThat(snapshot.preview()).contains("output unavailable")
+                    .doesNotContain("raw-secret");
+            assertThat(snapshot.artifact()).isEmpty();
+        }
+    }
+
+    @Test
+    void activePreviewUsesTheSameContentGovernanceAsCompletion() {
+        ControlledLauncher launcher = new ControlledLauncher();
+        ArtifactContentPolicy redactor = (content, context) ->
+                content.replace("token=raw-secret", "token=[REDACTED]");
+        try (BackgroundTaskService service = new BackgroundTaskService(
+                launcher, new MemoryArtifactStore(), redactor,
+                BackgroundTaskPolicy.of(32))) {
+            ExecutionContext context = context("run-a", "workspace-a");
+            TaskId id = service.start(request(), context).id();
+            launcher.handle.append("token=raw-secret");
+
+            TaskSnapshot snapshot = service.status(id, context);
+
+            assertThat(snapshot.state()).isEqualTo(TaskState.RUNNING);
+            assertThat(snapshot.preview()).contains("token=[REDACTED]")
+                    .doesNotContain("raw-secret");
+        }
+    }
+
     private BackgroundTaskService service(
             BackgroundTaskLauncher launcher, ArtifactStore artifacts, int preview) {
         return new BackgroundTaskService(
@@ -164,9 +286,14 @@ class BackgroundTaskServiceTest {
     }
 
     private ExecutionContext context(String runId, String workspaceId) {
+        return context(runId, workspaceId, new CancellationToken());
+    }
+
+    private ExecutionContext context(
+            String runId, String workspaceId, CancellationToken cancellation) {
         return ExecutionContext.of(
                 RunId.of(runId), WorkspaceId.of(workspaceId), workspace,
-                new CancellationToken(), AgentBudget.unlimited());
+                cancellation, AgentBudget.unlimited());
     }
 
     private static final class ControlledLauncher implements BackgroundTaskLauncher {
@@ -202,6 +329,8 @@ class BackgroundTaskServiceTest {
         private final CompletableFuture<ToolResult> completion = new CompletableFuture<>();
         private volatile TaskState state = TaskState.RUNNING;
         private volatile boolean cancelled;
+        private int cancelAttempts;
+        private int cancellations;
 
         private ControlledHandle(TaskId id, TaskScope scope) {
             this.id = id;
@@ -230,7 +359,12 @@ class BackgroundTaskServiceTest {
         @Override public CompletionStage<ToolResult> completion() { return completion; }
 
         @Override
-        public boolean cancel() {
+        public synchronized boolean cancel() {
+            cancelAttempts++;
+            if (state.terminal()) {
+                return false;
+            }
+            cancellations++;
             cancelled = true;
             state = TaskState.CANCELLED;
             completion.complete(ToolResult.of(ToolResultStatus.CANCELLED, "cancelled"));
@@ -263,5 +397,17 @@ class BackgroundTaskServiceTest {
         }
 
         private record Stored(TaskScope scope, String content) { }
+    }
+
+    private static final class FailingArtifactStore implements ArtifactStore {
+        @Override
+        public ArtifactReference write(TaskScope scope, String content) {
+            throw new ArtifactStoreException("artifact unavailable", null);
+        }
+
+        @Override
+        public Optional<String> read(TaskScope scope, ArtifactReference reference) {
+            return Optional.empty();
+        }
     }
 }

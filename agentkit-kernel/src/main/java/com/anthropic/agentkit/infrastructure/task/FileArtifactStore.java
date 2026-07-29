@@ -1,6 +1,7 @@
 package com.anthropic.agentkit.infrastructure.task;
 
 import com.anthropic.agentkit.domain.port.ArtifactStore;
+import com.anthropic.agentkit.domain.port.ArtifactStoreException;
 import com.anthropic.agentkit.domain.task.ArtifactId;
 import com.anthropic.agentkit.domain.task.ArtifactLimitExceededException;
 import com.anthropic.agentkit.domain.task.ArtifactReference;
@@ -51,9 +52,10 @@ public final class FileArtifactStore implements ArtifactStore {
         Path target = path(scope, id, expiresAt);
         try {
             Files.createDirectories(target.getParent());
+            ownerOnlyDirectory(target.getParent());
             Files.writeString(target, content, StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
-            ownerOnly(target);
+            ownerOnlyFile(target);
             return new ArtifactReference(id, URI.create("artifact://" + id.value()),
                     content.length(), expiresAt);
         } catch (Exception failure) {
@@ -107,9 +109,18 @@ public final class FileArtifactStore implements ArtifactStore {
         }
     }
 
-    private static void ownerOnly(Path target) {
+    private static void ownerOnlyDirectory(Path target) {
+        setPermissions(target, "rwx------");
+    }
+
+    private static void ownerOnlyFile(Path target) {
+        setPermissions(target, "rw-------");
+    }
+
+    private static void setPermissions(Path target, String permissions) {
         try {
-            Files.setPosixFilePermissions(target, PosixFilePermissions.fromString("rw-------"));
+            Files.setPosixFilePermissions(
+                    target, PosixFilePermissions.fromString(permissions));
         } catch (UnsupportedOperationException | java.io.IOException ignored) {
             // Non-POSIX platforms rely on the parent workspace/user boundary.
         }

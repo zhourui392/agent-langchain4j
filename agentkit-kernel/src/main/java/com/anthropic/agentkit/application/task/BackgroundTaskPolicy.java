@@ -27,8 +27,13 @@ public record BackgroundTaskPolicy(int previewCharacters) {
         if (content.length() <= previewCharacters) {
             return content;
         }
-        String reference = artifact.map(value -> value.uri().toString()).orElse("omitted");
-        return content.substring(0, previewCharacters)
-                + "\n\n[agentkit: remaining task output stored as " + reference + "]";
+        return content.substring(0, previewCharacters) + notice(artifact);
+    }
+
+    private static String notice(Optional<ArtifactReference> artifact) {
+        return artifact
+                .map(value -> "\n\n[agentkit: remaining task output stored as "
+                        + value.uri() + "]")
+                .orElse("\n\n[agentkit: remaining task output omitted; artifact unavailable]");
     }
 }

@@ -20,7 +20,7 @@
 | S8 持久化 | #36–38 | 0.5d | JSONL store + /resume + SessionId |
 | MVP-Gate | #39 | — | 端到端冒烟，打 `v0.1.0-mvp` |
 | S9 Runtime Hardening | #40–46 | 已完成（7/7） | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
-| S10 Runtime Extensions | #47–55 | 进行中（3/9） | 子 Agent、interceptor、MCP、后台任务、暂停恢复、分支、模型策略、manifest、CLI |
+| S10 Runtime Extensions | #47–55 | 进行中（4/9） | 子 Agent、interceptor、MCP、后台任务、暂停恢复、分支、模型策略、manifest、CLI |
 | **MVP 合计** | — | **≈8 人天** | — |
 
 ## 依赖图
@@ -807,7 +807,7 @@ S0 (1→2→3)
 
 ### #50 [S10-Kernel-TDD] Background TaskHandle + output artifact store （blockedBy: 41, 43, 44, 45, 46, 47）
 
-**状态**：进行中（Red）。
+**状态**：已完成（2026-07-29）。
 
 **Red**：后台启动立即返回 handle；游标增量读不重复；workspace 间不可读/停；cancel 终止进程树；原 invocation 只 settle 一次；大输出保存 artifact；过期 artifact 不越界。
 

@@ -12,15 +12,16 @@ import com.anthropic.agentkit.domain.task.TaskId;
 import com.anthropic.agentkit.domain.task.TaskLaunchSpec;
 import com.anthropic.agentkit.domain.task.TaskScope;
 import com.anthropic.agentkit.domain.task.TaskSnapshot;
-import com.anthropic.agentkit.domain.task.TaskState;
+import com.anthropic.agentkit.domain.task.TaskStopResult;
 import com.anthropic.agentkit.domain.task.UnknownTaskException;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.time.Duration;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -30,9 +31,9 @@ public final class BackgroundTaskService implements AutoCloseable {
 
     private final BackgroundTaskLauncher launcher;
     private final ArtifactStore artifacts;
-    private final ArtifactContentPolicy contentPolicy;
-    private final BackgroundTaskPolicy policy;
+    private final BackgroundTaskOutputProjector outputProjector;
     private final ConcurrentMap<TaskId, ManagedTask> tasks = new ConcurrentHashMap<>();
+    private final Set<TaskScope> closedScopes = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean closed = new AtomicBoolean();
 
     public BackgroundTaskService(
@@ -48,8 +49,8 @@ public final class BackgroundTaskService implements AutoCloseable {
             BackgroundTaskPolicy policy) {
         this.launcher = Objects.requireNonNull(launcher, "launcher");
         this.artifacts = Objects.requireNonNull(artifacts, "artifacts");
-        this.contentPolicy = Objects.requireNonNull(contentPolicy, "contentPolicy");
-        this.policy = Objects.requireNonNull(policy, "policy");
+        this.outputProjector = new BackgroundTaskOutputProjector(
+                artifacts, contentPolicy, policy);
     }
 
     public TaskSnapshot start(BackgroundTaskRequest request, ExecutionContext context) {
@@ -58,13 +59,14 @@ public final class BackgroundTaskService implements AutoCloseable {
         Objects.requireNonNull(context, "context");
         TaskId id = TaskId.fresh();
         TaskScope scope = TaskScope.from(context);
+        requireScopeOpen(scope);
         Duration timeout = minimum(request.timeout(), context.limits().toolWait());
         TaskLaunchSpec spec = new TaskLaunchSpec(
                 id, scope, request.command(), context.cwd(), timeout);
         TaskHandle handle = Objects.requireNonNull(launcher.launch(spec), "task handle");
         requireMatchingHandle(handle, spec);
         ManagedTask task = new ManagedTask(handle, context);
-        tasks.put(id, task);
+        register(task);
         task.observeCancellation();
         task.observeCompletion();
         return task.snapshot();
@@ -80,8 +82,10 @@ public final class BackgroundTaskService implements AutoCloseable {
         return owned(id, context).read(cursor);
     }
 
-    public boolean stop(TaskId id, ExecutionContext context) {
-        return owned(id, context).cancel();
+    public TaskStopResult stop(TaskId id, ExecutionContext context) {
+        ManagedTask task = owned(id, context);
+        boolean changed = task.cancel();
+        return new TaskStopResult(task.snapshot(), changed);
     }
 
     public Optional<String> readArtifact(
@@ -93,6 +97,7 @@ public final class BackgroundTaskService implements AutoCloseable {
     public void close(ExecutionContext context) {
         Objects.requireNonNull(context, "context");
         TaskScope scope = TaskScope.from(context);
+        closedScopes.add(scope);
         List<ManagedTask> owned = tasks.values().stream()
                 .filter(task -> task.scope().equals(scope)).toList();
         owned.forEach(task -> tasks.remove(task.id(), task));
@@ -106,6 +111,7 @@ public final class BackgroundTaskService implements AutoCloseable {
         }
         List<ManagedTask> active = List.copyOf(tasks.values());
         tasks.clear();
+        closedScopes.clear();
         active.forEach(ManagedTask::cancel);
     }
 
@@ -126,6 +132,24 @@ public final class BackgroundTaskService implements AutoCloseable {
         }
     }
 
+    private void requireScopeOpen(TaskScope scope) {
+        if (closedScopes.contains(scope)) {
+            throw new IllegalStateException("background task scope is closed");
+        }
+    }
+
+    private void register(ManagedTask task) {
+        if (tasks.putIfAbsent(task.id(), task) != null) {
+            task.cancel();
+            throw new IllegalStateException("duplicate background task id: " + task.id());
+        }
+        if (closedScopes.contains(task.scope())) {
+            tasks.remove(task.id(), task);
+            task.cancel();
+            throw new IllegalStateException("background task scope is closed");
+        }
+    }
+
     private static void requireMatchingHandle(TaskHandle handle, TaskLaunchSpec spec) {
         if (!spec.id().equals(handle.id()) || !spec.scope().equals(handle.scope())) {
             handle.cancel();
@@ -140,17 +164,14 @@ public final class BackgroundTaskService implements AutoCloseable {
     private final class ManagedTask {
         private final TaskHandle handle;
         private final ExecutionContext context;
-        private TaskState projectedState;
-        private String preview = "";
-        private long outputCharacters;
-        private Optional<ArtifactReference> artifact = Optional.empty();
+        private TaskOutputProjection outputProjection;
         private CancellationToken.Registration cancellationRegistration =
                 CancellationToken.Registration.NO_OP;
 
         private ManagedTask(TaskHandle handle, ExecutionContext context) {
             this.handle = handle;
             this.context = context;
-            this.projectedState = handle.state();
+            this.outputProjection = TaskOutputProjection.initial(handle.state());
         }
 
         private void observeCompletion() {
@@ -163,39 +184,16 @@ public final class BackgroundTaskService implements AutoCloseable {
 
         private synchronized void completed(ToolResult result, Throwable failure) {
             cancellationRegistration.close();
-            if (failure != null) {
-                preview = "background task failed: " + failure.getClass().getSimpleName();
-                outputCharacters = preview.length();
-                projectedState = TaskState.FAILED;
-                return;
-            }
-            String governed = contentPolicy.govern(result.content(), context);
-            outputCharacters = result.content().length();
-            artifact = storeLargeOutput(governed);
-            preview = policy.preview(governed, artifact);
-            projectedState = TaskState.from(result.status());
-        }
-
-        private Optional<ArtifactReference> storeLargeOutput(String content) {
-            if (content.length() <= policy.previewCharacters()) {
-                return Optional.empty();
-            }
-            try {
-                return Optional.of(artifacts.write(scope(), content));
-            } catch (RuntimeException failure) {
-                return Optional.empty();
-            }
+            outputProjection = outputProjector.completed(
+                    result, failure, context, scope());
         }
 
         private synchronized TaskSnapshot snapshot() {
-            if (!projectedState.terminal()) {
+            if (!outputProjection.state().terminal()) {
                 OutputChunk current = handle.readSince(OutputCursor.START);
-                projectedState = handle.state();
-                outputCharacters = current.next().position();
-                preview = policy.preview(current.content(), Optional.empty());
+                outputProjection = outputProjector.active(current, context);
             }
-            return new TaskSnapshot(
-                    id(), projectedState, preview, outputCharacters, artifact);
+            return outputProjection.snapshot(id());
         }
 
         private OutputChunk read(OutputCursor cursor) {

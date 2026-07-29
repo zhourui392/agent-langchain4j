@@ -8,6 +8,7 @@ import com.anthropic.agentkit.domain.task.TaskHandle;
 import com.anthropic.agentkit.domain.task.TaskId;
 import com.anthropic.agentkit.domain.task.TaskLaunchSpec;
 import com.anthropic.agentkit.domain.task.TaskScope;
+import com.anthropic.agentkit.domain.task.TaskState;
 import com.anthropic.agentkit.domain.tool.ToolResultStatus;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -46,7 +47,7 @@ class ProcessBackgroundTaskLauncherIT {
         Path pids = workspace.resolve("pids.txt");
         try (ProcessBackgroundTaskLauncher launcher = new ProcessBackgroundTaskLauncher()) {
             TaskHandle handle = launcher.launch(spec("tree", pids));
-            await(() -> Files.exists(pids), Duration.ofSeconds(5));
+            await(() -> containsTwoPids(pids), Duration.ofSeconds(5));
             List<Long> values = Files.readString(pids).lines().map(Long::parseLong).toList();
             assertThat(values).hasSize(2).allSatisfy(pid -> assertThat(alive(pid)).isTrue());
 
@@ -56,12 +57,32 @@ class ProcessBackgroundTaskLauncherIT {
 
             assertThat(handle.completion().toCompletableFuture().get(2, TimeUnit.SECONDS).status())
                     .isEqualTo(ToolResultStatus.CANCELLED);
+            assertThat(handle.cancel()).isFalse();
+            assertThat(handle.state()).isEqualTo(TaskState.CANCELLED);
+        }
+    }
+
+    @Test
+    void timeoutSettlesOnceAndCannotRegressToCancellation() throws Exception {
+        try (ProcessBackgroundTaskLauncher launcher = new ProcessBackgroundTaskLauncher()) {
+            TaskHandle handle = launcher.launch(spec(
+                    "child", workspace.resolve("unused"), Duration.ofMillis(50)));
+
+            assertThat(handle.completion().toCompletableFuture().get(
+                    5, TimeUnit.SECONDS).status()).isEqualTo(ToolResultStatus.TIMEOUT);
+            assertThat(handle.state()).isEqualTo(TaskState.TIMED_OUT);
+            assertThat(handle.cancel()).isFalse();
+            assertThat(handle.state()).isEqualTo(TaskState.TIMED_OUT);
         }
     }
 
     private TaskLaunchSpec spec(String mode, Path marker) {
+        return spec(mode, marker, Duration.ofSeconds(30));
+    }
+
+    private TaskLaunchSpec spec(String mode, Path marker, Duration timeout) {
         return new TaskLaunchSpec(TaskId.fresh(), scope(), command(mode, marker),
-                workspace, Duration.ofSeconds(30));
+                workspace, timeout);
     }
 
     private static List<String> command(String mode, Path marker) {
@@ -92,5 +113,13 @@ class ProcessBackgroundTaskLauncherIT {
 
     private static boolean alive(long pid) {
         return ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false);
+    }
+
+    private static boolean containsTwoPids(Path marker) {
+        try {
+            return Files.exists(marker) && Files.readAllLines(marker).size() == 2;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 }

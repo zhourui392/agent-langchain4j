@@ -8,11 +8,15 @@ import com.anthropic.agentkit.domain.task.TaskScope;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermission;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -52,6 +56,43 @@ class FileArtifactStoreTest {
                 scope("run-a", "workspace-a"), "x".repeat(17)))
                 .isInstanceOf(ArtifactLimitExceededException.class);
         assertThat(root).isEmptyDirectory();
+    }
+
+    @Test
+    void artifactReferenceHidesPathAndPosixStorageIsOwnerOnly() throws Exception {
+        FileArtifactStore store = store(START, 1_024);
+        ArtifactReference reference = store.write(
+                scope("run-a", "workspace-a"), "complete output");
+
+        assertThat(reference.uri().toString()).startsWith("artifact://")
+                .doesNotContain(root.toString())
+                .doesNotContain("workspace-a");
+        if (Files.getFileStore(root).supportsFileAttributeView(
+                PosixFileAttributeView.class)) {
+            assertOwnerOnlyPermissions();
+        }
+    }
+
+    private void assertOwnerOnlyPermissions() throws Exception {
+        try (var paths = Files.walk(root)) {
+            Path directory = paths.filter(path -> !path.equals(root) && Files.isDirectory(path))
+                    .findFirst().orElseThrow();
+            Path artifact = onlyChild(directory);
+
+            assertThat(Files.getPosixFilePermissions(directory)).isEqualTo(Set.of(
+                    PosixFilePermission.OWNER_READ,
+                    PosixFilePermission.OWNER_WRITE,
+                    PosixFilePermission.OWNER_EXECUTE));
+            assertThat(Files.getPosixFilePermissions(artifact)).isEqualTo(Set.of(
+                    PosixFilePermission.OWNER_READ,
+                    PosixFilePermission.OWNER_WRITE));
+        }
+    }
+
+    private static Path onlyChild(Path directory) throws Exception {
+        try (var children = Files.list(directory)) {
+            return children.findFirst().orElseThrow();
+        }
     }
 
     private FileArtifactStore store(Instant now, int maxCharacters) {
