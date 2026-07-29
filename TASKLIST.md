@@ -849,7 +849,7 @@ S0 (1→2→3)
 
 ### #53 [S10-Kernel-TDD] provider-neutral ModelPolicy / RetryPolicy （blockedBy: 42, 44, 46；与 47 协同）
 
-**状态**：待开始。
+**状态**：进行中（Red）。
 
 **Red**：assistant turn 被接受前可重试瞬态失败；认证错误不重试；retry 计入预算/deadline；不重放 settled tool；记录实际 fallback model。
 

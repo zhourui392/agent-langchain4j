@@ -534,6 +534,18 @@ sealed interface RunSuspension {
 
 ### #53 [Kernel-TDD, P3] provider-neutral `ModelPolicy` / `RetryPolicy`
 
+**状态**：进行中（Red，2026-07-29）。
+
+**实施前领域建模审计**
+
+- commands / facts：一次逻辑 assistant turn 发出 `request model`，每个物理调用形成 `model attempt started → usage observed → completed/failed`；只有完整 `AiMessage` 被接受前的可重试失败才能产生下一 attempt。`AssistantTurnReceived`、tool started/settled 和 side-effect fact 一旦形成，均不属于 model retry 的重放单元。
+- ubiquitous language：`ModelTier` 是角色请求的 provider-neutral 能力档位；`ModelIdentity` 是实际 provider/model；`ModelPolicy` 描述 primary/fallback route；`RetryPolicy` 根据 typed `ProviderFailureKind`、attempt 序号和 provider retry-after 形成有限退避；`ModelUsage` 是实际模型维度的 usage/audit 投影。authentication/config/schema/context-overflow 不是 transient retry 的同义词。
+- 聚合/一致性边界：单次 LLM attempt 在拿到完整 assistant turn 前原子结束；一个逻辑 turn 可包含多个 attempt，但只接受一个 assistant message。conversation/tool batch 是更外层边界，model policy 无权删除消息、回退 tool result 或重新 dispatch 已 settled invocation。
+- 核心不变量：retry/fallback attempt 显式消耗 `maxLlmCalls`、token usage 和同一 run deadline；backoff 不能越过 deadline，cancel 仍向当前 call 传播；context overflow 继续只走 `ContextPolicy` 的单次 compact/retry；fallback 默认关闭；未知、认证、配置和 schema 失败默认不重试；实际尝试过的 provider/model 即使报告零 token 也进入审计投影。
+- 变化点：tier→client/model 收敛到 `LlmClientSelector`；失败分类收敛到 provider adapter 的 domain exception 映射；次数/退避/jitter/retry-after 收敛到 `RetryPolicy`；等待时间收敛到可替换 sleeper/clock；executor 只编排 policy decision，不出现 Anthropic/OpenAI 分支。
+- 反模式警戒：不在 executor 按异常文本猜 provider；不在 executor 外重跑整个 run；不把 LLM attempt 冒充 assistant turn；不让 fallback 静默丢失实际 model identity；不让通用 retry 抢走 context overflow 的专用恢复语义。
+- 实施前评分 **8/15**：聚合边界 2、变化收敛 2、不变量守护 1、行为一致 2、下一轮演进 1。已有 `LlmCall`、deadline、共享 budget、`ContextPolicy` 和 `LlmClientSelector` 是可复用承重点；缺口是 typed failure、attempt budget、route/retry decision、可测试退避与 model usage projection。
+
 **Goal**
 
 把模型档位选择、瞬态错误重试、rate-limit backoff 和可选 fallback 收敛成策略；保证重试不会重复工具副作用或绕过预算。
