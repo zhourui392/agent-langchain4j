@@ -57,6 +57,7 @@ public final class RipgrepBackend implements GrepBackend {
     private static List<String> buildCommand(GrepRequest request) {
         List<String> args = new ArrayList<>();
         args.add(executableName());
+        args.add("--no-follow");
         args.add("--with-filename");
         args.add("--line-number");
         if (request.contextLines() > 0) {

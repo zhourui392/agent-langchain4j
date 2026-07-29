@@ -103,7 +103,7 @@ public final class SubAgentTool implements Tool {
     private static AgentRunContext childContext(ExecutionContext parent, SessionId childSession) {
         return AgentRunContext.of(
                 parent.runId(), childSession, parent.workspaceId(), parent.cwd(),
-                parent.cancellation(), parent.budget());
+                parent.cancellation(), parent.budget(), parent.secretProvider());
     }
 
     private static String failureMessage(ExecutionContext ctx, CompletionException ex) {

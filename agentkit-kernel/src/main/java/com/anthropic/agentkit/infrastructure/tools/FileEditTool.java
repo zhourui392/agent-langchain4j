@@ -8,6 +8,8 @@ import com.anthropic.agentkit.infrastructure.tools.support.DiffRenderer;
 import com.anthropic.agentkit.infrastructure.tools.support.FileStateCache;
 import com.anthropic.agentkit.infrastructure.tools.support.RequireReadGuard;
 import com.anthropic.agentkit.infrastructure.tools.support.StringReplacement;
+import com.anthropic.agentkit.infrastructure.tools.support.WorkspaceBoundary;
+import com.anthropic.agentkit.infrastructure.tools.support.WorkspaceBoundaryViolationException;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -33,10 +35,16 @@ public final class FileEditTool implements Tool {
 
     private final FileStateCache fileStateCache;
     private final RequireReadGuard requireReadGuard;
+    private final WorkspaceBoundary boundary;
 
     public FileEditTool(FileStateCache fileStateCache) {
+        this(fileStateCache, new WorkspaceBoundary());
+    }
+
+    public FileEditTool(FileStateCache fileStateCache, WorkspaceBoundary boundary) {
         this.fileStateCache = Objects.requireNonNull(fileStateCache, "fileStateCache");
         this.requireReadGuard = new RequireReadGuard(fileStateCache);
+        this.boundary = Objects.requireNonNull(boundary, "boundary");
     }
 
     @Override public String name() { return "Edit"; }
@@ -47,29 +55,32 @@ public final class FileEditTool implements Tool {
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
         long startNs = System.nanoTime();
-        Path file = ctx.cwd().resolve(args.getString("path")).normalize();
+        String requested = args.getString("path");
         StringReplacement replacement = new StringReplacement(
                 args.getString("old_string"),
                 args.getString("new_string"),
                 args.getBoolean("replace_all", false));
         log.debug("file edit args: path={}, oldChars={}, newChars={}, replaceAll={}",
-                file, args.getString("old_string").length(),
+                requested, args.getString("old_string").length(),
                 args.getString("new_string").length(), replacement.replaceAll());
 
-        Optional<ToolResult> guard = requireReadGuard.checkBeforeOverwrite(ctx, file);
-        if (guard.isPresent()) {
-            log.warn("file edit blocked: path={}", file);
-            return guard.get();
-        }
-
         try {
+            Path file = boundary.resolveExisting(ctx.cwd(), requested);
+            Optional<ToolResult> guard = requireReadGuard.checkBeforeOverwrite(ctx, file);
+            if (guard.isPresent()) {
+                log.warn("file edit blocked: path={}", file);
+                return guard.get();
+            }
             String original = Files.readString(file, StandardCharsets.UTF_8);
             return applyEdit(ctx, file, original, replacement, startNs);
         } catch (NoSuchFileException ex) {
-            log.warn("file edit failed: path={}, reason=not_found", file);
-            return ToolResult.error("file not found: " + file);
+            log.warn("file edit failed: path={}, reason=not_found", requested);
+            return ToolResult.error("file not found: " + requested);
+        } catch (WorkspaceBoundaryViolationException ex) {
+            log.warn("file edit blocked: path={}, reason=workspace_boundary", requested);
+            return ToolResult.error(ex.getMessage());
         } catch (IOException ex) {
-            log.error("file edit failed: path={}", file, ex);
+            log.error("file edit failed: path={}", requested, ex);
             return ToolResult.error("edit error: " + ex.getMessage());
         }
     }

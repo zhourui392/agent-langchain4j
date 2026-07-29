@@ -113,7 +113,7 @@ final class ParallelToolDispatcher {
     }
 
     private ToolResult runWithPermission(Tool tool, ToolInvocation invocation) {
-        Decision decision = permissions.check(runId, invocation, tool);
+        Decision decision = permissions.check(executionContext, invocation, tool);
         log.info("permission decision: tool={}, decision={}", tool.name(), decision);
         if (decision == Decision.DENY) {
             log.warn("permission denied: {}", tool.name());

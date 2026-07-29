@@ -14,6 +14,8 @@ import java.util.stream.Stream;
 
 public final class JavaRegexGrepBackend implements GrepBackend {
 
+    private final WorkspaceBoundary boundary = new WorkspaceBoundary();
+
     @Override
     public GrepResult search(GrepRequest request, Path cwd) {
         Pattern pattern;
@@ -29,7 +31,8 @@ public final class JavaRegexGrepBackend implements GrepBackend {
 
         StringBuilder out = new StringBuilder();
         try (Stream<Path> stream = Files.walk(cwd)) {
-            stream.filter(Files::isRegularFile)
+            stream.filter(p -> boundary.containsExisting(cwd, p))
+                    .filter(Files::isRegularFile)
                     .filter(p -> !GitIgnoreFilter.shouldIgnore(p, cwd))
                     .filter(p -> filter == null || filter.matches(cwd.relativize(p)))
                     .forEach(p -> scanFile(p, cwd, pattern, request.contextLines(), out));

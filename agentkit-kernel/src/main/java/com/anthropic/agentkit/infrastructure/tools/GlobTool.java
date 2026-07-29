@@ -5,6 +5,8 @@ import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.domain.tool.ToolArguments;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.infrastructure.tools.support.GitIgnoreFilter;
+import com.anthropic.agentkit.infrastructure.tools.support.WorkspaceBoundary;
+import com.anthropic.agentkit.infrastructure.tools.support.WorkspaceBoundaryViolationException;
 
 import java.io.IOException;
 import java.nio.file.FileSystems;
@@ -15,6 +17,7 @@ import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Stream;
 
 import org.slf4j.Logger;
@@ -28,6 +31,16 @@ public final class GlobTool implements Tool {
             "pattern":{"type":"string","description":"glob pattern, e.g. **/*.java"},\
             "respectGitignore":{"type":"boolean","default":true}\
             },"required":["pattern"]}""";
+
+    private final WorkspaceBoundary boundary;
+
+    public GlobTool() {
+        this(new WorkspaceBoundary());
+    }
+
+    public GlobTool(WorkspaceBoundary boundary) {
+        this.boundary = Objects.requireNonNull(boundary, "boundary");
+    }
 
     @Override public String name() { return "Glob"; }
     @Override public String description() { return "List files matching a glob pattern"; }
@@ -43,11 +56,15 @@ public final class GlobTool implements Tool {
         List<PathMatcher> matchers = buildMatchers(pattern);
 
         try {
-            List<Path> matches = collectMatches(ctx.cwd(), matchers, respectGitignore);
+            Path root = boundary.resolveExisting(ctx.cwd(), ".");
+            List<Path> matches = collectMatches(root, matchers, respectGitignore);
             matches.sort(Comparator.comparing(GlobTool::mtime).reversed());
             log.info("glob completed: pattern={}, matches={}, durationMs={}",
                     pattern, matches.size(), elapsedMs(startNs));
-            return ToolResult.ok(formatMatches(matches, ctx.cwd()));
+            return ToolResult.ok(formatMatches(matches, root));
+        } catch (WorkspaceBoundaryViolationException ex) {
+            log.warn("glob blocked: pattern={}, reason=workspace_boundary", pattern);
+            return ToolResult.error(ex.getMessage());
         } catch (IOException ex) {
             log.error("glob failed: pattern={}, cwd={}", pattern, ctx.cwd(), ex);
             return ToolResult.error("glob error: " + ex.getMessage());
@@ -63,11 +80,12 @@ public final class GlobTool implements Tool {
         return matchers;
     }
 
-    private static List<Path> collectMatches(Path root, List<PathMatcher> matchers, boolean respectGitignore)
+    private List<Path> collectMatches(Path root, List<PathMatcher> matchers, boolean respectGitignore)
             throws IOException {
         List<Path> matches = new ArrayList<>();
         try (Stream<Path> stream = Files.walk(root)) {
-            stream.filter(Files::isRegularFile)
+            stream.filter(p -> boundary.containsExisting(root, p))
+                    .filter(Files::isRegularFile)
                     .filter(p -> !respectGitignore || !GitIgnoreFilter.shouldIgnore(p, root))
                     .forEach(p -> {
                         Path relative = root.relativize(p);

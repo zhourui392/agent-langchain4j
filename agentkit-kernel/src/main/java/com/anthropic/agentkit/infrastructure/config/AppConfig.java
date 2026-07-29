@@ -26,11 +26,11 @@ public record AppConfig(String apiKey,
     }
 
     public AppConfig(String apiKey, String model, int maxTokens) {
-        this(apiKey, model, maxTokens, null, PermissionMode.BYPASS, LlmProvider.OPENAI);
+        this(apiKey, model, maxTokens, null, PermissionMode.DEFAULT, LlmProvider.OPENAI);
     }
 
     public AppConfig(String apiKey, String model, int maxTokens, String baseUrl) {
-        this(apiKey, model, maxTokens, baseUrl, PermissionMode.BYPASS, LlmProvider.OPENAI);
+        this(apiKey, model, maxTokens, baseUrl, PermissionMode.DEFAULT, LlmProvider.OPENAI);
     }
 
     public AppConfig(String apiKey, String model, int maxTokens, String baseUrl,

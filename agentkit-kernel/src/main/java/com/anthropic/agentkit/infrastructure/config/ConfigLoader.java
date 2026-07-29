@@ -1,6 +1,9 @@
 package com.anthropic.agentkit.infrastructure.config;
 
+import com.anthropic.agentkit.domain.agent.RunId;
+import com.anthropic.agentkit.domain.agent.WorkspaceId;
 import com.anthropic.agentkit.domain.permission.PermissionMode;
+import com.anthropic.agentkit.domain.port.SecretScope;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -21,7 +24,7 @@ public final class ConfigLoader {
     public static final String DEFAULT_OPENAI_MODEL = "gpt-5.5";
     public static final String DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6";
     public static final int DEFAULT_MAX_TOKENS = 8192;
-    static final PermissionMode DEFAULT_PERMISSION_MODE = PermissionMode.BYPASS;
+    static final PermissionMode DEFAULT_PERMISSION_MODE = PermissionMode.DEFAULT;
     static final LlmProvider DEFAULT_PROVIDER = LlmProvider.OPENAI;
 
     private static final String[] ENV_API_KEYS = {
@@ -43,7 +46,12 @@ public final class ConfigLoader {
     }
 
     public static ConfigLoader fromSystem() {
-        return new ConfigLoader(System::getenv, defaultConfigPath());
+        Path configPath = defaultConfigPath();
+        EnvironmentSecretProvider provider = EnvironmentSecretProvider.system();
+        SecretScope scope = new SecretScope(
+                RunId.of("config-bootstrap"), WorkspaceId.fromPath(configPath.getParent()));
+        return new ConfigLoader(
+                key -> provider.find(scope, key).orElse(null), configPath);
     }
 
     public AppConfig load() {

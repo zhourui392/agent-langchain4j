@@ -5,6 +5,7 @@ import com.anthropic.agentkit.domain.agent.RunId;
 import com.anthropic.agentkit.domain.permission.Decision;
 import com.anthropic.agentkit.domain.permission.PermissionMode;
 import com.anthropic.agentkit.domain.permission.PermissionPolicy;
+import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.domain.tool.ToolInvocation;
 
@@ -42,20 +43,23 @@ public final class PermissionService {
                 PermissionMode.BYPASS);
     }
 
-    public Decision check(RunId runId, ToolInvocation invocation, Tool tool) {
-        Objects.requireNonNull(runId, "runId");
-        if (cache.allows(runId, tool.name())) {
-            log.debug("permission cache hit: tool={}, decision={}", tool.name(), Decision.ALLOW);
-            log.info("permission check: tool={}, decision={}", tool.name(), Decision.ALLOW);
-            return Decision.ALLOW;
-        }
+    public Decision check(ExecutionContext context, ToolInvocation invocation, Tool tool) {
+        Objects.requireNonNull(context, "context");
+        Objects.requireNonNull(invocation, "invocation");
+        Objects.requireNonNull(tool, "tool");
         Decision policyDecision = policy.decide(invocation, tool, mode);
         if (policyDecision != Decision.ASK) {
-            log.info("permission check: tool={}, decision={}", tool.name(), policyDecision);
+            logDecision(context, tool, policyDecision);
             return policyDecision;
         }
-        Decision interactiveDecision = askInteractively(runId, invocation, tool);
-        log.info("permission check: tool={}, decision={}", tool.name(), interactiveDecision);
+        if (cache.allows(context, invocation)) {
+            log.debug("permission cache hit: run={}, workspace={}, tool={}",
+                    context.runId(), context.workspaceId(), tool.name());
+            logDecision(context, tool, Decision.ALLOW);
+            return Decision.ALLOW;
+        }
+        Decision interactiveDecision = askInteractively(context, invocation, tool);
+        logDecision(context, tool, interactiveDecision);
         return interactiveDecision;
     }
 
@@ -63,23 +67,33 @@ public final class PermissionService {
         cache.clear(Objects.requireNonNull(runId, "runId"));
     }
 
-    private Decision askInteractively(RunId runId, ToolInvocation invocation, Tool tool) {
+    private Decision askInteractively(
+            ExecutionContext context, ToolInvocation invocation, Tool tool) {
         synchronized (prompterLock) {
-            if (cache.allows(runId, tool.name())) {
-                log.debug("permission cache hit during prompt lock: tool={}", tool.name());
+            if (cache.allows(context, invocation)) {
+                log.debug("permission cache hit during prompt lock: run={}, workspace={}, tool={}",
+                        context.runId(), context.workspaceId(), tool.name());
                 return Decision.ALLOW;
             }
-            log.warn("permission prompt shown: tool={}", tool.name());
+            log.warn("permission prompt shown: run={}, workspace={}, tool={}",
+                    context.runId(), context.workspaceId(), tool.name());
             UserPermissionResponse response = prompter.ask(invocation, tool);
-            log.warn("permission prompt answered: tool={}, response={}", tool.name(), response);
+            log.warn("permission prompt answered: run={}, workspace={}, tool={}, response={}",
+                    context.runId(), context.workspaceId(), tool.name(), response);
             return switch (response) {
                 case ALLOW_ONCE -> Decision.ALLOW;
                 case ALLOW_ALWAYS -> {
-                    cache.recordAllowAlways(runId, tool.name());
+                    cache.recordAllowAlways(context, invocation);
                     yield Decision.ALLOW;
                 }
                 case DENY -> Decision.DENY;
             };
         }
+    }
+
+    private static void logDecision(
+            ExecutionContext context, Tool tool, Decision decision) {
+        log.info("permission check: run={}, workspace={}, tool={}, decision={}",
+                context.runId(), context.workspaceId(), tool.name(), decision);
     }
 }

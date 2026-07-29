@@ -6,6 +6,8 @@ import com.anthropic.agentkit.domain.tool.ToolArguments;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.infrastructure.tools.support.FileStateCache;
 import com.anthropic.agentkit.infrastructure.tools.support.RequireReadGuard;
+import com.anthropic.agentkit.infrastructure.tools.support.WorkspaceBoundary;
+import com.anthropic.agentkit.infrastructure.tools.support.WorkspaceBoundaryViolationException;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -28,10 +30,16 @@ public final class FileWriteTool implements Tool {
 
     private final FileStateCache fileStateCache;
     private final RequireReadGuard requireReadGuard;
+    private final WorkspaceBoundary boundary;
 
     public FileWriteTool(FileStateCache fileStateCache) {
+        this(fileStateCache, new WorkspaceBoundary());
+    }
+
+    public FileWriteTool(FileStateCache fileStateCache, WorkspaceBoundary boundary) {
         this.fileStateCache = Objects.requireNonNull(fileStateCache, "fileStateCache");
         this.requireReadGuard = new RequireReadGuard(fileStateCache);
+        this.boundary = Objects.requireNonNull(boundary, "boundary");
     }
 
     @Override public String name() { return "Write"; }
@@ -42,18 +50,19 @@ public final class FileWriteTool implements Tool {
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
         long startNs = System.nanoTime();
-        Path file = ctx.cwd().resolve(args.getString("path")).normalize();
+        String requested = args.getString("path");
         String content = args.getString("content");
-        boolean existedBefore = Files.exists(file);
-        log.debug("file write args: path={}, bytes={}", file, content.getBytes(StandardCharsets.UTF_8).length);
-
-        Optional<ToolResult> guard = requireReadGuard.checkBeforeOverwrite(ctx, file);
-        if (guard.isPresent()) {
-            log.warn("file write blocked: path={}", file);
-            return guard.get();
-        }
+        log.debug("file write args: path={}, bytes={}", requested,
+                content.getBytes(StandardCharsets.UTF_8).length);
 
         try {
+            Path file = boundary.resolveForCreate(ctx.cwd(), requested);
+            boolean existedBefore = Files.exists(file);
+            Optional<ToolResult> guard = requireReadGuard.checkBeforeOverwrite(ctx, file);
+            if (guard.isPresent()) {
+                log.warn("file write blocked: path={}", file);
+                return guard.get();
+            }
             if (file.getParent() != null) {
                 Files.createDirectories(file.getParent());
             }
@@ -63,8 +72,11 @@ public final class FileWriteTool implements Tool {
                     file, content.getBytes(StandardCharsets.UTF_8).length,
                     existedBefore ? "overwrite" : "create", elapsedMs(startNs));
             return ToolResult.ok("wrote " + file);
+        } catch (WorkspaceBoundaryViolationException ex) {
+            log.warn("file write blocked: path={}, reason=workspace_boundary", requested);
+            return ToolResult.error(ex.getMessage());
         } catch (IOException ex) {
-            log.error("file write failed: path={}", file, ex);
+            log.error("file write failed: path={}", requested, ex);
             return ToolResult.error("write error: " + ex.getMessage());
         }
     }

@@ -6,6 +6,8 @@ import com.anthropic.agentkit.domain.tool.ToolArguments;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.infrastructure.tools.support.FileStateCache;
 import com.anthropic.agentkit.infrastructure.tools.support.FileTextLoader;
+import com.anthropic.agentkit.infrastructure.tools.support.WorkspaceBoundary;
+import com.anthropic.agentkit.infrastructure.tools.support.WorkspaceBoundaryViolationException;
 
 import java.io.IOException;
 import java.nio.file.NoSuchFileException;
@@ -26,9 +28,15 @@ public final class FileReadTool implements Tool {
             },"required":["path"]}""";
 
     private final FileStateCache fileStateCache;
+    private final WorkspaceBoundary boundary;
 
     public FileReadTool(FileStateCache fileStateCache) {
+        this(fileStateCache, new WorkspaceBoundary());
+    }
+
+    public FileReadTool(FileStateCache fileStateCache, WorkspaceBoundary boundary) {
         this.fileStateCache = Objects.requireNonNull(fileStateCache, "fileStateCache");
+        this.boundary = Objects.requireNonNull(boundary, "boundary");
     }
 
     @Override public String name() { return "Read"; }
@@ -39,11 +47,12 @@ public final class FileReadTool implements Tool {
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
         long startNs = System.nanoTime();
-        Path file = ctx.cwd().resolve(args.getString("path")).normalize();
+        String requested = args.getString("path");
         int maxLines = args.getInt("maxLines", DEFAULT_MAX_LINES);
-        log.debug("file read args: path={}, maxLines={}", file, maxLines);
+        log.debug("file read args: path={}, maxLines={}", requested, maxLines);
 
         try {
+            Path file = boundary.resolveExisting(ctx.cwd(), requested);
             FileTextLoader.LoadResult loaded = new FileTextLoader(maxLines).load(file);
             fileStateCache.recordRead(ctx, file);
             if (loaded.truncated()) {
@@ -55,10 +64,13 @@ public final class FileReadTool implements Tool {
                     elapsedMs(startNs));
             return ToolResult.ok(renderOutput(loaded));
         } catch (NoSuchFileException ex) {
-            log.warn("file read failed: path={}, reason=not_found", file);
-            return ToolResult.error("file not found: " + file);
+            log.warn("file read failed: path={}, reason=not_found", requested);
+            return ToolResult.error("file not found: " + requested);
+        } catch (WorkspaceBoundaryViolationException ex) {
+            log.warn("file read blocked: path={}, reason=workspace_boundary", requested);
+            return ToolResult.error(ex.getMessage());
         } catch (IOException ex) {
-            log.error("file read failed: path={}", file, ex);
+            log.error("file read failed: path={}", requested, ex);
             return ToolResult.error("read error: " + ex.getMessage());
         }
     }

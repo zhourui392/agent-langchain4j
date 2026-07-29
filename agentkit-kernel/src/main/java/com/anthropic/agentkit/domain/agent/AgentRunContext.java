@@ -2,6 +2,7 @@ package com.anthropic.agentkit.domain.agent;
 
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.SessionId;
+import com.anthropic.agentkit.domain.port.SecretProvider;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
 
 import java.nio.file.Path;
@@ -14,7 +15,8 @@ public record AgentRunContext(
         WorkspaceId workspaceId,
         Path workspaceRoot,
         CancellationToken cancellation,
-        AgentBudget budget) {
+        AgentBudget budget,
+        SecretProvider secretProvider) {
 
     public AgentRunContext {
         Objects.requireNonNull(runId, "runId");
@@ -23,13 +25,23 @@ public record AgentRunContext(
         Objects.requireNonNull(workspaceRoot, "workspaceRoot");
         Objects.requireNonNull(cancellation, "cancellation");
         Objects.requireNonNull(budget, "budget");
+        Objects.requireNonNull(secretProvider, "secretProvider");
         workspaceRoot = workspaceRoot.toAbsolutePath().normalize();
     }
 
     public static AgentRunContext of(RunId runId, SessionId sessionId,
                                      WorkspaceId workspaceId, Path workspaceRoot,
                                      CancellationToken cancellation, AgentBudget budget) {
-        return new AgentRunContext(runId, sessionId, workspaceId, workspaceRoot, cancellation, budget);
+        return of(runId, sessionId, workspaceId, workspaceRoot,
+                cancellation, budget, SecretProvider.none());
+    }
+
+    public static AgentRunContext of(RunId runId, SessionId sessionId,
+                                     WorkspaceId workspaceId, Path workspaceRoot,
+                                     CancellationToken cancellation, AgentBudget budget,
+                                     SecretProvider secretProvider) {
+        return new AgentRunContext(runId, sessionId, workspaceId, workspaceRoot,
+                cancellation, budget, secretProvider);
     }
 
     public static AgentRunContext at(Path workspaceRoot) {
@@ -43,6 +55,7 @@ public record AgentRunContext(
     }
 
     public ExecutionContext executionContext() {
-        return ExecutionContext.of(runId, workspaceId, workspaceRoot, cancellation, budget);
+        return ExecutionContext.of(
+                runId, workspaceId, workspaceRoot, cancellation, budget, secretProvider);
     }
 }

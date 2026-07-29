@@ -4,16 +4,20 @@ import com.anthropic.agentkit.domain.agent.AgentBudget;
 import com.anthropic.agentkit.domain.agent.RunId;
 import com.anthropic.agentkit.domain.agent.WorkspaceId;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
+import com.anthropic.agentkit.domain.port.SecretProvider;
+import com.anthropic.agentkit.domain.port.SecretScope;
 
 import java.nio.file.Path;
 import java.util.Objects;
+import java.util.Optional;
 
 public record ExecutionContext(
         RunId runId,
         WorkspaceId workspaceId,
         Path cwd,
         CancellationToken cancellation,
-        AgentBudget budget) {
+        AgentBudget budget,
+        SecretProvider secretProvider) {
 
     public ExecutionContext {
         Objects.requireNonNull(runId, "runId");
@@ -21,6 +25,7 @@ public record ExecutionContext(
         Objects.requireNonNull(cwd, "cwd");
         Objects.requireNonNull(cancellation, "cancellation");
         Objects.requireNonNull(budget, "budget");
+        Objects.requireNonNull(secretProvider, "secretProvider");
         cwd = cwd.toAbsolutePath().normalize();
     }
 
@@ -34,6 +39,20 @@ public record ExecutionContext(
 
     public static ExecutionContext of(RunId runId, WorkspaceId workspaceId, Path cwd,
                                       CancellationToken cancellation, AgentBudget budget) {
-        return new ExecutionContext(runId, workspaceId, cwd, cancellation, budget);
+        return of(runId, workspaceId, cwd, cancellation, budget, SecretProvider.none());
+    }
+
+    public static ExecutionContext of(RunId runId, WorkspaceId workspaceId, Path cwd,
+                                      CancellationToken cancellation, AgentBudget budget,
+                                      SecretProvider secretProvider) {
+        return new ExecutionContext(
+                runId, workspaceId, cwd, cancellation, budget, secretProvider);
+    }
+
+    public Optional<String> secret(String name) {
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException("secret name must not be blank");
+        }
+        return secretProvider.find(new SecretScope(runId, workspaceId), name);
     }
 }

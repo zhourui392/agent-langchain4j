@@ -7,6 +7,12 @@ import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.infrastructure.tools.support.GrepBackend;
 import com.anthropic.agentkit.infrastructure.tools.support.JavaRegexGrepBackend;
 import com.anthropic.agentkit.infrastructure.tools.support.RipgrepBackend;
+import com.anthropic.agentkit.infrastructure.tools.support.WorkspaceBoundary;
+import com.anthropic.agentkit.infrastructure.tools.support.WorkspaceBoundaryViolationException;
+
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.Objects;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,13 +28,19 @@ public final class GrepTool implements Tool {
             },"required":["pattern"]}""";
 
     private final GrepBackend backend;
+    private final WorkspaceBoundary boundary;
 
     public GrepTool() {
-        this(autoDetect());
+        this(autoDetect(), new WorkspaceBoundary());
     }
 
     public GrepTool(GrepBackend backend) {
-        this.backend = backend;
+        this(backend, new WorkspaceBoundary());
+    }
+
+    public GrepTool(GrepBackend backend, WorkspaceBoundary boundary) {
+        this.backend = Objects.requireNonNull(backend, "backend");
+        this.boundary = Objects.requireNonNull(boundary, "boundary");
     }
 
     public static GrepBackend autoDetect() {
@@ -53,13 +65,22 @@ public final class GrepTool implements Tool {
         }
         log.debug("grep args: pattern={}, glob={}, context={}",
                 request.pattern(), request.globFilter(), request.contextLines());
-        GrepBackend.GrepResult result = backend.search(request, ctx.cwd());
-        int hits = countHits(result.output());
-        log.info("grep completed: pattern={}, backend={}, success={}, hits={}, durationMs={}",
-                request.pattern(), backendName(), result.success(), hits, elapsedMs(startNs));
-        return result.success()
-                ? ToolResult.ok(result.output().isEmpty() ? "(no matches)" : result.output())
-                : ToolResult.error(result.error());
+        try {
+            Path root = boundary.resolveExisting(ctx.cwd(), ".");
+            GrepBackend.GrepResult result = backend.search(request, root);
+            int hits = countHits(result.output());
+            log.info("grep completed: pattern={}, backend={}, success={}, hits={}, durationMs={}",
+                    request.pattern(), backendName(), result.success(), hits, elapsedMs(startNs));
+            return result.success()
+                    ? ToolResult.ok(result.output().isEmpty() ? "(no matches)" : result.output())
+                    : ToolResult.error(result.error());
+        } catch (WorkspaceBoundaryViolationException ex) {
+            log.warn("grep blocked: pattern={}, reason=workspace_boundary", request.pattern());
+            return ToolResult.error(ex.getMessage());
+        } catch (IOException ex) {
+            log.error("grep failed: pattern={}, cwd={}", request.pattern(), ctx.cwd(), ex);
+            return ToolResult.error("grep error: " + ex.getMessage());
+        }
     }
 
     private String backendName() {
