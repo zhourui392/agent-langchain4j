@@ -232,6 +232,37 @@ class LangChain4jLlmClientTest {
         assertThat(spec.parameters().required()).isEmpty();
     }
 
+    @Test
+    void nestedMcpSchemaPreservesArrayItemsAndObjectProperties() {
+        FakeStreamingChatModel fake = new FakeStreamingChatModel().completionText("ok");
+        LangChain4jLlmClient client = new LangChain4jLlmClient(fake);
+        String schema = """
+                {"type":"object","properties":{
+                  "names":{"type":"array","items":{"type":"string"}},
+                  "filter":{"type":"object","properties":{"limit":{"type":"integer"}}}},
+                 "required":["names"],"additionalProperties":false}
+                """;
+        ChatRequest request = ChatRequest.builder().message(UserMessage.of("hi"))
+                .tool(new com.anthropic.agentkit.domain.port.ToolSpec(
+                        "server.__discover_tools", "discover", schema)).build();
+
+        client.streamChat(request, new StreamHandler() {
+            @Override public void onPartialText(String delta) { }
+        });
+
+        var parameters = fake.capturedRequests().getFirst()
+                .toolSpecifications().getFirst().parameters();
+        assertThat(parameters.properties().get("names"))
+                .isInstanceOf(dev.langchain4j.model.chat.request.json.JsonArraySchema.class);
+        var names = (dev.langchain4j.model.chat.request.json.JsonArraySchema)
+                parameters.properties().get("names");
+        assertThat(names.items())
+                .isInstanceOf(dev.langchain4j.model.chat.request.json.JsonStringSchema.class);
+        assertThat(parameters.properties().get("filter"))
+                .isInstanceOf(dev.langchain4j.model.chat.request.json.JsonObjectSchema.class);
+        assertThat(parameters.additionalProperties()).isFalse();
+    }
+
     private static final class ControllableStreamingChatModel implements StreamingChatModel {
         private StreamingChatResponseHandler handler;
 

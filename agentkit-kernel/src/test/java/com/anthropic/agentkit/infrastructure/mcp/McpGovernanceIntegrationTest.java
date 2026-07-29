@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Level;
 import com.anthropic.agentkit.application.AgentExecutor;
 import com.anthropic.agentkit.application.InteractivePrompter.UserPermissionResponse;
 import com.anthropic.agentkit.application.PermissionService;
+import com.anthropic.agentkit.application.tool.LimitedToolOutputPolicy;
 import com.anthropic.agentkit.domain.agent.AgentBudget;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.agent.StopReason;
@@ -121,6 +122,31 @@ class McpGovernanceIntegrationTest {
         }
     }
 
+    @Test
+    void largeMcpOutputStillPassesCentralToolOutputPolicy() {
+        RecordingSession session = new RecordingSession(readTool());
+        session.resultContent = "x".repeat(40_000);
+        StubLlmClient llm = new StubLlmClient()
+                .enqueue(toolCall("inventory.read"))
+                .enqueue(AiMessage.text("output observed"));
+        Conversation conversation = conversation("read all inventory");
+
+        try (McpServerManager manager = manager(session)) {
+            new AgentExecutor(llm, new ToolRegistry().registerCatalog(manager),
+                    PermissionService.bypassing())
+                    .run(conversation, context(conversation)).join();
+
+            ToolResultMessage message = conversation.messages().stream()
+                    .filter(ToolResultMessage.class::isInstance)
+                    .map(ToolResultMessage.class::cast)
+                    .findFirst().orElseThrow();
+            assertThat(message.text()).hasSizeLessThan(40_000);
+            assertThat(message.metadata())
+                    .containsEntry(LimitedToolOutputPolicy.DISPOSITION_KEY, "truncated")
+                    .containsEntry(LimitedToolOutputPolicy.ORIGINAL_CHARACTERS_KEY, "40000");
+        }
+    }
+
     private static McpServerManager manager(RecordingSession session) {
         McpServerConfig config = McpServerConfig.stdio("inventory", List.of("unused"));
         return new McpServerManager(List.of(config), (ignored, context) -> session);
@@ -167,6 +193,7 @@ class McpGovernanceIntegrationTest {
         private final McpToolDescriptor descriptor;
         private int callCount;
         private RuntimeException failure;
+        private String resultContent = "remote result";
 
         private RecordingSession(McpToolDescriptor descriptor) {
             this.descriptor = descriptor;
@@ -184,7 +211,7 @@ class McpGovernanceIntegrationTest {
             if (failure != null) {
                 throw failure;
             }
-            return McpCallResult.success("remote result");
+            return McpCallResult.success(resultContent);
         }
 
         @Override public void close() { }

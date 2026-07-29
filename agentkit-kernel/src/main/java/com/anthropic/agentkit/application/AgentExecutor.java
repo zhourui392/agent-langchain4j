@@ -244,7 +244,7 @@ public final class AgentExecutor {
 
     private ToolBatchOutcome dispatchToolCalls(
             AiMessage message, AgentRunState state, AgentEventListener listener) {
-        if (violatesTerminalExclusivity(message)) {
+        if (violatesTerminalExclusivity(message, state.context())) {
             String reason = "terminal tool must be exclusive in its tool batch";
             List<ToolResultMessage> results = state.dispatcher().settleWithoutExecution(
                     message, ToolResultStatus.ERROR, reason);
@@ -260,7 +260,7 @@ public final class AgentExecutor {
                         batch.results(), StopReason.INTERCEPTOR_ERROR,
                         batch.interceptorFailure().orElseThrow().getMessage());
             }
-            return terminalOutcome(message, batch.results());
+            return terminalOutcome(message, batch.results(), state.context());
         } catch (AgentBudgetExceededException ex) {
             log.warn("tool batch rejected by budget: {}", ex.getMessage());
             List<ToolResultMessage> results = state.dispatcher().settleWithoutExecution(
@@ -270,8 +270,9 @@ public final class AgentExecutor {
     }
 
     private ToolBatchOutcome terminalOutcome(
-            AiMessage message, List<ToolResultMessage> results) {
-        if (!isTerminal(message.toolUseRequests().getFirst())) {
+            AiMessage message, List<ToolResultMessage> results,
+            AgentRunContext context) {
+        if (!isTerminal(message.toolUseRequests().getFirst(), context)) {
             return ToolBatchOutcome.continuing(results);
         }
         ToolResultMessage terminalResult = results.getFirst();
@@ -283,16 +284,18 @@ public final class AgentExecutor {
         return ToolBatchOutcome.terminal(results, payload);
     }
 
-    private boolean violatesTerminalExclusivity(AiMessage message) {
+    private boolean violatesTerminalExclusivity(
+            AiMessage message, AgentRunContext context) {
         long terminalCount = message.toolUseRequests().stream()
-                .filter(this::isTerminal)
+                .filter(request -> isTerminal(request, context))
                 .count();
         return terminalCount > 0 && (terminalCount != 1 || message.toolUseRequests().size() != 1);
     }
 
-    private boolean isTerminal(ToolUseRequest request) {
-        return tools.contains(request.toolName())
-                && tools.find(request.toolName()).kind() == ToolKind.TERMINAL;
+    private boolean isTerminal(ToolUseRequest request, AgentRunContext context) {
+        return tools.contains(request.toolName(), context.executionContext())
+                && tools.find(request.toolName(), context.executionContext()).kind()
+                == ToolKind.TERMINAL;
     }
 
     private LlmTurnOutcome executeTurn(Conversation conversation, AgentRunContext context,
@@ -388,7 +391,7 @@ public final class AgentExecutor {
     private LlmTurnOutcome requestLlm(Conversation conversation, AgentRunContext context,
                                       AgentEventListener listener, AgentBudgetGuard budgetGuard,
                                       RunEventRecorder recorder, String systemPrompt) {
-        ChatRequest proposed = buildChatRequest(conversation, systemPrompt);
+        ChatRequest proposed = buildChatRequest(conversation, context, systemPrompt);
         LlmRequestPlan plan = interceptLlmCall(context, proposed);
         if (plan.stopReason().isPresent()) {
             return LlmTurnOutcome.failed(
@@ -422,11 +425,11 @@ public final class AgentExecutor {
     }
 
     private ChatRequest buildChatRequest(
-            Conversation conversation, String systemPrompt) {
+            Conversation conversation, AgentRunContext context, String systemPrompt) {
         ChatRequest.Builder builder = ChatRequest.builder()
                 .systemPrompt(systemPrompt)
                 .messages(conversation.messages());
-        tools.specs().forEach(builder::tool);
+        tools.specs(context.executionContext()).forEach(builder::tool);
         return builder.build();
     }
 

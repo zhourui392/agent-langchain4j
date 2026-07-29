@@ -22,6 +22,6 @@ public final class ReadOnlyPermissionPolicy implements PermissionPolicy {
 
     @Override
     public Decision decide(ToolInvocation invocation, Tool tool, PermissionMode mode) {
-        return tool.isReadOnly() ? Decision.ALLOW : Decision.DENY;
+        return tool.safety().readOnly() ? Decision.ALLOW : Decision.DENY;
     }
 }

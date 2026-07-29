@@ -10,6 +10,10 @@ public interface Tool {
 
     boolean isReadOnly();
 
+    default ToolSafety safety() {
+        return isReadOnly() ? ToolSafety.readOnlyTool() : ToolSafety.mutatingTool();
+    }
+
     default ToolKind kind() {
         return ToolKind.STANDARD;
     }

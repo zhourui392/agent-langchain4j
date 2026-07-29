@@ -27,9 +27,9 @@ public final class DefaultPermissionPolicy implements PermissionPolicy {
     public Decision decide(ToolInvocation invocation, Tool tool, PermissionMode mode) {
         return switch (mode) {
             case BYPASS -> Decision.ALLOW;
-            case DEFAULT -> tool.isReadOnly() ? Decision.ALLOW : Decision.ASK;
-            case PLAN -> tool.isReadOnly() ? Decision.ALLOW : Decision.DENY;
-            case AUTO -> tool.isReadOnly() || autoSafelist.contains(tool.name())
+            case DEFAULT -> tool.safety().readOnly() ? Decision.ALLOW : Decision.ASK;
+            case PLAN -> tool.safety().readOnly() ? Decision.ALLOW : Decision.DENY;
+            case AUTO -> tool.safety().readOnly() || autoSafelist.contains(tool.name())
                     ? Decision.ALLOW
                     : Decision.ASK;
         };

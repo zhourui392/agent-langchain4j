@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -50,6 +51,24 @@ class HttpMcpTransportContractTest {
                 assertThat(result.status()).isEqualTo(ToolResultStatus.SUCCESS);
                 assertThat(result.content()).isEqualTo("echo:hello");
                 assertThat(server.authorization).hasValue("Bearer scoped-token");
+            }
+        }
+    }
+
+    @Test
+    void redactsResolvedAuthenticationIfRemoteServerEchoesIt() throws Exception {
+        try (FakeHttpServer server = new FakeHttpServer()) {
+            server.echoAuthorization.set(true);
+            McpServerConfig config = httpConfig(server.uri(), Duration.ofSeconds(2))
+                    .withSecretHeader("Authorization", "MCP_TOKEN");
+            ExecutionContext context = context(new CancellationToken(), "Bearer scoped-token");
+
+            try (McpServerManager manager = new McpServerManager(List.of(config))) {
+                ToolResult result = tool(manager, context, "http.echo")
+                        .execute(ToolArguments.empty(), context);
+
+                assertThat(result.content()).isEqualTo("echo:***");
+                assertThat(result.content()).doesNotContain("scoped-token");
             }
         }
     }
@@ -128,6 +147,7 @@ class HttpMcpTransportContractTest {
         private final AtomicInteger callCount = new AtomicInteger();
         private final AtomicBoolean slowCalls = new AtomicBoolean();
         private final AtomicBoolean failNextCall = new AtomicBoolean();
+        private final AtomicBoolean echoAuthorization = new AtomicBoolean();
 
         private FakeHttpServer() throws IOException {
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -157,7 +177,7 @@ class HttpMcpTransportContractTest {
             String method = request.path("method").asText();
             if ("tools/call".equals(method) && failNextCall.compareAndSet(true, false)) {
                 callCount.incrementAndGet();
-                respond(exchange, 503, "unavailable");
+                exchange.close();
                 return;
             }
             respond(exchange, 200, response(request, method).toString());
@@ -190,6 +210,9 @@ class HttpMcpTransportContractTest {
             }
             String value = request.path("params").path("arguments")
                     .path("value").asText("");
+            if (echoAuthorization.get()) {
+                value = authorization.get();
+            }
             ObjectNode result = JSON.createObjectNode();
             result.putArray("content").addObject()
                     .put("type", "text").put("text", "echo:" + value);

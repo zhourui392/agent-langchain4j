@@ -36,6 +36,8 @@ class McpServerManagerTest {
                     .containsExactly("inventory.read", "inventory.delete");
             assertThat(tool(snapshot, "inventory.read").isReadOnly()).isTrue();
             assertThat(tool(snapshot, "inventory.delete").isReadOnly()).isFalse();
+            assertThat(tool(snapshot, "inventory.read").safety().idempotent()).isTrue();
+            assertThat(tool(snapshot, "inventory.delete").safety().destructive()).isTrue();
         }
     }
 

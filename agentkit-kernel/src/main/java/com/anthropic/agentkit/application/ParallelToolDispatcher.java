@@ -145,7 +145,7 @@ final class ParallelToolDispatcher {
     private ToolExecutionOutcome safeOutcome(ToolUseRequest request) {
         Tool tool;
         try {
-            tool = tools.find(request.toolName());
+            tool = tools.find(request.toolName(), executionContext);
         } catch (UnknownToolException ex) {
             return ToolExecutionOutcome.completed(
                     failure(ToolResultStatus.UNKNOWN_TOOL, ex, "lookup"));
