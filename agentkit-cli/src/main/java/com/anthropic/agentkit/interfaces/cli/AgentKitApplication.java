@@ -15,11 +15,13 @@ import com.anthropic.agentkit.domain.conversation.SessionId;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.port.LlmClient;
+import com.anthropic.agentkit.domain.port.SecretProvider;
 import com.anthropic.agentkit.domain.skill.SkillCatalog;
 import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.infrastructure.config.AppConfig;
 import com.anthropic.agentkit.infrastructure.config.ConfigLoader;
+import com.anthropic.agentkit.infrastructure.config.EnvironmentSecretProvider;
 import com.anthropic.agentkit.infrastructure.context.AgentsMdProvider;
 import com.anthropic.agentkit.infrastructure.context.CwdProvider;
 import com.anthropic.agentkit.infrastructure.context.DateProvider;
@@ -92,6 +94,7 @@ public final class AgentKitApplication {
     private void run() throws IOException {
         AppConfig config = ConfigLoader.fromSystem().load();
         LlmClient llm = LlmClientFactories.create(config);
+        SecretProvider secrets = EnvironmentSecretProvider.system();
 
         Path cwd = Paths.get(System.getProperty("user.dir", "."));
         FileStateCache fileStateCache = new FileStateCache();
@@ -123,7 +126,7 @@ public final class AgentKitApplication {
 
             ReplLoop repl = new ReplLoop(terminalIo, input -> handleLine(
                     input, parser, active, executor, llm, composer, cwd, cancel,
-                    store, resumer, renderer, terminalIo, sigint));
+                    store, resumer, renderer, terminalIo, sigint, secrets));
             repl.run();
         }
     }
@@ -191,7 +194,8 @@ public final class AgentKitApplication {
                                     SessionResumer resumer,
                                     OutputRenderer renderer,
                                     TerminalIo terminalIo,
-                                    SigintHandler sigint) {
+                                    SigintHandler sigint,
+                                    SecretProvider secrets) {
         SlashCommandParser.ParseResult parsed = parser.parse(input);
         switch (parsed) {
             case SlashCommandParser.UnknownCommand unknown ->
@@ -208,7 +212,7 @@ public final class AgentKitApplication {
             case SlashCommandParser.UserMessage userText -> {
                 Conversation conversation = active.get();
                 conversation.append(UserMessage.of(userText.text()));
-                runTurn(conversation, executor, composer, cwd, cancel, renderer);
+                runTurn(conversation, executor, composer, cwd, cancel, renderer, secrets);
                 store.save(conversation.sessionId(), conversation.messages());
                 sigint.turnFinished();
             }
@@ -220,11 +224,12 @@ public final class AgentKitApplication {
                                  SystemPromptComposer composer,
                                  Path cwd,
                                  CancellationToken cancel,
-                                 OutputRenderer renderer) {
+                                 OutputRenderer renderer,
+                                 SecretProvider secrets) {
         try {
             String systemPrompt = composer.compose(cwd).full();
             AgentRunContext context = AgentRunContext.create(
-                    conversation.sessionId(), cwd, cancel, AgentBudget.unlimited());
+                    conversation.sessionId(), cwd, cancel, AgentBudget.unlimited(), secrets);
             executor.run(conversation, context, renderer, systemPrompt).join();
         } catch (RuntimeException ex) {
             renderer.onError(ex);

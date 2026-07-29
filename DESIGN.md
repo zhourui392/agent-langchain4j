@@ -667,6 +667,24 @@ listener 是观察者：其异常只记录日志，不改变工具协议结果�
 
 ---
 
+### 16.11 Workspace 文件边界、参数级权限与 scoped secret（2026-07-29）
+
+L0 单用户/worktree 运行时必须同时具备两种性质不同的控制：permission 决定“这次动作是否获准”，workspace boundary 决定“即使获准，kernel 文件工具最多能碰哪里”。两者不能互相替代；`Tool.isReadOnly()` 也不构成访问宿主任意路径的授权。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| 文件边界 | `Read`、`Write`、`Edit`、`Glob`、`Grep` 必经统一 `WorkspaceBoundary` | `..`、workspace 外绝对路径和 symlink real target 越界均在执行层拒绝；权限 ALLOW 不能绕过 |
+| 路径语义 | 先做 lexical containment，再由 `NioWorkspacePathResolver` 按当前平台求 real path/最近已存在祖先，最后由 `WorkspacePathPolicy` 再做 containment | workspace 内绝对路径继续兼容；待创建路径从已验证 canonical ancestor 生成，避免沿已存在的越界 symlink 写出 |
+| 跨平台验证 | Linux/macOS symlink 测试使用真实符号链接；Windows drive 与 UNC 测试只在 Windows runner 使用真实 Windows `Path` provider | 不在 Linux 上把 `C:\\...` 字符串伪装成 Windows 路径测试；不同 drive/share 的判断跟随平台 provider |
+| 授权规则 | `ALLOW_ALWAYS` grant 精确绑定 `RunId + WorkspaceId + toolName + 完整参数`；每次先计算 policy，仅在 ASK 时查询 cache | 一个 Bash command 不会授权另一个 command；跨 run/workspace 不共享；新 DENY 永远可覆盖旧 grant |
+| 安全默认值 | `ConfigLoader` 与 `AppConfig` 便利构造默认 `PermissionMode.DEFAULT` | 正常启动不会静默 BYPASS；显式 BYPASS 只允许由清楚声明能力边界的组合根选择 |
+| Secret port | domain `SecretProvider` 以 `SecretScope(RunId, WorkspaceId)` 查询；`AgentRunContext` 显式持有并向工具/子 Agent 透传 | 工具不直接读全局环境；当前环境变量 adapter 留在 infrastructure，未来可按同一 scope 换密钥库 |
+| 安全审计 | permission 日志记录 run/workspace/tool/decision；secret adapter 记录 run/workspace/name/found；两者不输出参数值或 secret 值 | 审计可以按 run 关联，同时避免凭证进入日志；工具参数 debug 只列键名 |
+
+`WorkspaceBoundary` 只约束 kernel 自带、通过该边界解析路径的文件工具。`BashTool` 虽然显式设置 cwd，并受命令级 permission、timeout、取消与日志治理，但 shell 仍能访问宿主进程可见的绝对路径、网络和进程资源；它不是 sandbox。L0 只在单用户可信宿主假设下使用这组措施。一旦进入多用户 L2，必须使用容器/VM + 鉴权 + secret 隔离，不能靠 Java 路径检查或 prompt 补救。
+
+---
+
 ## 17. 下一步
 
 1. agent-web 切换依赖 `agentkit-agent-diagnosis`，通过 `DiagnoseEngineBuilder` 组装。

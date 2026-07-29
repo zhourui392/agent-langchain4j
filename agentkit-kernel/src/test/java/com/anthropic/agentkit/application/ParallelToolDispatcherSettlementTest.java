@@ -123,7 +123,7 @@ class ParallelToolDispatcherSettlementTest {
         return new DispatcherFixture(
                 context,
                 new ParallelToolDispatcher(
-                        tools, context.runId(), context.executionContext(), permissions));
+                        tools, context.executionContext(), permissions));
     }
 
     private static PermissionService allowAll() {

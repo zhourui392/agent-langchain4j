@@ -1,6 +1,5 @@
 package com.anthropic.agentkit.application;
 
-import com.anthropic.agentkit.domain.agent.RunId;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.ToolResultMessage;
 import com.anthropic.agentkit.domain.permission.Decision;
@@ -31,14 +30,12 @@ final class ParallelToolDispatcher {
     private static final Logger log = LoggerFactory.getLogger(ParallelToolDispatcher.class);
 
     private final ToolRegistry tools;
-    private final RunId runId;
     private final ExecutionContext executionContext;
     private final PermissionService permissions;
 
-    ParallelToolDispatcher(ToolRegistry tools, RunId runId,
-                           ExecutionContext executionContext, PermissionService permissions) {
+    ParallelToolDispatcher(ToolRegistry tools, ExecutionContext executionContext,
+                           PermissionService permissions) {
         this.tools = tools;
-        this.runId = runId;
         this.executionContext = executionContext;
         this.permissions = permissions;
     }

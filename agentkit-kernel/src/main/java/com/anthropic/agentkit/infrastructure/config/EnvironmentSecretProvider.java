@@ -7,8 +7,13 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /** Infrastructure adapter for environment-backed scoped secret lookup. */
 public final class EnvironmentSecretProvider implements SecretProvider {
+
+    private static final Logger log = LoggerFactory.getLogger(EnvironmentSecretProvider.class);
 
     private final Function<String, String> environment;
 
@@ -26,7 +31,10 @@ public final class EnvironmentSecretProvider implements SecretProvider {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("secret name must not be blank");
         }
-        return Optional.ofNullable(environment.apply(name))
+        Optional<String> secret = Optional.ofNullable(environment.apply(name))
                 .filter(value -> !value.isBlank());
+        log.info("secret lookup: run={}, workspace={}, name={}, found={}",
+                scope.runId(), scope.workspaceId(), name, secret.isPresent());
+        return secret;
     }
 }

@@ -1,6 +1,6 @@
 # AgentKit Kernel：高优先级 Agent Runtime 补齐任务
 
-> 状态：执行中；已纳入 `TASKLIST.md` S9，#40–#42 已完成
+> 状态：执行中；已纳入 `TASKLIST.md` S9，#40–#43 已完成
 >
 > 审计日期：2026-07-29
 >
@@ -38,8 +38,8 @@
 | 模型回合 | 已支持流式 LLM → tool batch → result → 下一轮 | 都以可中断、受策略控制的 agent loop 为核心 | happy path 已有 |
 | 工具批次 | `AssistantTurn` 强制 ID 唯一、完整配对和原顺序回填；预期失败结构化 settle | 都要求工具调用拥有明确生命周期、错误和批准结果 | 已补齐批次协议，持久化事件恢复见 #46 |
 | 终结语义 | `ToolKind.TERMINAL` 独占批次；校验成功并配对后原生停止 | 结构化交接/任务完成应形成明确 stop reason | 已补齐 |
-| Run 作用域 | `AgentRunContext` 统一 run/workspace/session/cancel/budget，executor 可重入 | 工作区、审批、会话、沙箱、取消均绑定一次运行 | 已补齐 L0 运行作用域，安全边界见 #43 |
-| 权限与隔离 | 有 ALLOW/ASK/DENY，但默认 BYPASS；文件路径可越 workspace | 两者都把审批与 sandbox/workspace policy 分开处理 | 权限存在，执行边界不足 |
+| Run 作用域 | `AgentRunContext` 统一 run/workspace/session/cancel/budget/secret provider，executor 可重入 | 工作区、审批、会话、沙箱、取消均绑定一次运行 | 已补齐 L0 运行作用域与文件边界 |
+| 权限与隔离 | 默认交互授权；cache 绑定 run/workspace/tool/完整参数；文件工具强制 real-path boundary | 两者都把审批与 sandbox/workspace policy 分开处理 | L0 文件与审批边界已补齐；Bash 仍非 sandbox |
 | 运行结果 | executor 返回 `AgentRunResult`，含 stop reason、payload、usage 和预算消费 | stop reason、usage、取消、超时、任务结果都是一等运行结果 | 基础终态已补齐，主动取消/超时见 #44 |
 | LLM 取消 | stream callback 中检查 token；provider 等待固定 90 秒 | 运行取消应终止正在进行的模型/工具 I/O | 未闭环 |
 | 上下文 | 有压缩服务，但只有 diagnosis 在 run 前显式调用 | 成熟 runtime 在每轮调用前治理上下文，并可从 overflow 恢复 | 接线分散 |
@@ -401,11 +401,13 @@ record AgentRunResult(
 
 ### #43 [Kernel-TDD] `WorkspaceBoundary` + 参数级权限 + 安全默认值
 
+**状态**：已完成（2026-07-29）。
+
 **Goal**
 
 在 L0 单用户/worktree 范围内建立真实可执行的 workspace 文件边界，并把 permission 从“按工具名记住”升级为 scope-aware、argument-aware 规则。
 
-**当前问题与证据**
+**审计时问题与证据（已修复）**
 
 - [`ConfigLoader.java`](../agentkit-kernel/src/main/java/com/anthropic/agentkit/infrastructure/config/ConfigLoader.java) 第 21–25 行默认 `PermissionMode.BYPASS`。
 - [`AgentExecutor.java`](../agentkit-kernel/src/main/java/com/anthropic/agentkit/application/AgentExecutor.java) 的便利构造器默认 allow-all，`StructuredAgent` 会走到该路径。
@@ -473,6 +475,16 @@ record PermissionRule(
 - 默认启动不会静默进入 BYPASS。
 - 所有 permission 决策能关联 `RunId/WorkspaceId`，审计记录不包含明文 secret。
 - Linux 与 Windows 路径测试均使用各自真实 Path 语义。
+
+**完成结果**
+
+- `Read` / `Write` / `Edit` / `Glob` / `Grep` 全部经过统一 `WorkspaceBoundary`；workspace 内绝对路径兼容保留，workspace 外绝对路径、`..` 和真实 symlink 目标均拒绝。
+- `WorkspacePathPolicy` 与 `NioWorkspacePathResolver` 分离；Linux/macOS symlink 用例操作真实文件系统，Windows drive/UNC 用例仅在 Windows runner 以真实 Windows `Path` provider 执行。
+- `ALLOW_ALWAYS` 只匹配相同 `RunId + WorkspaceId + tool + 完整参数`；policy 每次先求值，因此后续 DENY 可覆盖缓存授权。
+- 默认配置改为 `PermissionMode.DEFAULT`；`BYPASS` 只保留在调用方明确选择且另有只读/结构化能力约束的组合根。
+- `SecretProvider` / `SecretScope` 从 `AgentRunContext` 透传至工具与子 Agent；环境变量适配器只记录 scope、secret 名和命中状态，不记录值。
+- `isReadOnly()` 仍只是 permission policy 的输入；无论只读与否，kernel 文件工具都不能绕过路径边界。
+- Bash 的 residual risk 已写入 `DESIGN.md §16.11`：cwd、命令级审批与 timeout 不等于宿主文件系统隔离；多用户 L2 仍需容器/VM。
 
 **blockedBy**：#40。
 

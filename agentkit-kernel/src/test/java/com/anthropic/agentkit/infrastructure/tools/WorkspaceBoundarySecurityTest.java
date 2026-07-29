@@ -6,6 +6,8 @@ import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.infrastructure.tools.support.FileStateCache;
 import com.anthropic.agentkit.infrastructure.tools.support.JavaRegexGrepBackend;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
@@ -43,6 +45,7 @@ class WorkspaceBoundarySecurityTest {
     }
 
     @Test
+    @EnabledOnOs({OS.LINUX, OS.MAC})
     void writeCannotEscapeWorkspaceThroughSymlinkedParent(@TempDir Path root) throws IOException {
         Path workspace = Files.createDirectory(root.resolve("workspace"));
         Path outside = Files.createDirectory(root.resolve("outside"));
@@ -57,6 +60,7 @@ class WorkspaceBoundarySecurityTest {
     }
 
     @Test
+    @EnabledOnOs({OS.LINUX, OS.MAC})
     void editRejectsSymlinkTargetOutsideWorkspace(@TempDir Path root) throws IOException {
         Path workspace = Files.createDirectory(root.resolve("workspace"));
         Path outside = root.resolve("outside.txt");
@@ -74,6 +78,7 @@ class WorkspaceBoundarySecurityTest {
     }
 
     @Test
+    @EnabledOnOs({OS.LINUX, OS.MAC})
     void globAndGrepCannotTraverseOutsideWorkspace(@TempDir Path root) throws IOException {
         Path workspace = Files.createDirectory(root.resolve("workspace"));
         Path outside = root.resolve("outside.txt");

@@ -265,7 +265,7 @@ public final class AgentExecutor {
                                             PermissionService permissions) {
             AgentBudgetGuard budget = new AgentBudgetGuard(context.budget());
             ParallelToolDispatcher dispatcher = new ParallelToolDispatcher(
-                    tools, context.runId(), context.executionContext(), permissions);
+                    tools, context.executionContext(), permissions);
             return new AgentRunState(context, budget, dispatcher);
         }
 

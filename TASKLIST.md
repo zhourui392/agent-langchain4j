@@ -19,7 +19,7 @@
 | S7 中断 + 流式渲染 | #33–35 | 0.5d | CancellationToken + SIGINT + 实时 token 输出 |
 | S8 持久化 | #36–38 | 0.5d | JSONL store + /resume + SessionId |
 | MVP-Gate | #39 | — | 端到端冒烟，打 `v0.1.0-mvp` |
-| S9 Runtime Hardening | #40–46 | 进行中（3/7） | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
+| S9 Runtime Hardening | #40–46 | 进行中（4/7） | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
 | **MVP 合计** | — | **≈8 人天** | — |
 
 ## 依赖图
@@ -697,7 +697,7 @@ S0 (1→2→3)
 
 ### #43 [S9-Kernel-TDD] WorkspaceBoundary、参数级权限与安全默认值 （blockedBy: 40）
 
-**状态**：待开始。
+**状态**：已完成（2026-07-29）。
 
 **Red**：`..`、绝对路径、symlink 越界；permission cache 跨 scope/参数泄漏；deny 优先；默认不 BYPASS。
 

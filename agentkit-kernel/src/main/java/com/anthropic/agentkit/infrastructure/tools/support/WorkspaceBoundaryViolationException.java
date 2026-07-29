@@ -10,4 +10,9 @@ public final class WorkspaceBoundaryViolationException extends RuntimeException 
     public WorkspaceBoundaryViolationException(String message, Throwable cause) {
         super(message, cause);
     }
+
+    static WorkspaceBoundaryViolationException rejected(String requested, String reason) {
+        return new WorkspaceBoundaryViolationException(
+                "workspace boundary rejected path '" + requested + "': " + reason);
+    }
 }

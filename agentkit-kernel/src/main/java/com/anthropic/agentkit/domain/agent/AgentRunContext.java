@@ -50,8 +50,14 @@ public record AgentRunContext(
 
     public static AgentRunContext create(SessionId sessionId, Path workspaceRoot,
                                          CancellationToken cancellation, AgentBudget budget) {
+        return create(sessionId, workspaceRoot, cancellation, budget, SecretProvider.none());
+    }
+
+    public static AgentRunContext create(SessionId sessionId, Path workspaceRoot,
+                                         CancellationToken cancellation, AgentBudget budget,
+                                         SecretProvider secretProvider) {
         return of(RunId.fresh(), sessionId, WorkspaceId.fromPath(workspaceRoot),
-                workspaceRoot, cancellation, budget);
+                workspaceRoot, cancellation, budget, secretProvider);
     }
 
     public ExecutionContext executionContext() {

@@ -10,6 +10,7 @@ import com.anthropic.agentkit.domain.conversation.SessionId;
 import com.anthropic.agentkit.domain.message.ChatMessage;
 import com.anthropic.agentkit.domain.port.ChatMemoryStore;
 import com.anthropic.agentkit.domain.port.LlmClient;
+import com.anthropic.agentkit.domain.port.SecretProvider;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.infrastructure.memory.FileChatMemoryStore;
 import com.anthropic.agentkit.infrastructure.tools.support.FileStateCache;
@@ -136,9 +137,11 @@ class AgentKitApplicationTest {
                         SessionResumer.class,
                         OutputRenderer.class,
                         TerminalIo.class,
-                        SigintHandler.class},
+                        SigintHandler.class,
+                        SecretProvider.class},
                 input, parser, new AtomicReference<>(), null, null, null, Path.of("."),
-                new CancellationToken(), null, resumer, null, terminal, null);
+                new CancellationToken(), null, resumer, null, terminal, null,
+                SecretProvider.none());
     }
 
     private static Object invoke(String name, Class<?>[] parameterTypes, Object... args) throws Exception {
