@@ -4,6 +4,7 @@ import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
+import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.domain.tool.ToolArguments;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.domain.tool.ToolResult;
@@ -17,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -50,6 +52,23 @@ class SubAgentToolTest {
     }
 
     @Test
+    void childToolExecutionKeepsParentRunIdentity() {
+        AtomicReference<ExecutionContext> observed = new AtomicReference<>();
+        Tool inspect = contextRecordingTool(observed);
+        StubLlmClient llm = new StubLlmClient()
+                .enqueue(new AiMessage("", List.of(new ToolUseRequest(
+                        new ToolUseId("c-1"), "Inspect", "{}"))))
+                .enqueue(AiMessage.text("done"));
+        SubAgentTool tool = new SubAgentTool(llm, new ToolRegistry().register(inspect));
+        ExecutionContext parent = context();
+
+        tool.execute(promptArgs, parent);
+
+        assertThat(observed.get().runId()).isEqualTo(parent.runId());
+        assertThat(observed.get().workspaceId()).isEqualTo(parent.workspaceId());
+    }
+
+    @Test
     void childDoesNotShareParentConversation() {
         StubLlmClient llm = new StubLlmClient().enqueue(AiMessage.text("ok"));
         SubAgentTool tool = new SubAgentTool(llm, new ToolRegistry());
@@ -79,5 +98,18 @@ class SubAgentToolTest {
 
     private ExecutionContext context() {
         return ExecutionContext.at(Paths.get(System.getProperty("user.dir")));
+    }
+
+    private static Tool contextRecordingTool(AtomicReference<ExecutionContext> observed) {
+        return new Tool() {
+            @Override public String name() { return "Inspect"; }
+            @Override public String description() { return "capture context"; }
+            @Override public String inputSchema() { return "{}"; }
+            @Override public boolean isReadOnly() { return true; }
+            @Override public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
+                observed.set(ctx);
+                return ToolResult.ok("inspected");
+            }
+        };
     }
 }

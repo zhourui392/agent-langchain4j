@@ -19,6 +19,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static com.anthropic.agentkit.testsupport.TestRunContexts.runContext;
 
 class AgentExecutorBudgetTest {
 
@@ -27,10 +28,11 @@ class AgentExecutorBudgetTest {
         StubLlmClient llm = new StubLlmClient()
                 .enqueue(new AiMessage("", List.of(new ToolUseRequest(new ToolUseId("t-1"), "Read", "{}"))))
                 .enqueue(AiMessage.text("done"));
-        AgentExecutor executor = new AgentExecutor(llm, tools(), allowAll(),
-                AgentBudget.of(1, 10, 10_000));
+        AgentExecutor executor = new AgentExecutor(llm, tools(), allowAll());
+        Conversation conversation = conversation();
 
-        assertThatThrownBy(() -> executor.run(conversation(), new CancellationToken()).join())
+        assertThatThrownBy(() -> executor.run(conversation, runContext(
+                conversation, new CancellationToken(), AgentBudget.of(1, 10, 10_000))).join())
                 .hasRootCauseInstanceOf(AgentBudgetExceededException.class)
                 .hasMessageContaining("maxTurns");
         assertThat(llm.capturedRequests()).hasSize(1);
@@ -40,10 +42,11 @@ class AgentExecutorBudgetTest {
     void rejectsToolCallsWhenMaxToolCallsReached() {
         StubLlmClient llm = new StubLlmClient()
                 .enqueue(new AiMessage("", List.of(new ToolUseRequest(new ToolUseId("t-1"), "Read", "{}"))));
-        AgentExecutor executor = new AgentExecutor(llm, tools(), allowAll(),
-                AgentBudget.of(5, 0, 10_000));
+        AgentExecutor executor = new AgentExecutor(llm, tools(), allowAll());
+        Conversation conversation = conversation();
 
-        assertThatThrownBy(() -> executor.run(conversation(), new CancellationToken()).join())
+        assertThatThrownBy(() -> executor.run(conversation, runContext(
+                conversation, new CancellationToken(), AgentBudget.of(5, 0, 10_000))).join())
                 .hasRootCauseInstanceOf(AgentBudgetExceededException.class)
                 .hasMessageContaining("maxToolCalls");
     }
@@ -55,10 +58,11 @@ class AgentExecutorBudgetTest {
             handler.onComplete(new AiMessage("", List.of(
                     new ToolUseRequest(new ToolUseId("t-1"), "Read", "{}"))));
         };
-        AgentExecutor executor = new AgentExecutor(llm, tools(), allowAll(),
-                AgentBudget.of(5, 10, 10));
+        AgentExecutor executor = new AgentExecutor(llm, tools(), allowAll());
+        Conversation conversation = conversation();
 
-        assertThatThrownBy(() -> executor.run(conversation(), new CancellationToken()).join())
+        assertThatThrownBy(() -> executor.run(conversation, runContext(
+                conversation, new CancellationToken(), AgentBudget.of(5, 10, 10))).join())
                 .hasRootCauseInstanceOf(AgentBudgetExceededException.class)
                 .hasMessageContaining("maxInputTokens");
     }

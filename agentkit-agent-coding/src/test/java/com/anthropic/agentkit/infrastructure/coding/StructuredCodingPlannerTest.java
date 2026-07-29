@@ -1,5 +1,6 @@
 package com.anthropic.agentkit.infrastructure.coding;
 
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.coding.CodingPlan;
 import com.anthropic.agentkit.domain.coding.CodingTask;
 import com.anthropic.agentkit.domain.coding.TaskItem;
@@ -12,6 +13,7 @@ import com.anthropic.agentkit.testsupport.StubLlmClient;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -25,7 +27,8 @@ class StructuredCodingPlannerTest {
                 .enqueue(AiMessage.text("planned"));
         StructuredCodingPlanner planner = new StructuredCodingPlanner(llm);
 
-        CodingPlan plan = planner.createPlan(CodingTask.open("task-1", "Add login page"));
+        CodingPlan plan = planner.createPlan(
+                CodingTask.open("task-1", "Add login page"), context());
 
         assertThat(plan.problemStatement()).isEqualTo("Add login page");
         assertThat(plan.tasks()).singleElement().satisfies(task -> {
@@ -48,7 +51,7 @@ class StructuredCodingPlannerTest {
                 .enqueue(AiMessage.text("done"));
         StructuredCodingPlanner planner = new StructuredCodingPlanner(llm);
 
-        CodingPlan plan = planner.createPlan(CodingTask.open("task-1", "p"));
+        CodingPlan plan = planner.createPlan(CodingTask.open("task-1", "p"), context());
 
         assertThat(plan.tasks()).singleElement()
                 .extracting(TaskItem::status)
@@ -64,7 +67,7 @@ class StructuredCodingPlannerTest {
                 .enqueue(AiMessage.text("done"));
         StructuredCodingPlanner planner = new StructuredCodingPlanner(llm);
 
-        CodingPlan plan = planner.createPlan(CodingTask.open("task-1", "trivial"));
+        CodingPlan plan = planner.createPlan(CodingTask.open("task-1", "trivial"), context());
 
         assertThat(plan.tasks()).isEmpty();
     }
@@ -83,5 +86,9 @@ class StructuredCodingPlannerTest {
                   ]
                 }
                 """;
+    }
+
+    private static AgentRunContext context() {
+        return AgentRunContext.at(Path.of("."));
     }
 }

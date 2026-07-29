@@ -4,6 +4,8 @@ import com.anthropic.agentkit.application.AgentExecutor;
 import com.anthropic.agentkit.application.PermissionService;
 import com.anthropic.agentkit.application.SessionResumer;
 import com.anthropic.agentkit.application.SystemPromptComposer;
+import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.application.TerminalIoPrompter;
 import com.anthropic.agentkit.application.io.TerminalIo;
 import com.anthropic.agentkit.domain.context.ContextProvider;
@@ -14,7 +16,6 @@ import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.skill.SkillCatalog;
-import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.infrastructure.config.AppConfig;
@@ -111,7 +112,7 @@ public final class AgentKitApplication {
                     new DefaultPermissionPolicy(),
                     new TerminalIoPrompter(terminalIo),
                     config.permissionMode());
-            AgentExecutor executor = new AgentExecutor(llm, tools, permissions, ExecutionContext.of(cwd, cancel));
+            AgentExecutor executor = new AgentExecutor(llm, tools, permissions);
 
             OutputRenderer renderer = new OutputRenderer(terminalIo);
             terminalIo.writeLine("(permission mode: " + config.permissionMode() + ")");
@@ -222,7 +223,9 @@ public final class AgentKitApplication {
                                  OutputRenderer renderer) {
         try {
             String systemPrompt = composer.compose(cwd).full();
-            executor.run(conversation, cancel, renderer, systemPrompt).join();
+            AgentRunContext context = AgentRunContext.create(
+                    conversation.sessionId(), cwd, cancel, AgentBudget.unlimited());
+            executor.run(conversation, context, renderer, systemPrompt).join();
         } catch (RuntimeException ex) {
             renderer.onError(ex);
         }

@@ -2,6 +2,7 @@ package com.anthropic.agentkit.interfaces.engine;
 
 import com.anthropic.agentkit.application.diagnosis.DiagnosisPlanner;
 import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisCase;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisPlan;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisStep;
@@ -354,7 +355,7 @@ class DiagnoseEngineBuilderTest {
     private static final class FakePlanner implements DiagnosisPlanner {
 
         @Override
-        public DiagnosisPlan createPlan(DiagnosisCase diagnosisCase) {
+        public DiagnosisPlan createPlan(DiagnosisCase diagnosisCase, AgentRunContext context) {
             return new DiagnosisPlan(
                     "hi",
                     List.of(Hypothesis.open("H1", "入口服务报错", 0.4)),
@@ -363,8 +364,9 @@ class DiagnoseEngineBuilderTest {
         }
 
         @Override
-        public DiagnosisPlan updatePlan(DiagnosisCase diagnosisCase, Evidence evidence) {
-            return createPlan(diagnosisCase);
+        public DiagnosisPlan updatePlan(DiagnosisCase diagnosisCase, Evidence evidence,
+                                        AgentRunContext context) {
+            return createPlan(diagnosisCase, context);
         }
     }
 }

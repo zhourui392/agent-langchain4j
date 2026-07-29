@@ -1,5 +1,6 @@
 package com.anthropic.agentkit.infrastructure.coding;
 
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.coding.CodingPlan;
 import com.anthropic.agentkit.domain.coding.CodingTask;
 import com.anthropic.agentkit.domain.coding.FileChange;
@@ -15,6 +16,7 @@ import com.anthropic.agentkit.testsupport.StubLlmClient;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -29,7 +31,7 @@ class StructuredCodingPatcherTest {
         StructuredCodingPatcher patcher = new StructuredCodingPatcher(llm, List.of());
 
         Patch patch = patcher.producePatch(
-                CodingTask.open("task-1", "Add login page"), plan());
+                CodingTask.open("task-1", "Add login page"), plan(), context());
 
         assertThat(patch.summary()).isEqualTo("implement login controller");
         assertThat(patch.changes()).singleElement().satisfies(change -> {
@@ -48,7 +50,7 @@ class StructuredCodingPatcherTest {
                 .enqueue(AiMessage.text("done"));
         StructuredCodingPatcher patcher = new StructuredCodingPatcher(llm, List.of());
 
-        Patch patch = patcher.producePatch(CodingTask.open("task-1", "s"), plan());
+        Patch patch = patcher.producePatch(CodingTask.open("task-1", "s"), plan(), context());
 
         assertThat(patch.changes()).singleElement()
                 .extracting(FileChange::changeType)
@@ -64,7 +66,8 @@ class StructuredCodingPatcherTest {
                 .enqueue(AiMessage.text("done"));
         StructuredCodingPatcher patcher = new StructuredCodingPatcher(llm, List.of());
 
-        Patch patch = patcher.producePatch(CodingTask.open("task-1", "doc-only"), plan());
+        Patch patch = patcher.producePatch(
+                CodingTask.open("task-1", "doc-only"), plan(), context());
 
         assertThat(patch.changes()).isEmpty();
     }
@@ -79,7 +82,7 @@ class StructuredCodingPatcherTest {
                 .enqueue(AiMessage.text("done"));
         StructuredCodingPatcher patcher = new StructuredCodingPatcher(llm, List.of(writeTool));
 
-        patcher.producePatch(CodingTask.open("task-1", "s"), plan());
+        patcher.producePatch(CodingTask.open("task-1", "s"), plan(), context());
 
         assertThat(llm.capturedRequests().get(0).tools())
                 .extracting(ToolSpec::name)
@@ -88,6 +91,10 @@ class StructuredCodingPatcherTest {
 
     private static CodingPlan plan() {
         return new CodingPlan("Add login page", List.of());
+    }
+
+    private static AgentRunContext context() {
+        return AgentRunContext.at(Path.of("."));
     }
 
     private static String patchJson() {

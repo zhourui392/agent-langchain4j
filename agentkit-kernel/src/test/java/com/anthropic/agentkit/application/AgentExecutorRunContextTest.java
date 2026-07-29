@@ -25,6 +25,7 @@ import com.anthropic.agentkit.domain.tool.ToolUseRequest;
 import com.anthropic.agentkit.testsupport.FakeTool;
 import com.anthropic.agentkit.testsupport.StubLlmClient;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
@@ -35,6 +36,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -61,6 +63,23 @@ class AgentExecutorRunContextTest {
     }
 
     @Test
+    void listenerReceivesTheExactRunContext(@TempDir Path workspace) {
+        StubLlmClient llm = new StubLlmClient().enqueue(AiMessage.text("done"));
+        Conversation conversation = conversation("listener-scope");
+        AgentRunContext context = context("listener-run", "listener-workspace", conversation,
+                workspace, new CancellationToken(), AgentBudget.unlimited());
+        AtomicReference<AgentRunContext> observed = new AtomicReference<>();
+        AgentEventListener listener = new AgentEventListener() {
+            @Override public void onRunStart(AgentRunContext started) { observed.set(started); }
+        };
+
+        new AgentExecutor(llm, new ToolRegistry(), allowAll())
+                .run(conversation, context, listener).join();
+
+        assertThat(observed).hasValue(context);
+    }
+
+    @RepeatedTest(100)
     void sameExecutorRunsTwoWorkspacesConcurrently(@TempDir Path root) {
         CyclicBarrier bothToolsStarted = new CyclicBarrier(2);
         ContextRecordingTool tool = new ContextRecordingTool("Inspect", bothToolsStarted);

@@ -31,6 +31,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static com.anthropic.agentkit.testsupport.TestRunContexts.runContext;
 
 class AgentExecutorTest {
 
@@ -41,8 +42,8 @@ class AgentExecutorTest {
         Conversation conv = new Conversation(SessionId.of("test"));
         conv.append(UserMessage.of("say hi"));
 
-        AgentExecutor executor = new AgentExecutor(stub, new ToolRegistry());
-        AiMessage result = executor.run(conv, new CancellationToken()).join();
+        AgentExecutor executor = new AgentExecutor(stub, new ToolRegistry(), PermissionService.bypassing());
+        AiMessage result = executor.run(conv, runContext(conv)).join();
 
         assertThat(stub.capturedRequests()).hasSize(1);
         assertThat(result.text()).isEqualTo("hello world");
@@ -65,8 +66,8 @@ class AgentExecutorTest {
         Conversation conv = new Conversation(SessionId.of("test"));
         conv.append(UserMessage.of("list files"));
 
-        AgentExecutor executor = new AgentExecutor(stub, tools);
-        AiMessage result = executor.run(conv, new CancellationToken()).join();
+        AgentExecutor executor = new AgentExecutor(stub, tools, PermissionService.bypassing());
+        AiMessage result = executor.run(conv, runContext(conv)).join();
 
         assertThat(fakeBash.callCount()).isEqualTo(1);
         assertThat(result.text()).isEqualTo("done: file.txt");
@@ -111,9 +112,9 @@ class AgentExecutorTest {
         Conversation conv = new Conversation(SessionId.of("test"));
         conv.append(UserMessage.of("run three tools"));
 
-        AgentExecutor executor = new AgentExecutor(stub, tools);
+        AgentExecutor executor = new AgentExecutor(stub, tools, PermissionService.bypassing());
         long startNs = System.nanoTime();
-        executor.run(conv, new CancellationToken()).join();
+        executor.run(conv, runContext(conv)).join();
         long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
 
         assertThat(elapsedMs).as("parallel dispatch should be faster than sum (=250ms)")
@@ -138,9 +139,9 @@ class AgentExecutorTest {
         CancellationToken cancel = new CancellationToken();
         cancel.cancel();
 
-        AgentExecutor executor = new AgentExecutor(stub, new ToolRegistry());
+        AgentExecutor executor = new AgentExecutor(stub, new ToolRegistry(), PermissionService.bypassing());
 
-        assertThatThrownBy(() -> executor.run(conv, cancel).join())
+        assertThatThrownBy(() -> executor.run(conv, runContext(conv, cancel)).join())
                 .isInstanceOf(CompletionException.class)
                 .hasCauseInstanceOf(CancellationException.class);
         assertThat(stub.capturedRequests()).isEmpty();
@@ -164,9 +165,9 @@ class AgentExecutorTest {
         Conversation conv = new Conversation(SessionId.of("test"));
         conv.append(UserMessage.of("trigger cancel"));
 
-        AgentExecutor executor = new AgentExecutor(stub, tools);
+        AgentExecutor executor = new AgentExecutor(stub, tools, PermissionService.bypassing());
 
-        assertThatThrownBy(() -> executor.run(conv, cancel).join())
+        assertThatThrownBy(() -> executor.run(conv, runContext(conv, cancel)).join())
                 .isInstanceOf(CompletionException.class)
                 .hasCauseInstanceOf(CancellationException.class);
         assertThat(stub.capturedRequests()).hasSize(1);
@@ -196,7 +197,7 @@ class AgentExecutorTest {
         conv.append(UserMessage.of("write file"));
 
         AgentExecutor executor = new AgentExecutor(stub, tools, permissions);
-        executor.run(conv, new CancellationToken()).join();
+        executor.run(conv, runContext(conv)).join();
 
         assertThat(toolCalls.get()).isZero();
         assertThat(conv.messages()).filteredOn(m -> m instanceof com.anthropic.agentkit.domain.message.ToolResultMessage)
@@ -224,7 +225,7 @@ class AgentExecutorTest {
         conv.append(UserMessage.of("read it"));
 
         AgentExecutor executor = new AgentExecutor(stub, tools, permissions);
-        executor.run(conv, new CancellationToken()).join();
+        executor.run(conv, runContext(conv)).join();
 
         assertThat(conv.messages()).filteredOn(m -> m instanceof com.anthropic.agentkit.domain.message.ToolResultMessage)
                 .singleElement()
@@ -252,7 +253,7 @@ class AgentExecutorTest {
         conv.append(UserMessage.of("write something"));
 
         AgentExecutor executor = new AgentExecutor(stub, tools, permissions);
-        executor.run(conv, new CancellationToken()).join();
+        executor.run(conv, runContext(conv)).join();
 
         verify(prompter, times(1)).ask(any(), any());
     }
@@ -273,8 +274,8 @@ class AgentExecutorTest {
         UserMessage user = UserMessage.of("question");
         conv.append(user);
 
-        AgentExecutor executor = new AgentExecutor(stub, new ToolRegistry());
-        executor.run(conv, new CancellationToken()).join();
+        AgentExecutor executor = new AgentExecutor(stub, new ToolRegistry(), PermissionService.bypassing());
+        executor.run(conv, runContext(conv)).join();
 
         assertThat(stub.capturedRequests().get(0).messages())
                 .containsExactly(user);
@@ -286,8 +287,8 @@ class AgentExecutorTest {
         Conversation conv = new Conversation(SessionId.of("test"));
         conv.append(UserMessage.of("question"));
 
-        AgentExecutor executor = new AgentExecutor(stub, new ToolRegistry());
-        executor.run(conv, new CancellationToken(), AgentEventListener.NO_OP,
+        AgentExecutor executor = new AgentExecutor(stub, new ToolRegistry(), PermissionService.bypassing());
+        executor.run(conv, runContext(conv), AgentEventListener.NO_OP,
                 "diagnosis instructions").join();
 
         assertThat(stub.capturedRequests().get(0).systemPrompt())
@@ -308,7 +309,8 @@ class AgentExecutorTest {
         Conversation conv = new Conversation(SessionId.of("test"));
         conv.append(UserMessage.of("ls please"));
 
-        new AgentExecutor(stub, tools).run(conv, new CancellationToken(), listener).join();
+        new AgentExecutor(stub, tools, PermissionService.bypassing())
+                .run(conv, runContext(conv), listener).join();
 
         assertThat(listener.events()).containsSubsequence(
                 "llmRequestStart",
@@ -338,7 +340,7 @@ class AgentExecutorTest {
         Conversation conv = new Conversation(SessionId.of("test"));
         conv.append(UserMessage.of("write something"));
 
-        new AgentExecutor(stub, tools, deny).run(conv, new CancellationToken(), listener).join();
+        new AgentExecutor(stub, tools, deny).run(conv, runContext(conv), listener).join();
 
         assertThat(listener.events()).contains("toolUseEnd:Write:error");
     }
@@ -353,7 +355,8 @@ class AgentExecutorTest {
         Conversation conv = new Conversation(SessionId.of("test"));
         conv.append(UserMessage.of("anything"));
 
-        new AgentExecutor(stub, tools).run(conv, new CancellationToken()).join();
+        new AgentExecutor(stub, tools, PermissionService.bypassing())
+                .run(conv, runContext(conv)).join();
 
         assertThat(stub.capturedRequests().get(0).tools())
                 .extracting(com.anthropic.agentkit.domain.port.ToolSpec::name)

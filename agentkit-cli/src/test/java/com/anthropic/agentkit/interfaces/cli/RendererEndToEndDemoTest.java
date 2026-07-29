@@ -1,6 +1,9 @@
 package com.anthropic.agentkit.interfaces.cli;
 
 import com.anthropic.agentkit.application.AgentExecutor;
+import com.anthropic.agentkit.application.PermissionService;
+import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
@@ -15,6 +18,7 @@ import com.anthropic.agentkit.testsupport.io.ScriptedTerminalIo;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -37,7 +41,10 @@ class RendererEndToEndDemoTest {
         Conversation conv = new Conversation(SessionId.of("demo"));
         conv.append(UserMessage.of("list markdown files"));
 
-        new AgentExecutor(stub, tools).run(conv, new CancellationToken(), renderer).join();
+        AgentRunContext context = AgentRunContext.create(
+                conv.sessionId(), Path.of("."), new CancellationToken(), AgentBudget.unlimited());
+        new AgentExecutor(stub, tools, PermissionService.bypassing())
+                .run(conv, context, renderer).join();
 
         String transcript = io.output();
         assertThat(transcript)

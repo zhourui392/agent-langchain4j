@@ -1,17 +1,16 @@
 package com.anthropic.agentkit.infrastructure.coding;
 
 import com.anthropic.agentkit.application.coding.CodingPlanner;
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.coding.CodingPlan;
 import com.anthropic.agentkit.domain.coding.CodingTask;
 import com.anthropic.agentkit.domain.coding.TaskItem;
 import com.anthropic.agentkit.domain.coding.TaskItemStatus;
 import com.anthropic.agentkit.domain.port.LlmClient;
-import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.infrastructure.agent.StructuredAgent;
 import com.anthropic.agentkit.infrastructure.agent.TerminalToolSpec;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -50,12 +49,12 @@ public final class StructuredCodingPlanner implements CodingPlanner {
     }
 
     @Override
-    public CodingPlan createPlan(CodingTask task) {
+    public CodingPlan createPlan(CodingTask task, AgentRunContext context) {
         long startNs = System.nanoTime();
         StructuredAgent agent = new StructuredAgent(llm, SYSTEM_PROMPT, PLAN_OUTPUT, List.of());
         Map<String, Object> payload = agent.run(
                 "Create a coding plan for: " + task.requirement(),
-                ExecutionContext.at(Path.of(".")));
+                context);
         CodingPlan plan = toPlan(payload);
         log.info("coding plan created: taskId={}, tasks={}, durationMs={}",
                 task.taskId(), plan.tasks().size(), elapsedMs(startNs));

@@ -1,5 +1,6 @@
 package com.anthropic.agentkit.application.diagnosis;
 
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisCase;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisPlan;
 import com.anthropic.agentkit.domain.diagnosis.Evidence;
@@ -12,7 +13,7 @@ import com.anthropic.agentkit.domain.diagnosis.Evidence;
  */
 public interface DiagnosisPlanner {
 
-    DiagnosisPlan createPlan(DiagnosisCase diagnosisCase);
+    DiagnosisPlan createPlan(DiagnosisCase diagnosisCase, AgentRunContext context);
 
-    DiagnosisPlan updatePlan(DiagnosisCase diagnosisCase, Evidence evidence);
+    DiagnosisPlan updatePlan(DiagnosisCase diagnosisCase, Evidence evidence, AgentRunContext context);
 }

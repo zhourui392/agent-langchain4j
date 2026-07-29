@@ -16,13 +16,11 @@ import org.slf4j.LoggerFactory;
 public final class PermissionService {
 
     private static final Logger log = LoggerFactory.getLogger(PermissionService.class);
-    private static final RunId LEGACY_RUN = RunId.of("legacy-permission-scope");
-
     private final PermissionPolicy policy;
     private final InteractivePrompter prompter;
     private final PermissionDecisionCache cache = new PermissionDecisionCache();
     private final Object prompterLock = new Object();
-    private PermissionMode mode;
+    private final PermissionMode mode;
 
     public PermissionService(PermissionPolicy policy, InteractivePrompter prompter,
                              PermissionMode initialMode) {
@@ -35,12 +33,13 @@ public final class PermissionService {
         return mode;
     }
 
-    public void setMode(PermissionMode mode) {
-        this.mode = Objects.requireNonNull(mode, "mode");
-    }
-
-    public Decision check(ToolInvocation invocation, Tool tool) {
-        return check(LEGACY_RUN, invocation, tool);
+    public static PermissionService bypassing() {
+        return new PermissionService(
+                (invocation, tool, mode) -> Decision.ALLOW,
+                (invocation, tool) -> {
+                    throw new IllegalStateException("interactive permission prompt is disabled");
+                },
+                PermissionMode.BYPASS);
     }
 
     public Decision check(RunId runId, ToolInvocation invocation, Tool tool) {

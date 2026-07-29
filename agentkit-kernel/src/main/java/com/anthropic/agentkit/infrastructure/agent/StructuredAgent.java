@@ -2,13 +2,12 @@ package com.anthropic.agentkit.infrastructure.agent;
 
 import com.anthropic.agentkit.application.AgentEventListener;
 import com.anthropic.agentkit.application.AgentExecutor;
+import com.anthropic.agentkit.application.PermissionService;
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.conversation.Conversation;
-import com.anthropic.agentkit.domain.conversation.SessionId;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.tool.Tool;
-import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.infrastructure.tools.StructuredOutputTool;
 
@@ -55,7 +54,7 @@ public final class StructuredAgent {
         AtomicReference<Map<String, Object>> sink = new AtomicReference<>();
         Conversation conversation = new Conversation(ctx.sessionId());
         conversation.append(UserMessage.of(task));
-        new AgentExecutor(llm, buildRegistry(sink))
+        new AgentExecutor(llm, buildRegistry(sink), PermissionService.bypassing())
                 .run(conversation, ctx, AgentEventListener.NO_OP, systemPrompt)
                 .join();
         Map<String, Object> payload = sink.get();
@@ -63,16 +62,6 @@ public final class StructuredAgent {
             throw new StructuredOutputMissingException(output.name());
         }
         return payload;
-    }
-
-    /** @deprecated callers should provide the complete run scope. */
-    @Deprecated
-    public Map<String, Object> run(String task, ExecutionContext ctx) {
-        Objects.requireNonNull(ctx, "ctx");
-        AgentRunContext runContext = AgentRunContext.of(
-                ctx.runId(), SessionId.fresh(), ctx.workspaceId(), ctx.cwd(),
-                ctx.cancellation(), ctx.budget());
-        return run(task, runContext);
     }
 
     private ToolRegistry buildRegistry(AtomicReference<Map<String, Object>> sink) {

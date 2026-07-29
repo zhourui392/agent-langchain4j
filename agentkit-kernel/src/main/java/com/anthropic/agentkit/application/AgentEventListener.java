@@ -1,5 +1,6 @@
 package com.anthropic.agentkit.application;
 
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.domain.tool.ToolUseRequest;
@@ -8,6 +9,9 @@ public interface AgentEventListener {
 
     AgentEventListener NO_OP = new AgentEventListener() {
     };
+
+    default void onRunStart(AgentRunContext context) {
+    }
 
     default void onLlmRequestStart() {
     }

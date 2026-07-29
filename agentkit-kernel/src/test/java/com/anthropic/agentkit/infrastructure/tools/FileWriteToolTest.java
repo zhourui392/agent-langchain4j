@@ -29,7 +29,7 @@ class FileWriteToolTest {
 
         ToolResult result = tool.execute(
                 ToolArguments.of(Map.of("path", file.toString(), "content", "hello")),
-                ExecutionContext.at(dir));
+                executionContext("test-run", WorkspaceId.fromPath(dir).value(), dir));
 
         assertThat(result.success()).isTrue();
         assertThat(Files.readString(file)).isEqualTo("hello");
@@ -40,12 +40,13 @@ class FileWriteToolTest {
         Path file = dir.resolve("existing.txt");
         Files.writeString(file, "old");
         FileStateCache cache = new FileStateCache();
-        cache.recordRead(file);
+        cache.recordRead(executionContext(
+                "test-run", WorkspaceId.fromPath(dir).value(), dir), file);
 
         FileWriteTool tool = new FileWriteTool(cache);
         ToolResult result = tool.execute(
                 ToolArguments.of(Map.of("path", file.toString(), "content", "new")),
-                ExecutionContext.at(dir));
+                executionContext("test-run", WorkspaceId.fromPath(dir).value(), dir));
 
         assertThat(result.success()).isTrue();
         assertThat(Files.readString(file)).isEqualTo("new");
@@ -58,7 +59,7 @@ class FileWriteToolTest {
 
         ToolResult result = tool.execute(
                 ToolArguments.of(Map.of("path", file.toString(), "content", "deep")),
-                ExecutionContext.at(dir));
+                executionContext("test-run", WorkspaceId.fromPath(dir).value(), dir));
 
         assertThat(result.success()).isTrue();
         assertThat(Files.readString(file)).isEqualTo("deep");
@@ -72,7 +73,7 @@ class FileWriteToolTest {
 
         ToolResult result = tool.execute(
                 ToolArguments.of(Map.of("path", file.toString(), "content", "new")),
-                ExecutionContext.at(dir));
+                executionContext("test-run", WorkspaceId.fromPath(dir).value(), dir));
 
         assertThat(result.success()).isFalse();
         assertThat(result.content()).contains("must Read");
@@ -92,6 +93,25 @@ class FileWriteToolTest {
         ToolResult result = write.execute(
                 ToolArguments.of(Map.of("path", file.toString(), "content", "new")),
                 executionContext("write-run", "workspace-b", dir));
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.content()).contains("must Read");
+        assertThat(Files.readString(file)).isEqualTo("old");
+    }
+
+    @Test
+    void readAuthorizationDoesNotLeakAcrossRunsInSameWorkspace(@TempDir Path dir) throws IOException {
+        Path file = dir.resolve("existing.txt");
+        Files.writeString(file, "old");
+        FileStateCache cache = new FileStateCache();
+        FileReadTool read = new FileReadTool(cache);
+        FileWriteTool write = new FileWriteTool(cache);
+
+        read.execute(ToolArguments.of(Map.of("path", file.toString())),
+                executionContext("read-run", "workspace", dir));
+        ToolResult result = write.execute(
+                ToolArguments.of(Map.of("path", file.toString(), "content", "new")),
+                executionContext("write-run", "workspace", dir));
 
         assertThat(result.success()).isFalse();
         assertThat(result.content()).contains("must Read");

@@ -1,5 +1,6 @@
 package com.anthropic.agentkit.infrastructure.diagnosis;
 
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisCase;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisPlan;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisReport;
@@ -14,6 +15,7 @@ import com.anthropic.agentkit.testsupport.StubLlmClient;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -28,7 +30,8 @@ class StructuredDiagnosisReporterTest {
                 .enqueue(AiMessage.text("reported"));
         DiagnosisCase diagnosisCase = caseWithToolEvidence();
 
-        DiagnosisReport report = new StructuredDiagnosisReporter(llm).report(diagnosisCase);
+        DiagnosisReport report = new StructuredDiagnosisReporter(llm).report(
+                diagnosisCase, AgentRunContext.at(Path.of(".")));
 
         assertThat(report.summary()).isEqualTo("库存不足");
         assertThat(report.rootCauseCandidates()).singleElement()
@@ -46,7 +49,8 @@ class StructuredDiagnosisReporterTest {
                         new ToolUseId("report-1"), "submit_report", reportJson("missing")))))
                 .enqueue(AiMessage.text("reported"));
 
-        assertThatThrownBy(() -> new StructuredDiagnosisReporter(llm).report(caseWithToolEvidence()))
+        assertThatThrownBy(() -> new StructuredDiagnosisReporter(llm).report(
+                caseWithToolEvidence(), AgentRunContext.at(Path.of("."))))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("missing evidence");
     }

@@ -1,5 +1,7 @@
 package com.anthropic.agentkit.application;
 
+import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
@@ -9,7 +11,6 @@ import com.anthropic.agentkit.domain.message.ToolResultMessage;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.permission.Decision;
 import com.anthropic.agentkit.domain.permission.PermissionMode;
-import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.infrastructure.config.AppConfig;
 import com.anthropic.agentkit.infrastructure.config.ConfigLoader;
@@ -46,15 +47,16 @@ class AgentExecutorImplicitToolSmokeIT {
 
         Path cwd = Paths.get(System.getProperty("user.dir", "."));
         CancellationToken cancel = new CancellationToken();
-        AgentExecutor executor = new AgentExecutor(llm, tools,
-                bypassPermissions(), ExecutionContext.of(cwd, cancel));
+        AgentExecutor executor = new AgentExecutor(llm, tools, bypassPermissions());
 
         Conversation conversation = new Conversation(SessionId.fresh());
         conversation.append(UserMessage.of(
                 "List the markdown files in the current working directory. " +
                 "Pick whatever tool you have. Then tell me how many you found."));
 
-        AiMessage finalMessage = executor.run(conversation, cancel).get(120, TimeUnit.SECONDS);
+        AgentRunContext context = AgentRunContext.create(
+                conversation.sessionId(), cwd, cancel, AgentBudget.unlimited());
+        AiMessage finalMessage = executor.run(conversation, context).get(120, TimeUnit.SECONDS);
 
         List<ToolResultMessage> results = toolResults(conversation);
         assertThat(results)

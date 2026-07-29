@@ -1,5 +1,6 @@
 package com.anthropic.agentkit.application.diagnosis;
 
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisCase;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisReport;
 
@@ -11,5 +12,5 @@ import com.anthropic.agentkit.domain.diagnosis.DiagnosisReport;
  */
 public interface DiagnosisReporter {
 
-    DiagnosisReport report(DiagnosisCase diagnosisCase);
+    DiagnosisReport report(DiagnosisCase diagnosisCase, AgentRunContext context);
 }

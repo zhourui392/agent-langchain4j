@@ -1,6 +1,7 @@
 package com.anthropic.agentkit.application;
 
 import com.anthropic.agentkit.application.InteractivePrompter.UserPermissionResponse;
+import com.anthropic.agentkit.domain.agent.RunId;
 import com.anthropic.agentkit.domain.permission.Decision;
 import com.anthropic.agentkit.domain.permission.PermissionMode;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
@@ -22,6 +23,7 @@ import static org.mockito.Mockito.when;
 
 class PermissionServiceTest {
 
+    private static final RunId RUN_ID = RunId.of("permission-test-run");
     private final Tool readTool = stubTool("Read", true);
     private final Tool writeTool = stubTool("Write", false);
 
@@ -31,7 +33,7 @@ class PermissionServiceTest {
         PermissionService service = new PermissionService(
                 new DefaultPermissionPolicy(), prompter, PermissionMode.DEFAULT);
 
-        Decision decision = service.check(invocationFor(readTool), readTool);
+        Decision decision = service.check(RUN_ID, invocationFor(readTool), readTool);
 
         assertThat(decision).isEqualTo(Decision.ALLOW);
         verify(prompter, never()).ask(any(), any());
@@ -43,7 +45,7 @@ class PermissionServiceTest {
         PermissionService service = new PermissionService(
                 new DefaultPermissionPolicy(), prompter, PermissionMode.PLAN);
 
-        Decision decision = service.check(invocationFor(writeTool), writeTool);
+        Decision decision = service.check(RUN_ID, invocationFor(writeTool), writeTool);
 
         assertThat(decision).isEqualTo(Decision.DENY);
         verify(prompter, never()).ask(any(), any());
@@ -56,7 +58,7 @@ class PermissionServiceTest {
         PermissionService service = new PermissionService(
                 new DefaultPermissionPolicy(), prompter, PermissionMode.DEFAULT);
 
-        Decision decision = service.check(invocationFor(writeTool), writeTool);
+        Decision decision = service.check(RUN_ID, invocationFor(writeTool), writeTool);
 
         assertThat(decision).isEqualTo(Decision.ALLOW);
         verify(prompter, times(1)).ask(any(), any());
@@ -69,7 +71,7 @@ class PermissionServiceTest {
         PermissionService service = new PermissionService(
                 new DefaultPermissionPolicy(), prompter, PermissionMode.DEFAULT);
 
-        Decision decision = service.check(invocationFor(writeTool), writeTool);
+        Decision decision = service.check(RUN_ID, invocationFor(writeTool), writeTool);
 
         assertThat(decision).isEqualTo(Decision.DENY);
     }
@@ -81,9 +83,9 @@ class PermissionServiceTest {
         PermissionService service = new PermissionService(
                 new DefaultPermissionPolicy(), prompter, PermissionMode.DEFAULT);
 
-        Decision first = service.check(invocationFor(writeTool), writeTool);
-        Decision second = service.check(invocationFor(writeTool), writeTool);
-        Decision third = service.check(invocationFor(writeTool), writeTool);
+        Decision first = service.check(RUN_ID, invocationFor(writeTool), writeTool);
+        Decision second = service.check(RUN_ID, invocationFor(writeTool), writeTool);
+        Decision third = service.check(RUN_ID, invocationFor(writeTool), writeTool);
 
         assertThat(first).isEqualTo(Decision.ALLOW);
         assertThat(second).isEqualTo(Decision.ALLOW);

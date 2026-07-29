@@ -1,19 +1,18 @@
 package com.anthropic.agentkit.infrastructure.coding;
 
 import com.anthropic.agentkit.application.coding.CodingPatcher;
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.coding.CodingPlan;
 import com.anthropic.agentkit.domain.coding.CodingTask;
 import com.anthropic.agentkit.domain.coding.FileChange;
 import com.anthropic.agentkit.domain.coding.FileChangeType;
 import com.anthropic.agentkit.domain.coding.Patch;
 import com.anthropic.agentkit.domain.port.LlmClient;
-import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.infrastructure.agent.StructuredAgent;
 import com.anthropic.agentkit.infrastructure.agent.TerminalToolSpec;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -57,10 +56,10 @@ public final class StructuredCodingPatcher implements CodingPatcher {
     }
 
     @Override
-    public Patch producePatch(CodingTask task, CodingPlan plan) {
+    public Patch producePatch(CodingTask task, CodingPlan plan, AgentRunContext context) {
         long startNs = System.nanoTime();
         StructuredAgent agent = new StructuredAgent(llm, SYSTEM_PROMPT, PATCH_OUTPUT, codingTools);
-        Map<String, Object> payload = agent.run(buildTask(task, plan), ExecutionContext.at(Path.of(".")));
+        Map<String, Object> payload = agent.run(buildTask(task, plan), context);
         Patch patch = toPatch(payload);
         log.info("patch produced: taskId={}, changes={}, durationMs={}",
                 task.taskId(), patch.changes().size(), elapsedMs(startNs));

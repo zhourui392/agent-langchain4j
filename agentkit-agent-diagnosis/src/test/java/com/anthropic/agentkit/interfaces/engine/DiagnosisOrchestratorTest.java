@@ -1,6 +1,7 @@
 package com.anthropic.agentkit.interfaces.engine;
 
 import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
@@ -208,12 +209,13 @@ class DiagnosisOrchestratorTest {
     private static class FakePlanner implements com.anthropic.agentkit.application.diagnosis.DiagnosisPlanner {
 
         @Override
-        public DiagnosisPlan createPlan(DiagnosisCase diagnosisCase) {
+        public DiagnosisPlan createPlan(DiagnosisCase diagnosisCase, AgentRunContext context) {
             return plan();
         }
 
         @Override
-        public DiagnosisPlan updatePlan(DiagnosisCase diagnosisCase, Evidence evidence) {
+        public DiagnosisPlan updatePlan(DiagnosisCase diagnosisCase, Evidence evidence,
+                                        AgentRunContext context) {
             return plan();
         }
     }
@@ -223,7 +225,8 @@ class DiagnosisOrchestratorTest {
         private int updateCalls;
 
         @Override
-        public DiagnosisPlan updatePlan(DiagnosisCase diagnosisCase, Evidence evidence) {
+        public DiagnosisPlan updatePlan(DiagnosisCase diagnosisCase, Evidence evidence,
+                                        AgentRunContext context) {
             updateCalls++;
             return new DiagnosisPlan(
                     "updated",
@@ -237,7 +240,7 @@ class DiagnosisOrchestratorTest {
             implements com.anthropic.agentkit.application.diagnosis.DiagnosisPlanner {
 
         @Override
-        public DiagnosisPlan createPlan(DiagnosisCase diagnosisCase) {
+        public DiagnosisPlan createPlan(DiagnosisCase diagnosisCase, AgentRunContext context) {
             return new DiagnosisPlan(
                     "need scope",
                     List.of(Hypothesis.open("H1", "missing scope", 0.1)),
@@ -247,8 +250,9 @@ class DiagnosisOrchestratorTest {
         }
 
         @Override
-        public DiagnosisPlan updatePlan(DiagnosisCase diagnosisCase, Evidence evidence) {
-            return createPlan(diagnosisCase);
+        public DiagnosisPlan updatePlan(DiagnosisCase diagnosisCase, Evidence evidence,
+                                        AgentRunContext context) {
+            return createPlan(diagnosisCase, context);
         }
     }
 
@@ -256,7 +260,7 @@ class DiagnosisOrchestratorTest {
             implements com.anthropic.agentkit.application.diagnosis.DiagnosisReporter {
 
         @Override
-        public DiagnosisReport report(DiagnosisCase diagnosisCase) {
+        public DiagnosisReport report(DiagnosisCase diagnosisCase, AgentRunContext context) {
             return new DiagnosisReport("summary", List.of(), List.of(), List.of(), 0.1, true);
         }
     }

@@ -613,7 +613,23 @@ agentkit/
 | 重试/转人工 | 单趟作用域：任何非 ACCEPT 的 verdict 即终止（REJECTED）；重试循环与 NEEDS_HUMAN 非终结留聚合根的未来增量 | pipeline 不写 `if (retryCount < n)` |
 | Reviewer 兜底 | `decision` 非 schema 必填，缺省由映射兜底 `NEEDS_HUMAN` | 判定不清晰时升级人工而非崩溃 |
 
-**暂不做**：`AgentManifest` / CLI 派发（等第二个 agent 真要插入）、`ExecutionContext` cwd 透传进角色端口（当前与 diagnosis 一致用 `Path.of(".")`，L0 即 worktree）、容器沙箱（L2 拐点）。
+**暂不做**：`AgentManifest` / CLI 派发（等第二个可派发 agent 入口真要插入）、容器沙箱（L2 拐点）。
+
+### 16.8 AgentRunContext 单一运行作用域（2026-07-29）
+
+推翻 §16.7 中“暂不做 `ExecutionContext` cwd 透传”的延后决定。diagnosis 与 coding 已经形成两个独立 agent 包；若继续由角色内部使用 `Path.of(".")`，同一 executor 并发服务不同 worktree 时会把工具送进错误目录。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| 静态与动态状态 | `AgentExecutor` 只持 `LlmClient`、`ToolRegistry`、`PermissionService` 静态依赖；`run` 必须显式接收 `AgentRunContext` | executor 不捕获 cwd、cancellation 或 budget，可并发复用 |
+| 运行身份 | `AgentRunContext` 是 `RunId`、`SessionId`、`WorkspaceId`、规范化 workspace root、cancellation、budget 的单一事实来源 | conversation session 不匹配时 fail-fast；kernel executor 不读取 `user.dir` |
+| 工具视图 | `ExecutionContext` 是从 `AgentRunContext` 派生的受限工具执行视图，不是第二份运行配置 | 所有工具收到同一 RunId/workspace/cancellation/budget；生产入口不得自行制造默认 context |
+| 可变状态 | dispatcher 与 budget guard 收敛进每次 run 创建的私有 `AgentRunState` | 并发 run 不共享 dispatcher 或预算消费 |
+| 授权隔离 | permission `ALLOW_ALWAYS` cache 按 RunId；文件先读后写 cache 按 `(RunId, WorkspaceId, normalizedPath)` | run 结束清理权限；同 workspace 的另一 run 也不能复用读授权 |
+| 子 Agent 与事件 | `SubAgentTool` 建新 child session，但继承父 RunId/workspace/cancellation/budget；listener 通过 `onRunStart` 接收完整 context | 子 Agent、工具、权限、日志和事件可用同一 RunId 关联 |
+| agent 包透传 | diagnosis orchestrator 从请求 cwd 构造一次 context；coding pipeline 接收一次 context，按 Planner → Patcher → Reviewer 原样传递 | 领域角色不再读取进程 cwd，且编排规则仍留在各 agent 包 application 层 |
+
+`AgentRunContext` 仍只承载运行能力边界，不承载任意集合或 agent 领域状态。deadline、child limits 等后续运行限制可以演进为明确的 limits VO；不得把全局单例或 `ThreadLocal` 变成事实来源。MDC 只保留日志投影职责。
 
 ---
 

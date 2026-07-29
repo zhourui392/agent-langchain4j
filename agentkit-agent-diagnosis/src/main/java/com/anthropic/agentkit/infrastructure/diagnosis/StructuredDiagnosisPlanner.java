@@ -1,6 +1,7 @@
 package com.anthropic.agentkit.infrastructure.diagnosis;
 
 import com.anthropic.agentkit.application.diagnosis.DiagnosisPlanner;
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisCase;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisPlan;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisStep;
@@ -8,12 +9,10 @@ import com.anthropic.agentkit.domain.diagnosis.Evidence;
 import com.anthropic.agentkit.domain.diagnosis.Hypothesis;
 import com.anthropic.agentkit.domain.diagnosis.StepStatus;
 import com.anthropic.agentkit.domain.port.LlmClient;
-import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.infrastructure.agent.StructuredAgent;
 import com.anthropic.agentkit.infrastructure.agent.TerminalToolSpec;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -53,12 +52,12 @@ public final class StructuredDiagnosisPlanner implements DiagnosisPlanner {
     }
 
     @Override
-    public DiagnosisPlan createPlan(DiagnosisCase diagnosisCase) {
+    public DiagnosisPlan createPlan(DiagnosisCase diagnosisCase, AgentRunContext context) {
         long startNs = System.nanoTime();
         StructuredAgent agent = new StructuredAgent(llm, SYSTEM_PROMPT, PLAN_OUTPUT, List.of());
         Map<String, Object> payload = agent.run(
                 "Create a diagnosis plan for: " + diagnosisCase.question(),
-                ExecutionContext.at(Path.of(".")));
+                context);
         DiagnosisPlan plan = toPlan(payload);
         log.info("diagnosis plan created: caseId={}, steps={}, hypotheses={}, missingInputs={}, durationMs={}",
                 diagnosisCase.caseId(), plan.steps().size(), plan.hypotheses().size(),
@@ -67,10 +66,11 @@ public final class StructuredDiagnosisPlanner implements DiagnosisPlanner {
     }
 
     @Override
-    public DiagnosisPlan updatePlan(DiagnosisCase diagnosisCase, Evidence evidence) {
+    public DiagnosisPlan updatePlan(DiagnosisCase diagnosisCase, Evidence evidence,
+                                    AgentRunContext context) {
         log.info("diagnosis plan update requested: caseId={}, evidenceId={}",
                 diagnosisCase.caseId(), evidence.id());
-        return createPlan(diagnosisCase);
+        return createPlan(diagnosisCase, context);
     }
 
     private DiagnosisPlan toPlan(Map<String, Object> payload) {

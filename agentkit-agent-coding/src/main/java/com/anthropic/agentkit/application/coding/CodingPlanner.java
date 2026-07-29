@@ -1,5 +1,6 @@
 package com.anthropic.agentkit.application.coding;
 
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.coding.CodingPlan;
 import com.anthropic.agentkit.domain.coding.CodingTask;
 
@@ -16,5 +17,5 @@ import com.anthropic.agentkit.domain.coding.CodingTask;
  */
 public interface CodingPlanner {
 
-    CodingPlan createPlan(CodingTask task);
+    CodingPlan createPlan(CodingTask task, AgentRunContext context);
 }

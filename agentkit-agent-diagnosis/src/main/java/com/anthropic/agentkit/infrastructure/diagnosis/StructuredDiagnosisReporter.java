@@ -1,26 +1,20 @@
 package com.anthropic.agentkit.infrastructure.diagnosis;
 
-import com.anthropic.agentkit.application.AgentEventListener;
-import com.anthropic.agentkit.application.AgentExecutor;
 import com.anthropic.agentkit.application.diagnosis.DiagnosisReporter;
-import com.anthropic.agentkit.domain.conversation.CancellationToken;
-import com.anthropic.agentkit.domain.conversation.Conversation;
-import com.anthropic.agentkit.domain.conversation.SessionId;
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisCase;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisReport;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisReportValidationResult;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisReportValidator;
 import com.anthropic.agentkit.domain.diagnosis.RootCauseCandidate;
-import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.port.LlmClient;
-import com.anthropic.agentkit.domain.tool.ToolRegistry;
-import com.anthropic.agentkit.infrastructure.tools.StructuredOutputTool;
+import com.anthropic.agentkit.infrastructure.agent.StructuredAgent;
+import com.anthropic.agentkit.infrastructure.agent.TerminalToolSpec;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicReference;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,6 +43,8 @@ public final class StructuredDiagnosisReporter implements DiagnosisReporter {
             "recommendedActions","confidence","needHumanCheck"]}""";
     private static final String SYSTEM_PROMPT =
             "Submit a structured diagnosis report by calling the submit_report tool.";
+    private static final TerminalToolSpec REPORT_OUTPUT = new TerminalToolSpec(
+            TOOL_NAME, "Submit a structured diagnosis report", REPORT_SCHEMA);
 
     private final LlmClient llm;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -59,27 +55,17 @@ public final class StructuredDiagnosisReporter implements DiagnosisReporter {
     }
 
     @Override
-    public DiagnosisReport report(DiagnosisCase diagnosisCase) {
+    public DiagnosisReport report(DiagnosisCase diagnosisCase, AgentRunContext context) {
         long startNs = System.nanoTime();
-        AtomicReference<Map<String, Object>> acceptedReport = new AtomicReference<>();
-        ToolRegistry tools = new ToolRegistry().register(new StructuredOutputTool(
-                TOOL_NAME, "Submit a structured diagnosis report", REPORT_SCHEMA, acceptedReport::set));
-        Conversation conversation = conversationFor(diagnosisCase);
-
-        new AgentExecutor(llm, tools).run(conversation, new CancellationToken(),
-                AgentEventListener.NO_OP, SYSTEM_PROMPT).join();
-        DiagnosisReport report = toReport(acceptedReport.get());
+        StructuredAgent agent = new StructuredAgent(llm, SYSTEM_PROMPT, REPORT_OUTPUT, List.of());
+        Map<String, Object> payload = agent.run(
+                "Create a report for: " + diagnosisCase.question(), context);
+        DiagnosisReport report = toReport(payload);
         validate(report, diagnosisCase);
         log.info("diagnosis report created: caseId={}, candidates={}, confidence={}, durationMs={}",
                 diagnosisCase.caseId(), report.rootCauseCandidates().size(),
                 report.confidence(), elapsedMs(startNs));
         return report;
-    }
-
-    private static Conversation conversationFor(DiagnosisCase diagnosisCase) {
-        Conversation conversation = new Conversation(SessionId.fresh());
-        conversation.append(UserMessage.of("Create a report for: " + diagnosisCase.question()));
-        return conversation;
     }
 
     private DiagnosisReport toReport(Map<String, Object> payload) {

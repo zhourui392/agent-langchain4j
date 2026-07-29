@@ -1,6 +1,9 @@
 package com.anthropic.agentkit;
 
 import com.anthropic.agentkit.application.AgentExecutor;
+import com.anthropic.agentkit.application.PermissionService;
+import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
@@ -13,6 +16,8 @@ import com.anthropic.agentkit.testsupport.StubLlmClient;
 import com.anthropic.agentkit.testsupport.io.ScriptedTerminalIo;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Path;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class HeadlessPipelineSmokeTest {
@@ -24,12 +29,13 @@ class HeadlessPipelineSmokeTest {
                 .input("hi")
                 .build();
         OutputRenderer renderer = new OutputRenderer(io, false);
-        AgentExecutor executor = new AgentExecutor(llm, new ToolRegistry());
+        AgentExecutor executor = new AgentExecutor(
+                llm, new ToolRegistry(), PermissionService.bypassing());
         Conversation conversation = new Conversation(SessionId.fresh());
 
         ReplLoop repl = new ReplLoop(io, line -> {
             conversation.append(UserMessage.of(line));
-            executor.run(conversation, new CancellationToken(), renderer).join();
+            executor.run(conversation, context(conversation), renderer).join();
         });
         repl.run();
 
@@ -44,16 +50,22 @@ class HeadlessPipelineSmokeTest {
                 .input("exit")
                 .build();
         OutputRenderer renderer = new OutputRenderer(io, false);
-        AgentExecutor executor = new AgentExecutor(llm, new ToolRegistry());
+        AgentExecutor executor = new AgentExecutor(
+                llm, new ToolRegistry(), PermissionService.bypassing());
         Conversation conversation = new Conversation(SessionId.fresh());
 
         ReplLoop repl = new ReplLoop(io, line -> {
             conversation.append(UserMessage.of(line));
-            executor.run(conversation, new CancellationToken(), renderer).join();
+            executor.run(conversation, context(conversation), renderer).join();
         });
         repl.run();
 
         assertThat(llm.capturedRequests()).isEmpty();
         assertThat(io.output()).isEmpty();
+    }
+
+    private static AgentRunContext context(Conversation conversation) {
+        return AgentRunContext.create(conversation.sessionId(), Path.of("."),
+                new CancellationToken(), AgentBudget.unlimited());
     }
 }

@@ -45,7 +45,7 @@ public final class FileReadTool implements Tool {
 
         try {
             FileTextLoader.LoadResult loaded = new FileTextLoader(maxLines).load(file);
-            fileStateCache.recordRead(ctx.workspaceId(), file);
+            fileStateCache.recordRead(ctx, file);
             if (loaded.truncated()) {
                 log.warn("file read truncated: path={}, totalLines={}, maxLines={}",
                         file, loaded.totalLines(), maxLines);

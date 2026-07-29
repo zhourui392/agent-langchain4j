@@ -1,5 +1,9 @@
 package com.anthropic.agentkit.infrastructure.tools;
 
+import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.RunId;
+import com.anthropic.agentkit.domain.agent.WorkspaceId;
+import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.ToolArguments;
 import com.anthropic.agentkit.domain.tool.ToolResult;
@@ -20,7 +24,7 @@ class FileEditToolTest {
     void replacesUniqueOccurrence(@TempDir Path dir) throws IOException {
         Path file = writeFile(dir, "a.txt", "hello world");
         FileStateCache cache = new FileStateCache();
-        cache.recordRead(file);
+        cache.recordRead(context(dir), file);
 
         FileEditTool tool = new FileEditTool(cache);
         ToolResult result = tool.execute(
@@ -28,7 +32,7 @@ class FileEditToolTest {
                         "path", file.toString(),
                         "old_string", "world",
                         "new_string", "Java")),
-                ExecutionContext.at(dir));
+                context(dir));
 
         assertThat(result.success()).isTrue();
         assertThat(Files.readString(file)).isEqualTo("hello Java");
@@ -38,7 +42,7 @@ class FileEditToolTest {
     void rejectsWhenOldStringAppearsMultipleTimes(@TempDir Path dir) throws IOException {
         Path file = writeFile(dir, "a.txt", "foo foo foo");
         FileStateCache cache = new FileStateCache();
-        cache.recordRead(file);
+        cache.recordRead(context(dir), file);
 
         FileEditTool tool = new FileEditTool(cache);
         ToolResult result = tool.execute(
@@ -46,7 +50,7 @@ class FileEditToolTest {
                         "path", file.toString(),
                         "old_string", "foo",
                         "new_string", "bar")),
-                ExecutionContext.at(dir));
+                context(dir));
 
         assertThat(result.success()).isFalse();
         assertThat(result.content()).contains("3 times");
@@ -63,7 +67,7 @@ class FileEditToolTest {
                         "path", file.toString(),
                         "old_string", "hello",
                         "new_string", "hi")),
-                ExecutionContext.at(dir));
+                context(dir));
 
         assertThat(result.success()).isFalse();
         assertThat(result.content()).contains("must Read");
@@ -74,7 +78,7 @@ class FileEditToolTest {
     void replaceAllModeReplacesEveryOccurrence(@TempDir Path dir) throws IOException {
         Path file = writeFile(dir, "a.txt", "foo foo foo");
         FileStateCache cache = new FileStateCache();
-        cache.recordRead(file);
+        cache.recordRead(context(dir), file);
 
         FileEditTool tool = new FileEditTool(cache);
         ToolResult result = tool.execute(
@@ -83,7 +87,7 @@ class FileEditToolTest {
                         "old_string", "foo",
                         "new_string", "bar",
                         "replace_all", true)),
-                ExecutionContext.at(dir));
+                context(dir));
 
         assertThat(result.success()).isTrue();
         assertThat(Files.readString(file)).isEqualTo("bar bar bar");
@@ -93,7 +97,7 @@ class FileEditToolTest {
     void producesUnifiedDiff(@TempDir Path dir) throws IOException {
         Path file = writeFile(dir, "a.txt", "line1\nline2\nline3");
         FileStateCache cache = new FileStateCache();
-        cache.recordRead(file);
+        cache.recordRead(context(dir), file);
 
         FileEditTool tool = new FileEditTool(cache);
         ToolResult result = tool.execute(
@@ -101,7 +105,7 @@ class FileEditToolTest {
                         "path", file.toString(),
                         "old_string", "line2",
                         "new_string", "LINE-TWO")),
-                ExecutionContext.at(dir));
+                context(dir));
 
         assertThat(result.success()).isTrue();
         assertThat(result.content()).contains("---");
@@ -115,7 +119,7 @@ class FileEditToolTest {
     void reportsErrorWhenOldStringNotFound(@TempDir Path dir) throws IOException {
         Path file = writeFile(dir, "a.txt", "hello");
         FileStateCache cache = new FileStateCache();
-        cache.recordRead(file);
+        cache.recordRead(context(dir), file);
 
         FileEditTool tool = new FileEditTool(cache);
         ToolResult result = tool.execute(
@@ -123,7 +127,7 @@ class FileEditToolTest {
                         "path", file.toString(),
                         "old_string", "missing",
                         "new_string", "x")),
-                ExecutionContext.at(dir));
+                context(dir));
 
         assertThat(result.success()).isFalse();
         assertThat(result.content()).contains("not found");
@@ -133,5 +137,11 @@ class FileEditToolTest {
         Path file = dir.resolve(name);
         Files.writeString(file, content);
         return file;
+    }
+
+    private static ExecutionContext context(Path dir) {
+        return ExecutionContext.of(
+                RunId.of("file-edit-test"), WorkspaceId.fromPath(dir), dir,
+                new CancellationToken(), AgentBudget.unlimited());
     }
 }

@@ -1,5 +1,6 @@
 package com.anthropic.agentkit.application.coding;
 
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.coding.CodingPlan;
 import com.anthropic.agentkit.domain.coding.CodingTask;
 import com.anthropic.agentkit.domain.coding.Patch;
@@ -16,5 +17,5 @@ import com.anthropic.agentkit.domain.coding.Patch;
  */
 public interface CodingPatcher {
 
-    Patch producePatch(CodingTask task, CodingPlan plan);
+    Patch producePatch(CodingTask task, CodingPlan plan, AgentRunContext context);
 }

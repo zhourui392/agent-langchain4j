@@ -10,6 +10,7 @@ import com.anthropic.agentkit.application.diagnosis.PlanGuardMode;
 import com.anthropic.agentkit.application.diagnosis.PlanGuardPolicy;
 import com.anthropic.agentkit.domain.agent.AgentBudget;
 import com.anthropic.agentkit.domain.agent.AgentBudgetExceededException;
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisCase;
@@ -21,7 +22,6 @@ import com.anthropic.agentkit.domain.permission.Decision;
 import com.anthropic.agentkit.domain.permission.PermissionMode;
 import com.anthropic.agentkit.domain.permission.PermissionPolicy;
 import com.anthropic.agentkit.domain.port.LlmClient;
-import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.domain.tool.ToolInvocation;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
@@ -31,7 +31,7 @@ import com.anthropic.agentkit.infrastructure.diagnosis.DiagnosisStateCodec;
 import com.anthropic.agentkit.infrastructure.permission.ReadOnlyPermissionPolicy;
 import com.anthropic.agentkit.infrastructure.streamjson.ClaudeStreamJsonListener;
 
-import java.nio.file.Paths;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -99,15 +99,16 @@ public final class DiagnosisOrchestrator {
         Objects.requireNonNull(cancel, "cancel");
         Objects.requireNonNull(onChunk, "onChunk");
 
-        DiagnosisStateListener listener = listener(request, onChunk);
+        AgentRunContext context = context(request, conversation, cancel);
+        DiagnosisStateListener listener = listener(request, context, onChunk);
         if (planIfConfigured(listener)) {
             listener.finish(AiMessage.text("Need more information before diagnosis."));
             return listener.result();
         }
 
-        AgentExecutor executor = new AgentExecutor(llm, tools, permissions(listener), context(request, cancel), budget);
+        AgentExecutor executor = new AgentExecutor(llm, tools, permissions(listener));
         try {
-            executor.run(conversation, cancel, listener, systemPrompt).join();
+            executor.run(conversation, context, listener, systemPrompt).join();
         } catch (CompletionException ex) {
             handleRunFailure(listener, ex);
         }
@@ -137,11 +138,12 @@ public final class DiagnosisOrchestrator {
         }
     }
 
-    private DiagnosisStateListener listener(RunRequest request, Consumer<String> onChunk) {
+    private DiagnosisStateListener listener(RunRequest request, AgentRunContext context,
+                                            Consumer<String> onChunk) {
         DiagnosisCase diagnosisCase = restoreDiagnosisCase(request);
         return new DiagnosisStateListener(
                 new ClaudeStreamJsonListener(request.sessionId(), request.workingDir(), onChunk),
-                diagnosisCase,
+                diagnosisCase, context,
                 stateCodec,
                 request.sessionId());
     }
@@ -150,7 +152,7 @@ public final class DiagnosisOrchestrator {
         if (planner == null) {
             return false;
         }
-        DiagnosisPlan plan = planner.createPlan(listener.diagnosisCase());
+        DiagnosisPlan plan = planner.createPlan(listener.diagnosisCase(), listener.context());
         listener.applyPlan(plan);
         return plan.needsMoreInformation();
     }
@@ -186,8 +188,10 @@ public final class DiagnosisOrchestrator {
         return planGuard.decide(invocation, tool, mode);
     }
 
-    private static ExecutionContext context(RunRequest request, CancellationToken cancel) {
-        return ExecutionContext.of(Paths.get(request.workingDir()), cancel);
+    private AgentRunContext context(RunRequest request, Conversation conversation,
+                                    CancellationToken cancel) {
+        return AgentRunContext.create(
+                conversation.sessionId(), Path.of(request.workingDir()), cancel, budget);
     }
 
     private void handleRunFailure(DiagnosisStateListener listener, CompletionException failure) {
@@ -221,21 +225,28 @@ public final class DiagnosisOrchestrator {
 
         private final ClaudeStreamJsonListener delegate;
         private final DiagnosisCase diagnosisCase;
+        private final AgentRunContext context;
         private final DiagnosisStateCodec stateCodec;
         private final String sessionId;
         private RunSummary.Usage usage = RunSummary.Usage.zero();
         private String stateSnapshot = "";
 
         private DiagnosisStateListener(ClaudeStreamJsonListener delegate, DiagnosisCase diagnosisCase,
+                                       AgentRunContext context,
                                        DiagnosisStateCodec stateCodec, String sessionId) {
             this.delegate = delegate;
             this.diagnosisCase = diagnosisCase;
+            this.context = context;
             this.stateCodec = stateCodec;
             this.sessionId = sessionId;
         }
 
         private DiagnosisCase diagnosisCase() {
             return diagnosisCase;
+        }
+
+        private AgentRunContext context() {
+            return context;
         }
 
         private void applyPlan(DiagnosisPlan plan) {
@@ -280,7 +291,7 @@ public final class DiagnosisOrchestrator {
             var evidence = diagnosisCase.recordToolEvidence(request, result);
             delegate.onToolUseEnd(request, result, durationMs);
             Optional.ofNullable(planner).ifPresent(diagnosisPlanner -> applyPlan(
-                    diagnosisPlanner.updatePlan(diagnosisCase, evidence)));
+                    diagnosisPlanner.updatePlan(diagnosisCase, evidence, context)));
         }
 
         @Override
@@ -322,7 +333,7 @@ public final class DiagnosisOrchestrator {
         }
 
         private void emitReport(DiagnosisReporter diagnosisReporter) {
-            DiagnosisReport report = diagnosisReporter.report(diagnosisCase);
+            DiagnosisReport report = diagnosisReporter.report(diagnosisCase, context);
             delegate.emit("diagnosis_report", Map.of("session_id", sessionId, "report", report));
             if (!report.missingInformation().isEmpty()) {
                 delegate.emit("diagnosis_need_info", Map.of(

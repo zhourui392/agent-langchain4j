@@ -1,5 +1,6 @@
 package com.anthropic.agentkit.application.coding;
 
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.coding.CodingPlan;
 import com.anthropic.agentkit.domain.coding.CodingStatus;
 import com.anthropic.agentkit.domain.coding.CodingTask;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -23,7 +25,8 @@ class CodingPipelineTest {
     void drivesPlanThenPatchThenReviewAndAcceptsTask() {
         CodingPipeline pipeline = pipelineWith(verdict(Verdict.ACCEPT));
 
-        CodingTask result = pipeline.run(CodingTask.open("t1", "Add login page"));
+        CodingTask result = pipeline.run(
+                CodingTask.open("t1", "Add login page"), context());
 
         assertThat(callLog).containsExactly("plan", "patch", "review");
         assertThat(result.status()).isEqualTo(CodingStatus.ACCEPTED);
@@ -35,7 +38,8 @@ class CodingPipelineTest {
     void rejectVerdictLeavesTaskRejected() {
         CodingPipeline pipeline = pipelineWith(verdict(Verdict.REJECT));
 
-        CodingTask result = pipeline.run(CodingTask.open("t1", "Add login page"));
+        CodingTask result = pipeline.run(
+                CodingTask.open("t1", "Add login page"), context());
 
         assertThat(result.status()).isEqualTo(CodingStatus.REJECTED);
     }
@@ -46,7 +50,7 @@ class CodingPipelineTest {
         RecordingReviewer reviewer = new RecordingReviewer(verdict(Verdict.ACCEPT));
         CodingPipeline pipeline = new CodingPipeline(new RecordingPlanner(), patcher, reviewer);
 
-        pipeline.run(CodingTask.open("t1", "Add login page"));
+        pipeline.run(CodingTask.open("t1", "Add login page"), context());
 
         assertThat(patcher.receivedPlan).isSameAs(plan);
         assertThat(reviewer.receivedPatch).isSameAs(patch);
@@ -61,9 +65,13 @@ class CodingPipelineTest {
         return new ReviewVerdict(decision, "summary", List.of());
     }
 
+    private static AgentRunContext context() {
+        return AgentRunContext.at(Path.of("."));
+    }
+
     private final class RecordingPlanner implements CodingPlanner {
         @Override
-        public CodingPlan createPlan(CodingTask task) {
+        public CodingPlan createPlan(CodingTask task, AgentRunContext context) {
             callLog.add("plan");
             return plan;
         }
@@ -73,7 +81,7 @@ class CodingPipelineTest {
         private CodingPlan receivedPlan;
 
         @Override
-        public Patch producePatch(CodingTask task, CodingPlan plan) {
+        public Patch producePatch(CodingTask task, CodingPlan plan, AgentRunContext context) {
             callLog.add("patch");
             this.receivedPlan = plan;
             return patch;
@@ -89,7 +97,7 @@ class CodingPipelineTest {
         }
 
         @Override
-        public ReviewVerdict review(CodingTask task, Patch patch) {
+        public ReviewVerdict review(CodingTask task, Patch patch, AgentRunContext context) {
             callLog.add("review");
             this.receivedPatch = patch;
             return reviewVerdict;

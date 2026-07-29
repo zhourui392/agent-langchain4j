@@ -1,5 +1,6 @@
 package com.anthropic.agentkit.infrastructure.diagnosis;
 
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisCase;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisPlan;
 import com.anthropic.agentkit.domain.diagnosis.StepStatus;
@@ -10,6 +11,7 @@ import com.anthropic.agentkit.testsupport.StubLlmClient;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -23,7 +25,8 @@ class StructuredDiagnosisPlannerTest {
                 .enqueue(AiMessage.text("planned"));
         StructuredDiagnosisPlanner planner = new StructuredDiagnosisPlanner(llm);
 
-        DiagnosisPlan plan = planner.createPlan(DiagnosisCase.open("case-1", "订单失败"));
+        DiagnosisPlan plan = planner.createPlan(
+                DiagnosisCase.open("case-1", "订单失败"), AgentRunContext.at(Path.of(".")));
 
         assertThat(plan.problemStatement()).isEqualTo("订单失败");
         assertThat(plan.hypotheses()).singleElement()

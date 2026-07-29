@@ -1,5 +1,7 @@
 package com.anthropic.agentkit.application;
 
+import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
@@ -8,7 +10,6 @@ import com.anthropic.agentkit.domain.message.ChatMessage;
 import com.anthropic.agentkit.domain.message.ToolResultMessage;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.permission.PermissionMode;
-import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.infrastructure.config.AppConfig;
 import com.anthropic.agentkit.infrastructure.config.ConfigLoader;
@@ -36,15 +37,16 @@ class AgentExecutorBashSmokeIT {
 
         Path cwd = Paths.get(System.getProperty("user.dir", "."));
         CancellationToken cancel = new CancellationToken();
-        AgentExecutor executor = new AgentExecutor(llm, tools,
-                bypassPermissions(), ExecutionContext.of(cwd, cancel));
+        AgentExecutor executor = new AgentExecutor(llm, tools, bypassPermissions());
 
         Conversation conversation = new Conversation(SessionId.fresh());
         conversation.append(UserMessage.of(
                 "Use the Bash tool to run exactly: echo hello-from-bash-smoke. " +
                 "After running it, report the output."));
 
-        AiMessage finalMessage = executor.run(conversation, cancel).get(90, TimeUnit.SECONDS);
+        AgentRunContext context = AgentRunContext.create(
+                conversation.sessionId(), cwd, cancel, AgentBudget.unlimited());
+        AiMessage finalMessage = executor.run(conversation, context).get(90, TimeUnit.SECONDS);
 
         assertThat(toolResults(conversation))
                 .as("Bash tool must be invoked through real Anthropic round-trip")

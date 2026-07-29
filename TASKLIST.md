@@ -655,7 +655,7 @@ S0 (1→2→3)
 
 ### #40 [S9-Kernel-TDD] AgentRunContext 单一作用域与 AgentExecutor 可重入 （blockedBy: GATE-0）
 
-**状态**：待开始。
+**状态**：已完成（2026-07-29）。
 
 **Red**：provided cwd/cancellation 到达工具；并发 run 不共享 cwd、取消、预算、权限缓存和 file-state 授权。
 

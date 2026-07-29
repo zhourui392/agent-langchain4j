@@ -1,6 +1,8 @@
 package com.anthropic.agentkit.infrastructure.tools.support;
 
+import com.anthropic.agentkit.domain.agent.RunId;
 import com.anthropic.agentkit.domain.agent.WorkspaceId;
+import com.anthropic.agentkit.domain.tool.ExecutionContext;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -18,32 +20,21 @@ public final class FileStateCache {
 
     private final Map<FileStateKey, FileTime> readMtimes = new ConcurrentHashMap<>();
 
-    public void recordRead(Path file) {
-        recordRead(workspaceFor(file), file);
-    }
-
-    public void recordRead(WorkspaceId workspaceId, Path file) {
+    public void recordRead(ExecutionContext context, Path file) {
         FileTime mtime = currentMtime(file);
         if (mtime != null) {
-            readMtimes.put(key(workspaceId, file), mtime);
-            log.debug("file read state recorded: workspace={}, file={}, mtime={}", workspaceId, file, mtime);
+            readMtimes.put(key(context, file), mtime);
+            log.debug("file read state recorded: run={}, workspace={}, file={}, mtime={}",
+                    context.runId(), context.workspaceId(), file, mtime);
         }
     }
 
-    public boolean hasBeenRead(Path file) {
-        return hasBeenRead(workspaceFor(file), file);
+    public boolean hasBeenRead(ExecutionContext context, Path file) {
+        return readMtimes.containsKey(key(context, file));
     }
 
-    public boolean hasBeenRead(WorkspaceId workspaceId, Path file) {
-        return readMtimes.containsKey(key(workspaceId, file));
-    }
-
-    public boolean isStale(Path file) {
-        return isStale(workspaceFor(file), file);
-    }
-
-    public boolean isStale(WorkspaceId workspaceId, Path file) {
-        FileTime recorded = readMtimes.get(key(workspaceId, file));
+    public boolean isStale(ExecutionContext context, Path file) {
+        FileTime recorded = readMtimes.get(key(context, file));
         if (recorded == null) {
             return false;
         }
@@ -68,16 +59,11 @@ public final class FileStateCache {
         }
     }
 
-    private static FileStateKey key(WorkspaceId workspaceId, Path file) {
-        return new FileStateKey(workspaceId, file.toAbsolutePath().normalize());
+    private static FileStateKey key(ExecutionContext context, Path file) {
+        return new FileStateKey(
+                context.runId(), context.workspaceId(), file.toAbsolutePath().normalize());
     }
 
-    private static WorkspaceId workspaceFor(Path file) {
-        Path absolute = file.toAbsolutePath().normalize();
-        Path parent = absolute.getParent();
-        return WorkspaceId.fromPath(parent == null ? absolute : parent);
-    }
-
-    private record FileStateKey(WorkspaceId workspaceId, Path file) {
+    private record FileStateKey(RunId runId, WorkspaceId workspaceId, Path file) {
     }
 }

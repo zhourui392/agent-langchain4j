@@ -20,6 +20,7 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static com.anthropic.agentkit.testsupport.TestRunContexts.runContext;
 
 class AgentExecutorLoggingTest {
 
@@ -32,8 +33,8 @@ class AgentExecutorLoggingTest {
         conversation.append(UserMessage.of("say hi"));
 
         try (LogCapture logs = LogCapture.forClass(AgentExecutor.class, Level.INFO)) {
-            new AgentExecutor(stub, new ToolRegistry())
-                    .run(conversation, new CancellationToken())
+            new AgentExecutor(stub, new ToolRegistry(), PermissionService.bypassing())
+                    .run(conversation, runContext(conversation))
                     .join();
 
             assertThat(logs.events()).anySatisfy(event -> {
@@ -71,8 +72,8 @@ class AgentExecutorLoggingTest {
         conversation.append(UserMessage.of("run tools"));
 
         try (LogCapture logs = LogCapture.forLogger("test.tool.mdc", Level.INFO)) {
-            new AgentExecutor(stub, tools)
-                    .run(conversation, new CancellationToken())
+            new AgentExecutor(stub, tools, PermissionService.bypassing())
+                    .run(conversation, runContext(conversation))
                     .join();
 
             assertThat(logs.events()).hasSize(2);

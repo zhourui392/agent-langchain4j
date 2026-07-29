@@ -1,5 +1,9 @@
 package com.anthropic.agentkit.infrastructure.tools;
 
+import com.anthropic.agentkit.domain.agent.AgentBudget;
+import com.anthropic.agentkit.domain.agent.RunId;
+import com.anthropic.agentkit.domain.agent.WorkspaceId;
+import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.ToolArguments;
 import com.anthropic.agentkit.domain.tool.ToolResult;
@@ -24,7 +28,7 @@ class FileReadToolTest {
 
         ToolResult result = tool.execute(
                 ToolArguments.of(Map.of("path", file.toString())),
-                ExecutionContext.at(dir));
+                context(dir));
 
         assertThat(result.success()).isTrue();
         assertThat(result.content()).contains("héllo 世界");
@@ -36,7 +40,7 @@ class FileReadToolTest {
 
         ToolResult result = tool.execute(
                 ToolArguments.of(Map.of("path", dir.resolve("missing.txt").toString())),
-                ExecutionContext.at(dir));
+                context(dir));
 
         assertThat(result.success()).isFalse();
         assertThat(result.content()).contains("not found");
@@ -51,7 +55,7 @@ class FileReadToolTest {
 
         ToolResult result = tool.execute(
                 ToolArguments.of(Map.of("path", file.toString())),
-                ExecutionContext.at(dir));
+                context(dir));
 
         assertThat(result.success()).isTrue();
         assertThat(result.content()).contains("line 1999");
@@ -67,7 +71,7 @@ class FileReadToolTest {
 
         ToolResult result = tool.execute(
                 ToolArguments.of(Map.of("path", file.toString(), "maxLines", 2)),
-                ExecutionContext.at(dir));
+                context(dir));
 
         assertThat(result.success()).isTrue();
         assertThat(result.content()).contains("a\nb");
@@ -82,14 +86,20 @@ class FileReadToolTest {
 
         tool.execute(
                 ToolArguments.of(Map.of("path", file.toString())),
-                ExecutionContext.at(dir));
+                context(dir));
 
-        assertThat(cache.hasBeenRead(file)).isTrue();
+        assertThat(cache.hasBeenRead(context(dir), file)).isTrue();
     }
 
     private static Path writeFile(Path dir, String name, String content) throws IOException {
         Path file = dir.resolve(name);
         Files.writeString(file, content);
         return file;
+    }
+
+    private static ExecutionContext context(Path dir) {
+        return ExecutionContext.of(
+                RunId.of("file-read-test"), WorkspaceId.fromPath(dir), dir,
+                new CancellationToken(), AgentBudget.unlimited());
     }
 }

@@ -1,17 +1,16 @@
 package com.anthropic.agentkit.infrastructure.coding;
 
 import com.anthropic.agentkit.application.coding.CodingReviewer;
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.coding.CodingTask;
 import com.anthropic.agentkit.domain.coding.Patch;
 import com.anthropic.agentkit.domain.coding.ReviewVerdict;
 import com.anthropic.agentkit.domain.coding.Verdict;
 import com.anthropic.agentkit.domain.port.LlmClient;
-import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.infrastructure.agent.StructuredAgent;
 import com.anthropic.agentkit.infrastructure.agent.TerminalToolSpec;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -54,10 +53,10 @@ public final class StructuredCodingReviewer implements CodingReviewer {
     }
 
     @Override
-    public ReviewVerdict review(CodingTask task, Patch patch) {
+    public ReviewVerdict review(CodingTask task, Patch patch, AgentRunContext context) {
         long startNs = System.nanoTime();
         StructuredAgent agent = new StructuredAgent(llm, SYSTEM_PROMPT, REVIEW_OUTPUT, List.of());
-        Map<String, Object> payload = agent.run(buildTask(task, patch), ExecutionContext.at(Path.of(".")));
+        Map<String, Object> payload = agent.run(buildTask(task, patch), context);
         ReviewVerdict verdict = toVerdict(payload);
         log.info("review verdict: taskId={}, decision={}, issues={}, durationMs={}",
                 task.taskId(), verdict.decision(), verdict.issues().size(), elapsedMs(startNs));

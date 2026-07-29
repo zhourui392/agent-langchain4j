@@ -4,6 +4,7 @@ import com.anthropic.agentkit.application.AgentEventListener;
 import com.anthropic.agentkit.application.AgentExecutor;
 import com.anthropic.agentkit.application.InteractivePrompter;
 import com.anthropic.agentkit.application.PermissionService;
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
 import com.anthropic.agentkit.domain.message.AiMessage;
@@ -78,8 +79,8 @@ public final class SubAgentTool implements Tool {
         Conversation child = new Conversation(SessionId.fresh());
         child.append(UserMessage.of(prompt));
         try {
-            AiMessage finalMessage = childExecutor(ctx)
-                    .run(child, ctx.cancellation(), AgentEventListener.NO_OP)
+            AiMessage finalMessage = childExecutor()
+                    .run(child, childContext(ctx, child.sessionId()), AgentEventListener.NO_OP)
                     .join();
             log.info("sub-agent completed: sessionId={}, turns={}, resultChars={}, durationMs={}",
                     child.sessionId(), assistantTurns(child), finalMessage.text().length(), elapsedMs(startNs));
@@ -91,10 +92,16 @@ public final class SubAgentTool implements Tool {
         }
     }
 
-    private AgentExecutor childExecutor(ExecutionContext ctx) {
+    private AgentExecutor childExecutor() {
         PermissionService permissions = new PermissionService(
                 new ReadOnlyPermissionPolicy(), REJECTING_PROMPTER, PermissionMode.BYPASS);
-        return new AgentExecutor(llm, childTools, permissions, ctx);
+        return new AgentExecutor(llm, childTools, permissions);
+    }
+
+    private static AgentRunContext childContext(ExecutionContext parent, SessionId childSession) {
+        return AgentRunContext.of(
+                parent.runId(), childSession, parent.workspaceId(), parent.cwd(),
+                parent.cancellation(), parent.budget());
     }
 
     private static String failureMessage(ExecutionContext ctx, CompletionException ex) {

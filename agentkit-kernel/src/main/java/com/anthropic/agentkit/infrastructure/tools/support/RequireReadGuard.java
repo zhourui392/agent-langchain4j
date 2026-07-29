@@ -1,6 +1,6 @@
 package com.anthropic.agentkit.infrastructure.tools.support;
 
-import com.anthropic.agentkit.domain.agent.WorkspaceId;
+import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 
 import java.nio.file.Files;
@@ -21,20 +21,16 @@ public final class RequireReadGuard {
         this.fileStateCache = Objects.requireNonNull(fileStateCache, "fileStateCache");
     }
 
-    public Optional<ToolResult> checkBeforeOverwrite(Path file) {
-        return checkBeforeOverwrite(WorkspaceId.fromPath(file.toAbsolutePath().getParent()), file);
-    }
-
-    public Optional<ToolResult> checkBeforeOverwrite(WorkspaceId workspaceId, Path file) {
+    public Optional<ToolResult> checkBeforeOverwrite(ExecutionContext context, Path file) {
         if (!Files.exists(file)) {
             return Optional.empty();
         }
-        if (!fileStateCache.hasBeenRead(workspaceId, file)) {
+        if (!fileStateCache.hasBeenRead(context, file)) {
             log.warn("read-before-write guard blocked: file={}, reason=not_read", file);
             return Optional.of(ToolResult.error(
                     "must Read " + file + " before modifying it"));
         }
-        if (fileStateCache.isStale(workspaceId, file)) {
+        if (fileStateCache.isStale(context, file)) {
             log.warn("read-before-write guard blocked: file={}, reason=stale", file);
             return Optional.of(ToolResult.error(
                     "file modified externally since last Read: " + file

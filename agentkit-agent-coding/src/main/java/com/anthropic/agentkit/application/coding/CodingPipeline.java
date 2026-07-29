@@ -1,5 +1,6 @@
 package com.anthropic.agentkit.application.coding;
 
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.coding.CodingPlan;
 import com.anthropic.agentkit.domain.coding.CodingTask;
 import com.anthropic.agentkit.domain.coding.Patch;
@@ -31,13 +32,14 @@ public final class CodingPipeline {
         this.reviewer = Objects.requireNonNull(reviewer, "reviewer");
     }
 
-    public CodingTask run(CodingTask task) {
+    public CodingTask run(CodingTask task, AgentRunContext context) {
         Objects.requireNonNull(task, "task");
-        CodingPlan plan = planner.createPlan(task);
+        Objects.requireNonNull(context, "context");
+        CodingPlan plan = planner.createPlan(task, context);
         task.adoptPlan(plan);
-        Patch patch = patcher.producePatch(task, plan);
+        Patch patch = patcher.producePatch(task, plan, context);
         task.applyPatch(patch);
-        ReviewVerdict verdict = reviewer.review(task, patch);
+        ReviewVerdict verdict = reviewer.review(task, patch, context);
         task.recordVerdict(verdict);
         return task;
     }

@@ -1,5 +1,6 @@
 package com.anthropic.agentkit.infrastructure.coding;
 
+import com.anthropic.agentkit.domain.agent.AgentRunContext;
 import com.anthropic.agentkit.domain.coding.CodingTask;
 import com.anthropic.agentkit.domain.coding.FileChange;
 import com.anthropic.agentkit.domain.coding.FileChangeType;
@@ -14,6 +15,7 @@ import com.anthropic.agentkit.testsupport.StubLlmClient;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -25,7 +27,7 @@ class StructuredCodingReviewerTest {
                 "{\"decision\":\"ACCEPT\",\"summary\":\"looks good\"}");
         StructuredCodingReviewer reviewer = new StructuredCodingReviewer(llm);
 
-        ReviewVerdict verdict = reviewer.review(task(), patch());
+        ReviewVerdict verdict = reviewer.review(task(), patch(), context());
 
         assertThat(verdict.decision()).isEqualTo(Verdict.ACCEPT);
         assertThat(verdict.summary()).isEqualTo("looks good");
@@ -38,7 +40,7 @@ class StructuredCodingReviewerTest {
                 "{\"decision\":\"REJECT\",\"summary\":\"bad\",\"issues\":[\"npe risk\",\"no tests\"]}");
         StructuredCodingReviewer reviewer = new StructuredCodingReviewer(llm);
 
-        ReviewVerdict verdict = reviewer.review(task(), patch());
+        ReviewVerdict verdict = reviewer.review(task(), patch(), context());
 
         assertThat(verdict.decision()).isEqualTo(Verdict.REJECT);
         assertThat(verdict.issues()).containsExactly("npe risk", "no tests");
@@ -49,7 +51,7 @@ class StructuredCodingReviewerTest {
         StubLlmClient llm = enqueueReview("{\"summary\":\"unsure\"}");
         StructuredCodingReviewer reviewer = new StructuredCodingReviewer(llm);
 
-        ReviewVerdict verdict = reviewer.review(task(), patch());
+        ReviewVerdict verdict = reviewer.review(task(), patch(), context());
 
         assertThat(verdict.decision()).isEqualTo(Verdict.NEEDS_HUMAN);
     }
@@ -59,7 +61,7 @@ class StructuredCodingReviewerTest {
         StubLlmClient llm = enqueueReview("{\"decision\":\"ACCEPT\",\"summary\":\"ok\"}");
         StructuredCodingReviewer reviewer = new StructuredCodingReviewer(llm);
 
-        reviewer.review(task(), patch());
+        reviewer.review(task(), patch(), context());
 
         assertThat(llm.capturedRequests().get(0).tools())
                 .extracting(ToolSpec::name)
@@ -80,5 +82,9 @@ class StructuredCodingReviewerTest {
     private static Patch patch() {
         return new Patch("implement login", List.of(
                 new FileChange("src/Login.java", FileChangeType.CREATE, "+class Login {}")));
+    }
+
+    private static AgentRunContext context() {
+        return AgentRunContext.at(Path.of("."));
     }
 }
