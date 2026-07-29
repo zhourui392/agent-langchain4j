@@ -2,6 +2,7 @@ package com.anthropic.agentkit.infrastructure.tools.support;
 
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.tool.ToolResult;
+import com.anthropic.agentkit.domain.tool.ToolResultStatus;
 import org.zeroturnaround.exec.ProcessExecutor;
 import org.zeroturnaround.exec.ProcessResult;
 import org.zeroturnaround.exec.StartedProcess;
@@ -29,17 +30,17 @@ public final class ProcessRunner {
             ProcessResult result = started.getFuture().get(timeoutMs, TimeUnit.MILLISECONDS);
             String output = result.outputUTF8();
             if (cancel.isCancelled()) {
-                return ToolResult.error("cancelled\n" + output);
+                return ToolResult.of(ToolResultStatus.CANCELLED, "cancelled\n" + output);
             }
             if (result.getExitValue() != 0) {
                 return ToolResult.error("exit " + result.getExitValue() + "\n" + output);
             }
             return ToolResult.ok(output);
         } catch (TimeoutException ex) {
-            return ToolResult.error("timeout after " + timeoutMs + "ms");
+            return ToolResult.of(ToolResultStatus.TIMEOUT, "timeout after " + timeoutMs + "ms");
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            return ToolResult.error("interrupted");
+            return ToolResult.of(ToolResultStatus.CANCELLED, "interrupted");
         } catch (ExecutionException ex) {
             return ToolResult.error("process error: " + ex.getCause().getMessage());
         } catch (Exception ex) {

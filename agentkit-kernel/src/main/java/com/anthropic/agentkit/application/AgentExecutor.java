@@ -10,6 +10,7 @@ import com.anthropic.agentkit.domain.port.ChatRequest;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.port.LlmClient.StreamHandler;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
+import com.anthropic.agentkit.domain.tool.ToolResultStatus;
 
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -102,12 +103,23 @@ public final class AgentExecutor {
                 listener.onTurnComplete(aiMessage);
                 return aiMessage;
             }
-            state.budget().ensureInputTokensWithinBudget();
-            state.budget().reserveToolCalls(aiMessage.toolUseRequests().size());
-            for (ToolResultMessage result : state.dispatcher().dispatch(aiMessage, listener)) {
+            for (ToolResultMessage result : dispatchToolCalls(aiMessage, state, listener)) {
                 appendMessage(conversation, result, "tool result");
             }
             log.info("turn {} completed: toolResults={}", turn, aiMessage.toolUseRequests().size());
+        }
+    }
+
+    private static java.util.List<ToolResultMessage> dispatchToolCalls(
+            AiMessage message, AgentRunState state, AgentEventListener listener) {
+        try {
+            state.budget().ensureInputTokensWithinBudget();
+            state.budget().reserveToolCalls(message.toolUseRequests().size());
+            return state.dispatcher().dispatch(message, listener);
+        } catch (AgentBudgetExceededException ex) {
+            log.warn("tool batch rejected by budget: {}", ex.getMessage());
+            return state.dispatcher().settleWithoutExecution(
+                    message, ToolResultStatus.BUDGET_EXHAUSTED, ex.getMessage());
         }
     }
 

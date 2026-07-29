@@ -7,6 +7,7 @@ import com.anthropic.agentkit.domain.message.ToolResultMessage;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.tool.ToolUseId;
 import com.anthropic.agentkit.domain.tool.ToolUseRequest;
+import com.anthropic.agentkit.domain.tool.ToolResultStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -15,6 +16,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 final class MessageJsonCodec {
 
@@ -38,7 +41,10 @@ final class MessageJsonCodec {
             case ToolResultMessage tr -> {
                 root.put("type", "toolResult");
                 root.put("toolUseId", tr.toolUseId().value());
+                root.put("status", tr.status().name());
                 root.put("text", tr.text());
+                ObjectNode metadata = root.putObject("metadata");
+                tr.metadata().forEach(metadata::put);
             }
         }
         return root.toString();
@@ -51,11 +57,37 @@ final class MessageJsonCodec {
             case "user" -> UserMessage.of(node.get("text").asText());
             case "system" -> SystemMessage.of(node.get("text").asText());
             case "ai" -> readAi(node);
-            case "toolResult" -> ToolResultMessage.of(
-                    new ToolUseId(node.get("toolUseId").asText()),
-                    node.get("text").asText());
+            case "toolResult" -> readToolResult(node);
             default -> throw new IOException("unknown message type: " + type);
         };
+    }
+
+    private static ToolResultMessage readToolResult(JsonNode node) throws IOException {
+        ToolResultStatus status = readStatus(node.get("status"));
+        Map<String, String> metadata = readMetadata(node.get("metadata"));
+        return ToolResultMessage.of(
+                new ToolUseId(node.get("toolUseId").asText()),
+                status, node.get("text").asText(), metadata);
+    }
+
+    private static ToolResultStatus readStatus(JsonNode node) throws IOException {
+        if (node == null || node.isNull()) {
+            return ToolResultStatus.SUCCESS;
+        }
+        try {
+            return ToolResultStatus.valueOf(node.asText());
+        } catch (IllegalArgumentException ex) {
+            throw new IOException("unknown tool result status: " + node.asText(), ex);
+        }
+    }
+
+    private static Map<String, String> readMetadata(JsonNode node) {
+        if (node == null || !node.isObject()) {
+            return Map.of();
+        }
+        Map<String, String> metadata = new LinkedHashMap<>();
+        node.fields().forEachRemaining(field -> metadata.put(field.getKey(), field.getValue().asText()));
+        return Map.copyOf(metadata);
     }
 
     private static void writeAi(ObjectNode root, AiMessage message) {

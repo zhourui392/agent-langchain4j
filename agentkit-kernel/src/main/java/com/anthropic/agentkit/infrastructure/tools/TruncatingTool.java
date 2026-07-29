@@ -59,6 +59,6 @@ public final class TruncatingTool implements Tool {
             log.warn("tool result truncated: tool={}, originalChars={}, truncatedChars={}",
                     delegate.name(), result.content().length(), truncated.length());
         }
-        return new ToolResult(result.success(), truncated);
+        return result.withContent(truncated);
     }
 }

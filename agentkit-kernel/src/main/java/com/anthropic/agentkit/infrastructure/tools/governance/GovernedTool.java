@@ -4,6 +4,7 @@ import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.domain.tool.ToolArguments;
 import com.anthropic.agentkit.domain.tool.ToolResult;
+import com.anthropic.agentkit.domain.tool.ToolResultStatus;
 
 import java.util.Objects;
 import java.util.concurrent.ExecutionException;
@@ -82,11 +83,12 @@ public final class GovernedTool implements Tool {
             future.cancel(true);
             log.warn("governed tool timed out: tool={}, timeoutMs={}",
                     delegate.name(), governance.timeout().toMillis());
-            return ToolResult.error("tool timed out after " + governance.timeout().toMillis() + "ms");
+            return ToolResult.of(ToolResultStatus.TIMEOUT,
+                    "tool timed out after " + governance.timeout().toMillis() + "ms");
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             log.warn("governed tool interrupted: tool={}", delegate.name());
-            return ToolResult.error("tool interrupted");
+            return ToolResult.of(ToolResultStatus.CANCELLED, "tool interrupted");
         } catch (ExecutionException ex) {
             log.error("governed tool execution failed: tool={}", delegate.name(), ex);
             return ToolResult.error(executionFailureMessage(ex));
@@ -94,7 +96,7 @@ public final class GovernedTool implements Tool {
     }
 
     private ToolResult redact(ToolResult result) {
-        return new ToolResult(result.success(), governance.redactor().redact(result.content()));
+        return result.withContent(governance.redactor().redact(result.content()));
     }
 
     private static String auditError(ToolResult result) {
