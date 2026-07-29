@@ -61,7 +61,8 @@ final class LangChain4jMcpSessionFactory implements McpSessionFactory {
             values.put(destination, secret);
             secrets.add(secret);
         });
-        return new ResolvedBindings(Map.copyOf(values), List.copyOf(secrets));
+        return new ResolvedBindings(
+                McpDeclarationOrder.immutableMap(values), List.copyOf(secrets));
     }
 
     private static Duration maximum(Duration first, Duration second) {

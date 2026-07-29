@@ -45,9 +45,9 @@
 | 上下文 | executor 每次主 LLM 调用前统一执行策略；显式边界、单次 overflow 恢复与全局工具输出限制已落地 | 成熟 runtime 在每轮调用前治理上下文，并可从 overflow 恢复 | 已补齐运行期治理；事件恢复见 #46 |
 | 会话恢复 | per-run append-only `RunEventStore`；settled 不重放、in-flight 标 UNKNOWN；终态/usage/compaction 可投影 | 支持 resume/fork/checkpoint，并区分已完成和 in-flight action | 安全 run resume 已补齐；fork/rewind 与 CLI 新入口后置 |
 | 子 Agent | S10 #47 已补 `AgentSpec`、有界 runtime/handle、独立 RunId/取消、共享预算、follow-up 与 terminal payload；#48 已补 parent/child typed lifecycle correlation | 支持角色、模型、预算、取消、跟进和独立生命周期 | runtime 与 in-process lifecycle 基座已补齐 |
-| MCP / hooks / background | #48 已补 typed in-process hook；MCP 仍只有空 package，Bash 仍同步 | 两者均提供 MCP、生命周期扩展及长任务管理能力 | hook 已补齐；MCP/background 见 #49/#50 |
+| MCP / hooks / background | #48 已补 typed in-process hook；#49 已补 scope-keyed stdio/HTTP MCP lifecycle、动态 catalog 与普通工具治理链；Bash 仍同步 | 两者均提供 MCP、生命周期扩展及长任务管理能力 | hook/MCP 已补齐；background 见 #50 |
 
-成熟度是定性判断，不是兼容性百分比承诺。审计开始时的估计约为成熟 Claude Code / Codex runtime 的 **55%–65%**；完成 `#40–#46` 后，异常、scope、安全、取消、上下文和恢复这组首要控制面缺口已关闭，S10 #47/#48 又补齐通用子 Agent与 typed in-process lifecycle。本文不重新给出百分比，因为剩余差异主要是 MCP、后台任务、可等待运行态、fork/rewind 和宿主产品能力，是否实现取决于项目边界而非单一“完成度”。
+成熟度是定性判断，不是兼容性百分比承诺。审计开始时的估计约为成熟 Claude Code / Codex runtime 的 **55%–65%**；完成 `#40–#46` 后，异常、scope、安全、取消、上下文和恢复这组首要控制面缺口已关闭，S10 #47–#49 又补齐通用子 Agent、typed in-process lifecycle 与受治理的 MCP 工具服务器。本文不重新给出百分比，因为剩余差异主要是后台任务、可等待运行态、fork/rewind、模型策略和宿主产品能力，是否实现取决于项目边界而非单一“完成度”。
 
 ## 4. 领域模型审计
 

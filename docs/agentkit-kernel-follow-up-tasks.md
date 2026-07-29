@@ -1,6 +1,6 @@
 # AgentKit Kernel：非高优先级与后续 Agent Runtime 任务
 
-> 状态：`#47–#55` 已纳入 `TASKLIST.md` S10 并开始交付；`#56` 保持条件触发候选
+> 状态：`#47–#49` 已完成，`#50–#55` 按 S10 顺序继续交付；`#56` 保持条件触发候选
 >
 > 审计日期：2026-07-29
 >
@@ -56,7 +56,7 @@
                  └─→ #55 CLI composition cleanup
 ```
 
-建议交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`；`#56` 独立按日志规模或多 writer 需求触发。如果近期没有 MCP 宿主，可先做 `#47`，不要为了“对齐产品功能表”提前实现没有消费方的扩展。
+建议交付顺序：`#47 → #48 → #49 → #50/#51 → #52/#53 → #54/#55`；当前 `#47–#49` 已完成，下一项是 `#50/#51`。`#56` 独立按日志规模或多 writer 需求触发，不为“对齐产品功能表”提前实现没有消费方的扩展。
 
 ## 4. 变化点地图
 
@@ -64,7 +64,7 @@
 |---|---|---|---|
 | 角色 prompt、工具、模型、预算 | `StructuredAgent` 构造参数、`SubAgentTool` 固定逻辑、各 agent 包 | `AgentSpec` + `SubAgentRuntime` | #47 |
 | 运行前后干预 | `AgentEventListener`、permission、各入口手工调用 | typed `AgentInterceptor` | #48 |
-| 外部工具服务器 | 空 `infrastructure/mcp` package、全量 `ToolRegistry.specs()` | `McpToolAdapter` + server/catalog lifecycle | #49 |
+| 外部工具服务器 | `McpToolAdapter`、scope-keyed server/session 与 context-aware `ToolCatalog` 已落地 | `McpProtocolMapper` + `McpCatalogPolicy` + server lifecycle | #49（已完成） |
 | 长命令和大输出 | 同步 Bash、一次性结果字符串 | `TaskHandle` + artifact/output store | #50 |
 | 用户问题和计划批准 | permission ASK、CLI prompt、自然语言约定 | `RunSuspension` / waiting stop reasons | #51 |
 | fork/rewind/checkpoint | `ChatMemoryStore` 消息快照 | event-log branch + checkpoint provider | #52 |
@@ -220,13 +220,13 @@ pre-hook 返回 typed decision，如 `Continue`、`Deny(reason)`、`ReplaceConte
 
 ### #49 [Kernel-Infra/TDD, P2] MCP client、工具适配与生命周期
 
-**状态**：进行中（Red）；先固定 scope、catalog snapshot、调用 settle 与 reconnect 合同，再进入实现。
+**状态**：已完成（2026-07-29）；Red/Green/Refactor 三提交交付，实施状态以 `TASKLIST.md` 为准。
 
 **Goal**
 
 把 MCP server 暴露的工具安全地适配为 kernel `Tool`，支持 server lifecycle、命名空间、timeout、认证和动态 tool catalog。
 
-**当前问题与证据**
+**实施前问题与证据**
 
 - kernel POM 已依赖 `langchain4j-mcp`，但 [`infrastructure/mcp/package-info.java`](../agentkit-kernel/src/main/java/com/anthropic/agentkit/infrastructure/mcp/package-info.java) 是该 package 唯一生产文件。
 - `ToolRegistry.specs()` 当前会把全部 schema 注入每次 LLM 请求；MCP 工具数量变大后会直接消耗 context window。
@@ -251,6 +251,15 @@ pre-hook 返回 typed decision，如 `Continue`、`Deny(reason)`、`ReplaceConte
 - 变化点：stdio/HTTP 收敛到 transport spec/factory；认证目标名→secret name 收敛到显式 binding；远端 schema/result 收敛到 protocol mapper；eager/deferred exposure 收敛到 catalog policy；连接恢复收敛到 session invalidation/reopen，调用重试策略不混入 transport。
 - 反模式警戒：不让 `McpServerManager` 持有一个无 scope 的全局认证 client；不在 `AgentExecutor` 写 transport 分支；不把整个大 catalog 每轮注入；不读取 `System.getenv`；不依赖 MCP `readOnlyHint` 绕过 `PermissionPolicy`。
 - 实施前评分 **7/15**：聚合边界 2、变化收敛 2、不变量守护 1、行为一致 1、下一轮演进 1。目标是在 Refactor 后由 typed scope、atomic snapshot、normal-tool path 和 transport strategy 提升到至少 14/15。
+
+**完成后领域建模复核**
+
+- ubiquitous language 已由实现物化：`McpServerConfig` 只保存 transport 与 secret name binding；`McpSession` 代表一个 scope 内连接；`McpCatalogGeneration` 是完整校验后一次发布的不可变 generation；`McpToolAdapter` 是唯一进入 kernel 普通工具路径的远端工具形态。
+- 聚合边界固定为单个 `(SecretScope, serverId)` 的 `ServerState`：session、catalog generation、retired session 与 invalidation 在同一 lifecycle lock 下转换；跨 server 合并只由 context-aware `ToolRegistry` 负责，不共享认证 client。
+- catalog 不变量集中在 `McpCatalogPolicy`：远端 schema/name 全量验证后才原子发布；声明/发现顺序稳定；大 catalog 只暴露 discovery tool 与显式选择的 schema；refresh 不打断持有旧 adapter 的调用。
+- transport/protocol 变化点集中在 `McpSessionFactory`、`McpTransportSpec` 与 `McpProtocolMapper`；认证只经 `ExecutionContext.secret` 解析，远端结果在进入普通工具链前做精确 secret redaction。
+- connection failure 只 invalidate 当前 session 并把当前 invocation settle 为 ERROR；后续调用才 reopen，禁止自动 replay。permission、interceptor、deadline/cancel、output policy、event recorder 与 ordered batch settle 均复用 `AgentExecutor` 的单一路径。
+- 完成后评分 **15/15**：聚合边界 3、变化收敛 3、不变量守护 3、行为一致 3、下一轮演进 3。stdio/HTTP、新认证 binding、catalog exposure 与 wire payload 变化均已有独立收敛点，且未把业务 server 或领域工作流下沉 kernel。
 
 **Red/测试矩阵**
 

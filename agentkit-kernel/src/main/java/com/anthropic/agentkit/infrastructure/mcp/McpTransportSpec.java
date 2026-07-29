@@ -18,8 +18,9 @@ public sealed interface McpTransportSpec
             if (command.isEmpty() || command.stream().anyMatch(value -> value == null || value.isBlank())) {
                 throw new IllegalArgumentException("stdio command must not be empty or blank");
             }
-            environment = Map.copyOf(Objects.requireNonNull(environment, "environment"));
-            secretEnvironment = Map.copyOf(
+            environment = McpDeclarationOrder.immutableMap(
+                    Objects.requireNonNull(environment, "environment"));
+            secretEnvironment = McpDeclarationOrder.immutableMap(
                     Objects.requireNonNull(secretEnvironment, "secretEnvironment"));
         }
     }
@@ -34,8 +35,10 @@ public sealed interface McpTransportSpec
             if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
                 throw new IllegalArgumentException("MCP HTTP endpoint must use http or https");
             }
-            headers = Map.copyOf(Objects.requireNonNull(headers, "headers"));
-            secretHeaders = Map.copyOf(Objects.requireNonNull(secretHeaders, "secretHeaders"));
+            headers = McpDeclarationOrder.immutableMap(
+                    Objects.requireNonNull(headers, "headers"));
+            secretHeaders = McpDeclarationOrder.immutableMap(
+                    Objects.requireNonNull(secretHeaders, "secretHeaders"));
         }
     }
 }

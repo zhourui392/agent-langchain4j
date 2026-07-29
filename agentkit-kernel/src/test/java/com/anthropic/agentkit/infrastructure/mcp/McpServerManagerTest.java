@@ -156,6 +156,20 @@ class McpServerManagerTest {
                 .hasMessageContaining("inventory");
     }
 
+    @Test
+    void preservesDeclaredServerOrderInCatalogSnapshots() {
+        McpServerConfig zeta = McpServerConfig.stdio("zeta", List.of("unused"));
+        McpServerConfig alpha = McpServerConfig.stdio("alpha", List.of("unused"));
+        McpSessionFactory factory = (config, ignored) ->
+                new FakeSession(List.of(descriptor("read")));
+
+        try (McpServerManager manager = new McpServerManager(
+                List.of(zeta, alpha), factory)) {
+            assertThat(manager.snapshot(context).tools()).extracting(Tool::name)
+                    .containsExactly("zeta.read", "alpha.read");
+        }
+    }
+
     private static McpServerManager manager(FakeSession session, int eagerLimit) {
         return manager(new QueueFactory(session), eagerLimit);
     }

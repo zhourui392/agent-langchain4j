@@ -779,8 +779,27 @@ Conversation 是消息投影，不再承担一次 run 的全部事实记录。ke
 
 ---
 
+### 16.17 Scope-keyed MCP 生命周期与动态工具目录（2026-07-29）
+
+MCP server 是外部工具来源，不是第二条 agent 执行通道。远端工具必须先适配成普通 kernel `Tool`，再统一经过 interceptor、permission、deadline/cancel、output policy、run event 与有序 batch settle；transport、远端 annotation 或 server 返回值均不能绕过这些治理边界。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| 动态目录 | domain `ToolCatalog` 以显式 `ExecutionContext` 返回不可变 `ToolCatalogSnapshot`；`ToolRegistry` 在同一次 resolution 中合并本地工具和动态 generation | 无 context 的 legacy API 只看静态工具；本地/动态或跨 catalog 重名立即失败；`AgentExecutor`、dispatcher 与 terminal 判定都使用同一 scope snapshot |
+| 安全提示 | provider-neutral `ToolSafety` 表达 read-only、destructive、idempotent、open-world；MCP annotation 只映射为该输入 | `PermissionPolicy` 不依赖 MCP/SDK 类型，且 annotation 不能授予本地 policy 已拒绝的权限 |
+| 一致性边界 | 每个 `(SecretScope, serverId)` 的 `ServerState` 独占 session、catalog generation、invalidation 与 retired-session lifecycle | 不存在无 scope 的全局认证 client；refresh 完整发现/校验后一次发布，旧 adapter 可完成已开始的调用 |
+| transport/protocol | `McpTransportSpec` + `McpSessionFactory` 收敛 stdio/HTTP 差异；`McpProtocolMapper` 在 LangChain4j transport 之上处理 raw initialize、tools/list、tools/call 与 annotations | 不使用会丢 annotation 的 SDK 高层 `listTools()`；wire schema/result 校验不散入 executor 或 catalog lifecycle |
+| 断线恢复 | 连接失败的当前 invocation 只 settle 为 ERROR 并 invalidate session；只有后续 invocation 才 reopen | 可能有副作用的远端调用绝不自动 replay；HTTP response 竞态期间旧 transport 先 retired，reconnect 完成或 scope close 时统一回收 |
+| 大目录 | `McpCatalogPolicy` 在超过 eager limit 时只暴露 `<server>.__discover_tools`，选择后从下一轮起注入指定 schema | 不把大 catalog 每轮全量塞入 context；声明、发现与选择顺序使用稳定不可变集合 |
+| secret 与日志 | config 只保存 destination→secret-name binding；session factory 只从 `ExecutionContext.secret` 解析，protocol mapper 对远端回显做精确替换 | resolved value 不进入 schema、prompt、event、普通日志或异常投影；stdio/HTTP transport request/response logging 默认关闭 |
+| 关闭语义 | scope close 回收该 scope 全部 session；manager close 幂等回收所有 active/retired transport 和 stdio 子进程 | CLI/宿主可按 run/workspace 生命周期显式释放资源，不依赖 JVM 退出 |
+
+本节不在 kernel 内置业务 MCP server、自动安装 server、通用远端调用重试或 MCP 专属编排。未来 server health、catalog notification 或新 transport 继续扩展现有 session/catalog/transport 策略点，不得在 `AgentExecutor` 增加 provider 分支。
+
+---
+
 ## 17. 下一步
 
-1. 按 `TASKLIST.md` S10 顺序实施 #49 MCP lifecycle/adapters；MCP 工具复用 §16.16 interceptor、§16.9 settle、§16.11 scope 和 §16.12 timeout/cancel 边界。
-2. 在同一 runtime 不变量上补 #50 background task 与 #51 可恢复 waiting states。
-3. 完成 #52/#53 后，再用 #54 manifest 和 #55 CLI 组合根形成 diagnosis/coding 的统一派发入口。
+1. 在同一 runtime 不变量上补 #50 background task 与 #51 可恢复 waiting states。
+2. 完成 #52 session branch/checkpoint 与 #53 provider-neutral model/retry policy。
+3. 最后用 #54 manifest 和 #55 CLI 组合根形成 diagnosis/coding 的统一派发入口。

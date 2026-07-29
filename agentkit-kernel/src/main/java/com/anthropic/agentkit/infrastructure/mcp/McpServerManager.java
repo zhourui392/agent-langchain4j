@@ -6,15 +6,11 @@ import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.domain.tool.ToolArguments;
 import com.anthropic.agentkit.domain.tool.ToolCatalog;
 import com.anthropic.agentkit.domain.tool.ToolCatalogSnapshot;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -30,7 +26,6 @@ import org.slf4j.LoggerFactory;
 public final class McpServerManager implements ToolCatalog, AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(McpServerManager.class);
-    private static final ObjectMapper JSON = new ObjectMapper();
 
     private final Map<String, McpServerConfig> configs;
     private final McpSessionFactory sessionFactory;
@@ -121,7 +116,7 @@ public final class McpServerManager implements ToolCatalog, AutoCloseable {
                 throw new IllegalArgumentException("duplicate MCP server id: " + config.id());
             }
         }
-        return Map.copyOf(unique);
+        return McpDeclarationOrder.immutableMap(unique);
     }
 
     private static SecretScope scopeOf(ExecutionContext context) {
@@ -152,14 +147,16 @@ public final class McpServerManager implements ToolCatalog, AutoCloseable {
     private final class ServerState implements AutoCloseable {
         private final SecretScope scope;
         private final McpServerConfig config;
+        private final McpCatalogPolicy catalogPolicy;
         private final Object lifecycleLock = new Object();
-        private final AtomicReference<CatalogGeneration> catalog = new AtomicReference<>();
+        private final AtomicReference<McpCatalogGeneration> catalog = new AtomicReference<>();
         private final List<McpSession> retiredSessions = new ArrayList<>();
         private volatile McpSession session;
 
         private ServerState(SecretScope scope, McpServerConfig config) {
             this.scope = scope;
             this.config = config;
+            this.catalogPolicy = new McpCatalogPolicy(config.id(), config.eagerToolLimit());
         }
 
         private List<Tool> tools(ExecutionContext context) {
@@ -179,9 +176,9 @@ public final class McpServerManager implements ToolCatalog, AutoCloseable {
             requireScope(context);
             ensureCatalog(context);
             synchronized (lifecycleLock) {
-                CatalogGeneration current = catalog.get();
-                Set<String> selected = new LinkedHashSet<>(current.selected());
-                selected.addAll(validateSelection(current.descriptors(), rawNames));
+                McpCatalogGeneration current = catalog.get();
+                Set<String> selected = catalogPolicy.mergeSelection(
+                        current.selected(), current.descriptors(), rawNames);
                 catalog.set(buildGeneration(current.descriptors(), selected));
             }
         }
@@ -218,8 +215,10 @@ public final class McpServerManager implements ToolCatalog, AutoCloseable {
                 active = sessionFactory.open(config, context);
             }
             try {
-                List<McpToolDescriptor> descriptors = validate(active.discoverTools());
-                Set<String> selected = previousSelection(descriptors);
+                List<McpToolDescriptor> descriptors = catalogPolicy.validate(
+                        active.discoverTools());
+                Set<String> selected = catalogPolicy.selectionForRefresh(
+                        catalog.get(), descriptors);
                 catalog.set(buildGeneration(descriptors, selected));
                 session = active;
                 closeRetired();
@@ -233,17 +232,17 @@ public final class McpServerManager implements ToolCatalog, AutoCloseable {
             }
         }
 
-        private CatalogGeneration buildGeneration(
+        private McpCatalogGeneration buildGeneration(
                 List<McpToolDescriptor> descriptors, Set<String> selected) {
-            boolean deferred = descriptors.size() > config.eagerToolLimit();
-            Set<String> effective = deferred ? Set.copyOf(selected) : namesOf(descriptors);
+            boolean deferred = catalogPolicy.deferred(descriptors);
+            Set<String> effective = catalogPolicy.effectiveSelection(descriptors, selected);
             List<Tool> tools = new ArrayList<>();
             if (deferred) {
                 tools.add(new McpDiscoverTool(config.id(), this::discover));
             }
             descriptors.stream().filter(item -> effective.contains(item.name()))
                     .map(this::adapter).forEach(tools::add);
-            return new CatalogGeneration(descriptors, effective, tools);
+            return new McpCatalogGeneration(descriptors, effective, tools);
         }
 
         private McpToolAdapter adapter(McpToolDescriptor descriptor) {
@@ -251,13 +250,11 @@ public final class McpServerManager implements ToolCatalog, AutoCloseable {
         }
 
         private String discover(ToolArguments arguments, ExecutionContext context) {
-            CatalogGeneration current = catalog.get();
-            Set<String> matches = requestedNames(arguments);
-            if (matches.isEmpty()) {
-                matches = queryMatches(current.descriptors(), arguments);
-            }
+            McpCatalogGeneration current = catalog.get();
+            Set<String> matches = catalogPolicy.resolveDiscovery(
+                    current.descriptors(), arguments);
             expose(context, matches);
-            return discoveryJson(matches);
+            return catalogPolicy.discoveryJson(matches);
         }
 
         private void invalidate(McpSession expected) {
@@ -268,16 +265,6 @@ public final class McpServerManager implements ToolCatalog, AutoCloseable {
                     log.warn("MCP session invalidated: server={}", config.id());
                 }
             }
-        }
-
-        private Set<String> previousSelection(List<McpToolDescriptor> descriptors) {
-            CatalogGeneration previous = catalog.get();
-            if (previous == null) {
-                return Set.of();
-            }
-            Set<String> available = namesOf(descriptors);
-            return previous.selected().stream().filter(available::contains)
-                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
         }
 
         private void requireScope(ExecutionContext context) {
@@ -302,95 +289,6 @@ public final class McpServerManager implements ToolCatalog, AutoCloseable {
             retiredSessions.clear();
             retired.forEach(McpServerManager::closeQuietly);
         }
-
-        private String discoveryJson(Set<String> selected) {
-            try {
-                return JSON.writeValueAsString(Map.of(
-                        "server", config.id(),
-                        "exposed", selected.stream()
-                                .map(name -> config.id() + "." + name).toList()));
-            } catch (Exception failure) {
-                throw new McpProtocolException("failed to encode discovery result", failure);
-            }
-        }
-    }
-
-    private static List<McpToolDescriptor> validate(List<McpToolDescriptor> discovered) {
-        Objects.requireNonNull(discovered, "MCP tool catalog");
-        List<McpToolDescriptor> descriptors = List.copyOf(discovered);
-        Set<String> names = new LinkedHashSet<>();
-        for (McpToolDescriptor descriptor : descriptors) {
-            Objects.requireNonNull(descriptor, "MCP tool descriptor");
-            validateSchema(descriptor);
-            if (McpDiscoverTool.RAW_NAME.equals(descriptor.name()) || !names.add(descriptor.name())) {
-                throw new McpProtocolException(
-                        "duplicate or reserved MCP tool name: " + descriptor.name());
-            }
-        }
-        return descriptors;
-    }
-
-    private static void validateSchema(McpToolDescriptor descriptor) {
-        try {
-            JsonNode schema = JSON.readTree(descriptor.inputSchema());
-            if (schema == null || !schema.isObject()
-                    || (!schema.path("type").isMissingNode()
-                    && !"object".equals(schema.path("type").asText()))) {
-                throw new McpProtocolException(
-                        "MCP tool schema must be an object: " + descriptor.name());
-            }
-        } catch (McpProtocolException failure) {
-            throw failure;
-        } catch (Exception failure) {
-            throw new McpProtocolException(
-                    "invalid MCP tool schema: " + descriptor.name(), failure);
-        }
-    }
-
-    private static Set<String> validateSelection(
-            List<McpToolDescriptor> descriptors, Collection<String> rawNames) {
-        Objects.requireNonNull(rawNames, "rawNames");
-        Set<String> available = namesOf(descriptors);
-        Set<String> selected = new LinkedHashSet<>();
-        for (String name : rawNames) {
-            if (!available.contains(name)) {
-                throw new IllegalArgumentException("unknown MCP tool selection: " + name);
-            }
-            selected.add(name);
-        }
-        return selected;
-    }
-
-    private static Set<String> requestedNames(ToolArguments arguments) {
-        Object value = arguments.values().get("names");
-        if (!(value instanceof Collection<?> values)) {
-            return Set.of();
-        }
-        Set<String> names = new LinkedHashSet<>();
-        values.forEach(item -> names.add(String.valueOf(item)));
-        return names;
-    }
-
-    private static Set<String> queryMatches(
-            List<McpToolDescriptor> descriptors, ToolArguments arguments) {
-        String query = arguments.getString("query", "").toLowerCase(Locale.ROOT);
-        int limit = Math.max(1, Math.min(arguments.getInt("limit", 8), 32));
-        if (query.isBlank()) {
-            throw new IllegalArgumentException("names or query is required");
-        }
-        return descriptors.stream().filter(descriptor -> matches(descriptor, query))
-                .limit(limit).map(McpToolDescriptor::name)
-                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-    }
-
-    private static boolean matches(McpToolDescriptor descriptor, String query) {
-        return descriptor.name().toLowerCase(Locale.ROOT).contains(query)
-                || descriptor.description().toLowerCase(Locale.ROOT).contains(query);
-    }
-
-    private static Set<String> namesOf(List<McpToolDescriptor> descriptors) {
-        return descriptors.stream().map(McpToolDescriptor::name)
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
     private static void closeQuietly(McpSession session) {
@@ -405,14 +303,4 @@ public final class McpServerManager implements ToolCatalog, AutoCloseable {
         }
     }
 
-    private record CatalogGeneration(
-            List<McpToolDescriptor> descriptors,
-            Set<String> selected,
-            List<Tool> tools) {
-        private CatalogGeneration {
-            descriptors = List.copyOf(descriptors);
-            selected = Set.copyOf(selected);
-            tools = List.copyOf(tools);
-        }
-    }
 }

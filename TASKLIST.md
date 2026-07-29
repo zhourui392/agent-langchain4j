@@ -20,7 +20,7 @@
 | S8 持久化 | #36–38 | 0.5d | JSONL store + /resume + SessionId |
 | MVP-Gate | #39 | — | 端到端冒烟，打 `v0.1.0-mvp` |
 | S9 Runtime Hardening | #40–46 | 已完成（7/7） | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
-| S10 Runtime Extensions | #47–55 | 进行中（2/9） | 子 Agent、interceptor、MCP、后台任务、暂停恢复、分支、模型策略、manifest、CLI |
+| S10 Runtime Extensions | #47–55 | 进行中（3/9） | 子 Agent、interceptor、MCP、后台任务、暂停恢复、分支、模型策略、manifest、CLI |
 | **MVP 合计** | — | **≈8 人天** | — |
 
 ## 依赖图
@@ -793,7 +793,7 @@ S0 (1→2→3)
 
 ### #49 [S10-Kernel-Infra-TDD] MCP client、工具适配与生命周期 （blockedBy: 43, 44, 45, 46, 48）
 
-**状态**：进行中（Red）。
+**状态**：已完成（2026-07-29）。
 
 **Red**：fake stdio discover/call/close；HTTP timeout/cancel/reconnect；namespace 冲突；malformed schema/result settle；destructive tool 走 ASK/DENY；secret 不泄漏；catalog refresh 原子；大 catalog 延迟暴露。
 

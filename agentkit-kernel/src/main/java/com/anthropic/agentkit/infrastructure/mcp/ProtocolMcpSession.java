@@ -4,9 +4,6 @@ import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.ToolArguments;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import dev.langchain4j.mcp.client.McpRoot;
 import dev.langchain4j.mcp.client.logging.McpLogMessage;
 import dev.langchain4j.mcp.client.protocol.McpCallToolRequest;
@@ -21,7 +18,6 @@ import dev.langchain4j.mcp.client.transport.McpTransport;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -40,13 +36,12 @@ import org.slf4j.LoggerFactory;
 final class ProtocolMcpSession implements McpSession {
 
     private static final Logger log = LoggerFactory.getLogger(ProtocolMcpSession.class);
-    private static final ObjectMapper JSON = new ObjectMapper();
     private static final String PROTOCOL_VERSION = "2025-06-18";
 
     private final McpServerConfig config;
     private final McpTransport transport;
     private final CancellationToken sessionCancellation;
-    private final List<String> secretValues;
+    private final McpProtocolMapper protocol;
     private final AtomicLong ids = new AtomicLong(1);
     private final ConcurrentMap<Long, CompletableFuture<JsonNode>> pending =
             new ConcurrentHashMap<>();
@@ -59,7 +54,7 @@ final class ProtocolMcpSession implements McpSession {
         this.config = Objects.requireNonNull(config, "config");
         this.transport = Objects.requireNonNull(transport, "transport");
         this.sessionCancellation = context.cancellation();
-        this.secretValues = List.copyOf(secretValues);
+        this.protocol = new McpProtocolMapper(secretValues);
     }
 
     static ProtocolMcpSession open(
@@ -89,9 +84,9 @@ final class ProtocolMcpSession implements McpSession {
             JsonNode response = execute(
                     request, config.initializationTimeout(),
                     sessionCancellation, "tools/list");
-            JsonNode result = requireResult(response, "tools/list");
-            descriptors.addAll(parseDescriptors(result.path("tools")));
-            cursor = textOrNull(result.get("nextCursor"));
+            JsonNode result = protocol.result(response, "tools/list");
+            descriptors.addAll(protocol.descriptors(result.path("tools")));
+            cursor = protocol.nextCursor(result.get("nextCursor"));
         } while (cursor != null);
         return List.copyOf(descriptors);
     }
@@ -104,11 +99,11 @@ final class ProtocolMcpSession implements McpSession {
             throw new McpCancelledException("MCP call cancelled");
         }
         long id = ids.getAndIncrement();
-        ObjectNode argumentNode = JSON.valueToTree(arguments.values());
-        McpCallToolRequest request = new McpCallToolRequest(id, toolName, argumentNode);
+        McpCallToolRequest request = new McpCallToolRequest(
+                id, toolName, protocol.arguments(arguments));
         Duration timeout = minimum(config.callTimeout(), context.limits().toolWait());
         JsonNode response = execute(request, timeout, context.cancellation(), "tools/call");
-        return parseCallResult(response);
+        return protocol.callResult(response);
     }
 
     @Override
@@ -139,7 +134,7 @@ final class ProtocolMcpSession implements McpSession {
         CompletableFuture<JsonNode> future = transport.initialize(request);
         JsonNode response = await(id, future, config.initializationTimeout(),
                 sessionCancellation, "initialize");
-        requireResult(response, "initialize");
+        protocol.result(response, "initialize");
         log.info("MCP session ready: server={}", config.id());
     }
 
@@ -193,111 +188,6 @@ final class ProtocolMcpSession implements McpSession {
         }
     }
 
-    private McpCallResult parseCallResult(JsonNode response) {
-        if (response.has("error")) {
-            return McpCallResult.error(sanitize(errorMessage(response.path("error"))));
-        }
-        JsonNode result = requireResult(response, "tools/call");
-        boolean error = result.path("isError").asBoolean(false);
-        JsonNode structured = result.get("structuredContent");
-        String content;
-        Map<String, String> metadata;
-        if (structured != null && !structured.isNull()) {
-            content = structured.toString();
-            metadata = Map.of("mcp.content", "structured");
-        } else {
-            ArrayNode items = requireContent(result);
-            content = contentText(items);
-            metadata = Map.of("mcp.content_count", String.valueOf(items.size()));
-        }
-        content = sanitize(content);
-        return new McpCallResult(error, content, metadata);
-    }
-
-    private static ArrayNode requireContent(JsonNode result) {
-        JsonNode content = result.get("content");
-        if (!(content instanceof ArrayNode items)) {
-            throw new McpProtocolException("MCP tools/call result has no content");
-        }
-        return items;
-    }
-
-    private static String contentText(ArrayNode items) {
-        List<String> content = new ArrayList<>();
-        for (JsonNode item : items) {
-            if (!item.isObject() || !item.hasNonNull("type")) {
-                throw new McpProtocolException("malformed MCP content item");
-            }
-            content.add("text".equals(item.path("type").asText())
-                    ? requireText(item, "text") : item.toString());
-        }
-        return String.join("\n", content);
-    }
-
-    private static List<McpToolDescriptor> parseDescriptors(JsonNode tools) {
-        if (!(tools instanceof ArrayNode array)) {
-            throw new McpProtocolException("MCP tools/list result has no tools array");
-        }
-        List<McpToolDescriptor> descriptors = new ArrayList<>();
-        for (JsonNode tool : array) {
-            String name = requireText(tool, "name");
-            String description = tool.path("description").asText("");
-            JsonNode schema = tool.get("inputSchema");
-            if (schema == null || !schema.isObject()) {
-                throw new McpProtocolException("invalid MCP input schema: " + name);
-            }
-            descriptors.add(new McpToolDescriptor(
-                    name, description, schema.toString(), annotations(tool.path("annotations"))));
-        }
-        return descriptors;
-    }
-
-    private static McpToolAnnotations annotations(JsonNode node) {
-        boolean readOnly = node.path("readOnlyHint").asBoolean(false);
-        boolean destructive = node.has("destructiveHint")
-                ? node.path("destructiveHint").asBoolean(true) : !readOnly;
-        boolean idempotent = node.path("idempotentHint").asBoolean(false);
-        boolean openWorld = node.path("openWorldHint").asBoolean(true);
-        return new McpToolAnnotations(readOnly, destructive, idempotent, openWorld);
-    }
-
-    private static JsonNode requireResult(JsonNode response, String operation) {
-        if (response == null || !response.isObject()) {
-            throw new McpProtocolException("malformed MCP " + operation + " response");
-        }
-        if (response.has("error")) {
-            throw new McpProtocolException("MCP " + operation + " returned an error");
-        }
-        JsonNode result = response.get("result");
-        if (result == null || !result.isObject()) {
-            throw new McpProtocolException("MCP " + operation + " response has no result");
-        }
-        return result;
-    }
-
-    private static String requireText(JsonNode object, String field) {
-        JsonNode value = object.get(field);
-        if (value == null || !value.isTextual() || value.asText().isBlank()) {
-            throw new McpProtocolException("missing MCP text field: " + field);
-        }
-        return value.asText();
-    }
-
-    private static String errorMessage(JsonNode error) {
-        String message = error.path("message").asText("MCP server returned an error");
-        return message.isBlank() ? "MCP server returned an error" : message;
-    }
-
-    private String sanitize(String value) {
-        String sanitized = value;
-        for (String secret : secretValues) {
-            if (secret != null && !secret.isBlank()) {
-                sanitized = sanitized.replace(secret, "***");
-            }
-        }
-        return sanitized;
-    }
-
     private void observeServerLog(McpLogMessage message) {
         log.debug("MCP server log received: server={}, level={}, logger={}",
                 config.id(), message.level(), message.logger());
@@ -318,11 +208,6 @@ final class ProtocolMcpSession implements McpSession {
         params.setClientInfo(info);
         params.setCapabilities(new McpInitializeParams.Capabilities());
         return params;
-    }
-
-    private static String textOrNull(JsonNode value) {
-        return value == null || value.isNull() || !value.isTextual()
-                || value.asText().isBlank() ? null : value.asText();
     }
 
     private static Duration minimum(Duration first, Duration second) {

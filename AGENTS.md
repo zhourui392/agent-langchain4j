@@ -109,7 +109,7 @@ interfaces/cli  →  application  →  domain  ←  infrastructure
 > 扩展方向原则。`agentkit-kernel` 是基座（agent 运行时 + SPI），每个 agent 是 kernel 之上的一个**包**。`agentkit-agent-diagnosis` 是第一个 agent 包；"Devin 式多角色协作开发" 不是独立产品，而是**另一个平级的 agent 包**（会编排子 Agent 的 coding agent），复用同一套 kernel。
 
 ### 职责边界
-- **kernel 提供（领域无关、稳定）**：`AgentExecutor` 回合循环、`ParallelToolDispatcher`；扩展点 SPI —— `Tool`、`SubAgentTool`（起隔离子 Agent）、`StructuredOutputTool`（终结工具/结构化交接）、typed `AgentInterceptor`（进程内生命周期策略）、`ContextProvider`、`PermissionPolicy`；`AgentBudget`（配额）、`governance/`（审计/脱敏）。
+- **kernel 提供（领域无关、稳定）**：`AgentExecutor` 回合循环、`ParallelToolDispatcher`；扩展点 SPI —— `Tool`、context-aware `ToolCatalog`、`SubAgentTool`（起隔离子 Agent）、`StructuredOutputTool`（终结工具/结构化交接）、typed `AgentInterceptor`（进程内生命周期策略）、`ContextProvider`、`PermissionPolicy`；provider-neutral `ToolSafety`、`AgentBudget`（配额）、`governance/`（审计/脱敏）及 scope-keyed MCP lifecycle。
 - **每个 agent 包提供（领域特定）**：领域工具（`DubboInvokeTool`/`EsReadTool`…）、终结工具 schema、领域 VO（交接载体，如 `DiagnosisPlan`，未来 `Patch`/`ReviewVerdict`）、payload→VO 映射、**自己的 orchestrator**。
 - **编排不下沉 kernel**：诊断循环（假设→取证→更新计划）与写码循环（拆任务→改→评审→打回）是不同领域工作流 = 业务规则，按分层纪律留在各包 application 层。kernel 只给积木（`SubAgentTool`/`StructuredOutputTool`），不给工作流——内置某种编排会被某个领域的形状污染。
 
@@ -120,4 +120,5 @@ interfaces/cli  →  application  →  domain  ←  infrastructure
 ### kernel 扩展基座状态（让"加 agent"变薄）
 1. **`StructuredAgent` + `AgentSpec`（已完成）**：kernel 已收敛"受约束运行 → 结构化 payload"样板；角色用 domain `AgentSpec` 物化 system prompt、能力集、model tier、预算/限制与 terminal spec。kernel 只返回通用 payload，payload→VO 映射留在 agent 包。历史 TDD 草图见 `docs/structured-agent-tdd-draft.md`。
 2. **typed `AgentInterceptor`（S10 #48，已完成）**：blocking hook 只返回 `Continue` / `Deny` / `ReplaceContext` 等合法 decision；observer failure 隔离，blocking failure 映射为明确终态；LLM/tool/compaction/run-stop/sub-agent 生命周期共用声明有序的链。它不替代 `PermissionPolicy`，也不开放 shell/script hook。
-3. **`AgentManifest`（S10 #54）**：agent 自描述（id / description / entryPoint / requiredConfigKeys），让运行时/CLI 发现与派发，取代 `AgentKitApplication.main` 手工 wiring。等 #47–#53 基座稳定后实施，不引入反射扫描或插件子系统。
+3. **scope-keyed MCP lifecycle（S10 #49，已完成）**：`McpServerManager` 按 `(SecretScope, serverId)` 隔离认证 session，`ToolCatalog` 原子发布动态 generation，大目录延迟暴露；MCP 工具必须与本地工具共用 permission/interceptor/output/event/ordered-settle 路径，annotation 不能绕过本地 deny，断线不能 replay 当前调用。
+4. **`AgentManifest`（S10 #54）**：agent 自描述（id / description / entryPoint / requiredConfigKeys），让运行时/CLI 发现与派发，取代 `AgentKitApplication.main` 手工 wiring。等 #47–#53 基座稳定后实施，不引入反射扫描或插件子系统。

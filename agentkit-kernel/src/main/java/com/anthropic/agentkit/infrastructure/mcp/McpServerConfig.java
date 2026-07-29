@@ -112,7 +112,7 @@ public record McpServerConfig(
         }
         Map<String, String> copy = new LinkedHashMap<>(values);
         copy.put(name, value);
-        return Map.copyOf(copy);
+        return McpDeclarationOrder.immutableMap(copy);
     }
 
     private static void requirePositive(Duration value, String label) {
