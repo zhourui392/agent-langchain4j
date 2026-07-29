@@ -83,14 +83,14 @@ class AgentKitApplicationTest {
     }
 
     @Test
-    void historyFileUsesUserHome() throws Exception {
+    void historyFileUsesUserHome(@TempDir Path tempDir) throws Exception {
         String oldHome = System.getProperty("user.home");
         try {
-            System.setProperty("user.home", "D:\\tmp\\home");
+            System.setProperty("user.home", tempDir.toString());
 
             Path history = (Path) invoke("historyFile", new Class<?>[]{});
 
-            assertThat(history.toString()).endsWith(".agentkit\\history");
+            assertThat(history).isEqualTo(tempDir.resolve(".agentkit").resolve("history"));
         } finally {
             System.setProperty("user.home", oldHome);
         }
