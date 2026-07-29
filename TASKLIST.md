@@ -1,6 +1,6 @@
 # AgentKit on LangChain4j — 任务清单
 
-> 本文档由 `DESIGN.md` 拆解而来，共 **39 个任务**，覆盖 9 个阶段。
+> 本文档由 `DESIGN.md` 拆解而来，共 **46 个任务**，覆盖 10 个阶段。
 >
 > **TDD 任务**遵循 Red → Green → Refactor 循环；**Infra 任务**只给目标 + 验收。
 > 每个任务的 DoD（Definition of Done）包含编码规范红线（函数 ≤50 行、嵌套 ≤3 层、命名自解释）。
@@ -19,6 +19,7 @@
 | S7 中断 + 流式渲染 | #33–35 | 0.5d | CancellationToken + SIGINT + 实时 token 输出 |
 | S8 持久化 | #36–38 | 0.5d | JSONL store + /resume + SessionId |
 | MVP-Gate | #39 | — | 端到端冒烟，打 `v0.1.0-mvp` |
+| S9 Runtime Hardening | #40–46 | 待评估 | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
 | **MVP 合计** | — | **≈8 人天** | — |
 
 ## 依赖图
@@ -633,6 +634,120 @@ S0 (1→2→3)
 5. 重启后 `/resume <id>` 看到历史
 
 **DoD**: 5 条全部通过；记录 cache hit rate / cost。打 tag `v0.1.0-mvp`。
+
+---
+
+## S9 Agent Runtime Hardening
+
+> 来源：2026-07-29 Claude Code / Codex agent 流程对照审计。完整证据、领域模型、依赖图和非目标见
+> [`docs/agentkit-kernel-high-priority-tasks.md`](docs/agentkit-kernel-high-priority-tasks.md)。
+> 所有任务完成后再更新 `DESIGN.md §16` 的正式决策。
+
+### GATE-0 [Test] 恢复跨平台全量构建
+
+**状态**：待开始。
+
+**Goal**：修复 Linux/Windows 路径分隔符测试，使 `mvn -B -ntp clean verify` 成为可信基线。
+
+**DoD**：kernel 与 CLI 的 user-home 路径测试使用平台真实 `Path` 语义；全量 verify 通过。
+
+---
+
+### #40 [S9-Kernel-TDD] AgentRunContext 单一作用域与 AgentExecutor 可重入 （blockedBy: GATE-0）
+
+**状态**：待开始。
+
+**Red**：provided cwd/cancellation 到达工具；并发 run 不共享 cwd、取消、预算、权限缓存和 file-state 授权。
+
+**Green**：引入 `RunId`、`WorkspaceId`、`AgentRunContext`；dispatcher 改为 run scope；移除 kernel 内隐式 `user.dir`/allow-all 组合。
+
+**Refactor**：静态 runtime 配置与动态 run state 分离；StructuredAgent/SubAgent/agent 包统一透传。
+
+**DoD**：单 executor 并发运行两个 workspace 稳定；所有外部动作关联同一 RunId；ArchUnit 全绿。
+
+---
+
+### #41 [S9-Kernel-TDD] AssistantTurn / tool batch 完整 settle （blockedBy: 40）
+
+**状态**：待开始。
+
+**Red**：重复 ToolUseId、pending batch 后追加消息、budget/unknown-tool/invalid-args/permission/listener/cancel 异常路径。
+
+**Green**：`ToolResultStatus` 保留到 conversation/provider；每批输出等长、有序、全部 terminal 的 outcome。
+
+**Refactor**：完整 settle 不变量归 domain，dispatcher 只执行策略；session codec 向后兼容。
+
+**DoD**：所有可预期失败均生成 result，不产生孤儿 tool-use；并发异常测试稳定。
+
+---
+
+### #42 [S9-Kernel-TDD] AgentRunResult 与原生 terminal-tool 退出 （blockedBy: 41）
+
+**状态**：待开始。
+
+**Red**：terminal 成功后无第二次 LLM；失败校验可纠正；mixed/multiple terminal 拒绝；stop reason/usage/payload 可读。
+
+**Green**：executor 返回 `AgentRunResult`；成功 terminal 在配对完成后立即停止；完整验证支持的 JSON Schema。
+
+**Refactor**：diagnosis `RunSummary` 建立 adapter；移除 StructuredAgent sink/第二轮时序依赖。
+
+**DoD**：所有预期终态无需解析异常文本；provider、diagnosis、coding 全回归。
+
+---
+
+### #43 [S9-Kernel-TDD] WorkspaceBoundary、参数级权限与安全默认值 （blockedBy: 40）
+
+**状态**：待开始。
+
+**Red**：`..`、绝对路径、symlink 越界；permission cache 跨 scope/参数泄漏；deny 优先；默认不 BYPASS。
+
+**Green**：文件工具必经 `WorkspaceBoundary`；permission rule 绑定 scope + 参数；引入 `SecretProvider` port 和安全默认值。
+
+**Refactor**：平台路径 resolver 与 policy 分离；记录 Bash 在 L0 不是宿主 sandbox 的残余风险。
+
+**DoD**：kernel 文件工具不能越 workspace；permission/secret 审计带 scope 且不泄密；跨平台测试通过。
+
+---
+
+### #44 [S9-Kernel-TDD] 可取消 LlmCall、deadline 与输出预算 （blockedBy: 40, 42）
+
+**状态**：待开始。
+
+**Red**：首 delta 前取消、timeout 主动取消 provider、late callback 隔离、唯一终态、child 不能放大 parent 限制。
+
+**Green**：`LlmClient` 返回可取消 handle/completion；run context 提供 deadline/limits；tool/child 继承限制。
+
+**Refactor**：区分 provider timeout、run deadline、tool timeout；stream/final output 只计量一次。
+
+**DoD**：无输出挂起调用可取消；timeout 后无二次完成或资源泄漏；无 runtime 魔法等待常量。
+
+---
+
+### #45 [S9-Kernel-TDD] ContextPolicy 与全局 ToolOutputPolicy （blockedBy: 41, 42, 44）
+
+**状态**：待开始。
+
+**Red**：每轮 compact、overflow 单次恢复、batch-safe compaction、summary 失败不丢历史、所有工具输出统一受限。
+
+**Green**：executor 每轮委托 `ContextPolicy`；显式 compaction boundary；dispatch 必经 `ToolOutputPolicy`。
+
+**Refactor**：token estimator/window/retry 策略组合；artifact port 与持久实现解耦。
+
+**DoD**：所有 agent 入口共享策略；compact 前后配对成立；大结果有完整/截断/artifact 明确状态。
+
+---
+
+### #46 [S9-Kernel-TDD] append-only RunEventStore 与安全 resume （blockedBy: 41, 42, 45）
+
+**状态**：待开始。
+
+**Red**：append-only、event projection、settled 不重放、in-flight 标 UNKNOWN、terminal/usage/compaction 可恢复、尾记录容错。
+
+**Green**：定义版本化 `RunEvent`/`RunEventStore` port 与文件实现；Conversation/RunResult 从事件重建。
+
+**Refactor**：事实存储与 listener 分离；旧 ChatMemoryStore/session 提供兼容迁移路径。
+
+**DoD**：kill/restart 不重复已完成工具；终态可完整恢复；不猜测外部副作用；全量 verify 通过。
 
 ---
 
