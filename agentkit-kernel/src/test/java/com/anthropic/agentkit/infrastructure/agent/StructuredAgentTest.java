@@ -49,13 +49,13 @@ class StructuredAgentTest {
         StubLlmClient llm = new StubLlmClient()
                 .enqueue(AiMessage.of("", List.of(new ToolUseRequest(
                         new ToolUseId("t-1"), TERMINAL_TOOL,
-                        "{\"problemStatement\":\"db slow\"}"))))
-                .enqueue(AiMessage.text("done"));
+                        "{\"problemStatement\":\"db slow\"}"))));
         StructuredAgent agent = new StructuredAgent(llm, "Plan it.", OUTPUT, List.of());
 
         Map<String, Object> payload = agent.run("Make a plan", context());
 
         assertThat(payload).containsEntry("problemStatement", "db slow");
+        assertThat(llm.capturedRequests()).hasSize(1);
     }
 
     @Test
@@ -77,8 +77,7 @@ class StructuredAgentTest {
                         new ToolUseId("inspect-1"), "Inspect", "{}"))))
                 .enqueue(AiMessage.of("", List.of(new ToolUseRequest(
                         new ToolUseId("terminal-1"), TERMINAL_TOOL,
-                        "{\"problemStatement\":\"scoped\"}"))))
-                .enqueue(AiMessage.text("done"));
+                        "{\"problemStatement\":\"scoped\"}"))));
         StructuredAgent agent = new StructuredAgent(llm, "Plan it.", OUTPUT, List.of(inspect));
         CancellationToken cancellation = new CancellationToken();
         AgentRunContext context = AgentRunContext.of(

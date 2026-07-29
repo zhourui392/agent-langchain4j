@@ -57,6 +57,30 @@ class StructuredOutputToolTest {
         assertThat(accepted).isEmpty();
     }
 
+    @Test
+    void rejectsWrongTypeAndUnknownProperty() {
+        String strictSchema = """
+                {"type":"object","properties":{
+                  "decision":{"type":"string","enum":["ACCEPT","REJECT"]},
+                  "details":{"type":"object","properties":{"count":{"type":"integer"}},
+                             "required":["count"],"additionalProperties":false}
+                },"required":["decision","details"],"additionalProperties":false}
+                """;
+        StructuredOutputTool strict = new StructuredOutputTool(
+                "submit_review", "Submit review", strictSchema, accepted::add);
+
+        ToolResult wrongType = strict.execute(ToolArguments.of(Map.of(
+                "decision", "ACCEPT", "details", Map.of("count", "one"))), context());
+        ToolResult unknownProperty = strict.execute(ToolArguments.of(Map.of(
+                "decision", "ACCEPT", "details", Map.of("count", 1), "extra", true)), context());
+
+        assertThat(wrongType.success()).isFalse();
+        assertThat(wrongType.content()).contains("details.count", "integer");
+        assertThat(unknownProperty.success()).isFalse();
+        assertThat(unknownProperty.content()).contains("extra", "not allowed");
+        assertThat(accepted).isEmpty();
+    }
+
     private static ExecutionContext context() {
         return ExecutionContext.at(Paths.get(System.getProperty("user.dir")));
     }
