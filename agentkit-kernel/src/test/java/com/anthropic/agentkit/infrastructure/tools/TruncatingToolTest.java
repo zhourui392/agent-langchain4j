@@ -2,6 +2,7 @@ package com.anthropic.agentkit.infrastructure.tools;
 
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.ToolArguments;
+import com.anthropic.agentkit.domain.tool.ToolOutputMetadata;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.infrastructure.tools.support.ToolResultTruncator;
 import com.anthropic.agentkit.testsupport.FakeTool;
@@ -28,6 +29,10 @@ class TruncatingToolTest {
         assertThat(result.success()).isTrue();
         assertThat(result.content()).contains("omitted");
         assertThat(result.content().length()).isLessThan(big.length());
+        assertThat(result.metadata()).containsEntry(
+                ToolOutputMetadata.DISPOSITION_KEY, ToolOutputMetadata.TRUNCATED);
+        assertThat(result.metadata()).containsEntry(
+                ToolOutputMetadata.ARTIFACT_KEY, ToolOutputMetadata.OMITTED);
     }
 
     @Test

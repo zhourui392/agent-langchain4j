@@ -3,10 +3,13 @@ package com.anthropic.agentkit.infrastructure.tools;
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.domain.tool.ToolArguments;
+import com.anthropic.agentkit.domain.tool.ToolOutputMetadata;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.infrastructure.tools.support.ToolResultTruncator;
 
 import java.util.Objects;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,7 +61,19 @@ public final class TruncatingTool implements Tool {
         if (truncated.length() != result.content().length()) {
             log.warn("tool result truncated: tool={}, originalChars={}, truncatedChars={}",
                     delegate.name(), result.content().length(), truncated.length());
+            return truncatedResult(result, truncated);
         }
-        return result.withContent(truncated);
+        return result;
+    }
+
+    private ToolResult truncatedResult(ToolResult result, String truncated) {
+        Map<String, String> metadata = new LinkedHashMap<>(result.metadata());
+        metadata.put(ToolOutputMetadata.DISPOSITION_KEY, ToolOutputMetadata.TRUNCATED);
+        metadata.put(ToolOutputMetadata.ORIGINAL_CHARACTERS_KEY,
+                String.valueOf(result.content().length()));
+        metadata.put(ToolOutputMetadata.RETAINED_CHARACTERS_KEY,
+                String.valueOf(truncated.length()));
+        metadata.putIfAbsent(ToolOutputMetadata.ARTIFACT_KEY, ToolOutputMetadata.OMITTED);
+        return ToolResult.of(result.status(), truncated, metadata);
     }
 }

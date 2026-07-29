@@ -3,6 +3,7 @@ package com.anthropic.agentkit.infrastructure.llm;
 import com.anthropic.agentkit.domain.message.AiMessage;
 import com.anthropic.agentkit.domain.message.UserMessage;
 import com.anthropic.agentkit.domain.port.ChatRequest;
+import com.anthropic.agentkit.domain.port.ContextWindowExceededException;
 import com.anthropic.agentkit.domain.port.LlmClient.StreamHandler;
 import dev.langchain4j.model.anthropic.AnthropicTokenUsage;
 import dev.langchain4j.model.chat.StreamingChatModel;
@@ -75,6 +76,22 @@ class LangChain4jLlmClientTest {
         });
 
         assertThat(received.get()).hasMessage("boom");
+    }
+
+    @Test
+    void mapsProviderContextOverflowToPortSignal() {
+        FakeStreamingChatModel fake = new FakeStreamingChatModel()
+                .failure(new RuntimeException("context_length_exceeded: prompt is too large"));
+        LangChain4jLlmClient client = new LangChain4jLlmClient(fake);
+        AtomicReference<Throwable> received = new AtomicReference<>();
+
+        client.streamChat(baseRequest, new StreamHandler() {
+            @Override public void onPartialText(String delta) { }
+            @Override public void onError(Throwable error) { received.set(error); }
+        });
+
+        assertThat(received.get()).isInstanceOf(ContextWindowExceededException.class)
+                .hasCauseInstanceOf(RuntimeException.class);
     }
 
     @Test

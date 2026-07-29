@@ -5,8 +5,6 @@ import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.TokenBudget;
 import com.anthropic.agentkit.domain.port.LlmClient;
 
-import java.util.Objects;
-
 /** Run-wide policy applied before every agent LLM request. */
 @FunctionalInterface
 public interface ContextPolicy {
@@ -34,11 +32,4 @@ public interface ContextPolicy {
         return (conversation, context) -> ContextDecision.unchanged();
     }
 
-    static ContextPolicy observing(Runnable observer) {
-        Objects.requireNonNull(observer, "observer");
-        return (conversation, context) -> {
-            observer.run();
-            return ContextDecision.unchanged();
-        };
-    }
 }

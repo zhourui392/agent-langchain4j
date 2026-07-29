@@ -130,10 +130,47 @@ class ConversationTest {
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
+    @Test
+    void rejectedCompactionLeavesConversationUnchanged() {
+        Conversation conversation = settledToolConversation("compact-atomic");
+        List<ChatMessage> original = List.copyOf(conversation.messages());
+        CompactionBoundary split = new CompactionBoundary(
+                0, 1, 10, 1, "summary");
+
+        assertThatThrownBy(() -> conversation.installCompaction(
+                split, conversation.messages().subList(1, conversation.messages().size())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("matching tool use");
+
+        assertThat(conversation.messages()).containsExactlyElementsOf(original);
+        assertThat(conversation.lastCompaction()).isEmpty();
+    }
+
+    @Test
+    void compactionPreservesHistoricalToolUseIdentity() {
+        Conversation conversation = settledToolConversation("compact-identity");
+        conversation.installCompaction(
+                new CompactionBoundary(0, 2, 10, 1, "summary"), List.of());
+
+        assertThatThrownBy(() -> conversation.append(AiMessage.of("again", List.of(
+                new ToolUseRequest(new ToolUseId("used-before"), "Read", "{}")))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("duplicate");
+    }
+
     private Conversation conversationWithPendingToolUse() {
         Conversation conv = new Conversation(session);
         conv.append(AiMessage.of("calling", List.of(new ToolUseRequest(
                 new ToolUseId("pending"), "Read", "{}"))));
         return conv;
+    }
+
+    private Conversation settledToolConversation(String id) {
+        Conversation conversation = new Conversation(SessionId.of(id));
+        ToolUseId toolUseId = new ToolUseId("used-before");
+        conversation.append(AiMessage.of("calling", List.of(
+                new ToolUseRequest(toolUseId, "Read", "{}"))));
+        conversation.append(ToolResultMessage.of(toolUseId, "done"));
+        return conversation;
     }
 }

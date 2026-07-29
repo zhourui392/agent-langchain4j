@@ -1,6 +1,6 @@
 # AgentKit Kernel：高优先级 Agent Runtime 补齐任务
 
-> 状态：执行中；已纳入 `TASKLIST.md` S9，#40–#44 已完成
+> 状态：执行中；已纳入 `TASKLIST.md` S9，#40–#45 已完成
 >
 > 审计日期：2026-07-29
 >
@@ -42,7 +42,7 @@
 | 权限与隔离 | 默认交互授权；cache 绑定 run/workspace/tool/完整参数；文件工具强制 real-path boundary | 两者都把审批与 sandbox/workspace policy 分开处理 | L0 文件与审批边界已补齐；Bash 仍非 sandbox |
 | 运行结果 | executor 返回 `AgentRunResult`，含 stop reason、payload、usage 和预算消费 | stop reason、usage、取消、超时、任务结果都是一等运行结果 | 基础终态已补齐，主动取消/超时见 #44 |
 | LLM 取消 | `LlmCall` 提供 completion/cancel；deadline、provider/tool timeout、late callback 隔离均由 run scope 统一控制 | 运行取消应终止正在进行的模型/工具 I/O | 已补齐 kernel 终态与 best-effort provider 取消；SDK 无原生 cancel handle 的限制已记录 |
-| 上下文 | 有压缩服务，但只有 diagnosis 在 run 前显式调用 | 成熟 runtime 在每轮调用前治理上下文，并可从 overflow 恢复 | 接线分散 |
+| 上下文 | executor 每次主 LLM 调用前统一执行策略；显式边界、单次 overflow 恢复与全局工具输出限制已落地 | 成熟 runtime 在每轮调用前治理上下文，并可从 overflow 恢复 | 已补齐运行期治理；事件恢复见 #46 |
 | 会话恢复 | 保存消息投影，整文件原子重写 | 支持 resume/fork/checkpoint，并区分已完成和 in-flight action | 仅有消息恢复 |
 | 子 Agent | 有同步、只读、文本返回的 `SubAgentTool` | 支持角色、模型、预算、取消、跟进和独立生命周期 | 可用原型，后续任务 |
 | MCP / hooks / background | MCP 只有空 package；listener 只观察；Bash 同步 | 两者均提供 MCP、生命周期扩展及长任务管理能力 | 非首批，见后续文档 |
@@ -622,6 +622,15 @@ interface ToolOutputPolicy {
 - compact 前后 tool-use 配对不变量均成立。
 - 大结果不会无限进入模型上下文，且模型能区分“完整结果”“截断结果”“外部 artifact”。
 - compaction LLM 同样服从 #44 的 cancellation/deadline/usage 统计。
+
+**完成结果**
+
+- `AgentExecutor` 的所有入口（CLI、diagnosis、coding、`StructuredAgent`、`SubAgentTool`）统一使用 `ContextPolicy`；每次主 LLM request 前均执行 proactive policy。diagnosis 已移除入口处的独立一次性 compact，不再存在 agent 包自行决定压缩时机的旁路。
+- `ContextCompactionService` 既处理阈值压缩，也处理 provider overflow。LangChain4j adapter 将已知 OpenAI/Anthropic overflow 诊断映射为 provider-neutral `ContextWindowExceededException`；同一 turn 最多 compact 并重试一次，第二次 overflow 以 `CONTEXT_EXHAUSTED` 结束。
+- `Conversation.installCompaction` 先在候选 projection 上重放完整 tool-use 不变量，成功后才原子替换消息；原 checker 继续保留历史 tool-use identity。`CompactionBoundary` 记录来源范围、原 token 估算、summary version 与摘要，摘要以 system message 投影，不再伪装成 user 输入。
+- summarizer transcript 显式包含 tool-use id/name/arguments 及 result status/metadata；空摘要、tool-call 摘要、provider failure 均不修改原 history。summarizer 使用同一个 run cancellation、deadline、provider timeout 和共享 `AgentBudgetState`。
+- `ToolOutputPolicy` 位于 dispatcher 的 `raw result → govern → settle` 必经路径；默认上限为 32,000 characters，所有现在和未来注册工具自动受限。`ToolOutputMetadata` 统一表达 `complete` / `truncated`、原始与保留字符数，以及 `artifact=omitted`。
+- 本任务没有伪造不可访问的 artifact URI。持久 artifact store 留给后续 `#50`；当前截断正文和 metadata 都明确说明 output omitted。已有 diagnosis `TruncatingTool` 的更严格 head/tail 策略会保留同一 metadata，不会被全局 policy 误标为完整结果。
 
 **blockedBy**：#41、#42、#44。
 

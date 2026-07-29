@@ -64,7 +64,10 @@ class AgentExecutorContextPolicyTest {
     @Test
     void structuredAndCodingAgentsUseSameContextPolicy() {
         AtomicInteger policyCalls = new AtomicInteger();
-        ContextPolicy policy = ContextPolicy.observing(policyCalls::incrementAndGet);
+        ContextPolicy policy = (conversation, context) -> {
+            policyCalls.incrementAndGet();
+            return com.anthropic.agentkit.application.context.ContextDecision.unchanged();
+        };
         Conversation first = conversation("structured");
         Conversation second = conversation("coding");
 

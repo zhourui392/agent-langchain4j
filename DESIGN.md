@@ -703,6 +703,24 @@ L0 单用户/worktree 运行时必须同时具备两种性质不同的控制：p
 
 ---
 
+### 16.13 统一 ContextPolicy、显式压缩边界与全局工具输出治理（2026-07-29）
+
+上下文窗口和工具大输出是一次 run 的统一资源约束，不是 diagnosis、coding 或某个工具装饰器各自决定的局部行为。所有 agent 入口复用同一个 executor 必经策略；领域工作流仍留在各 agent 包，不下沉 kernel。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| 策略接线 | `AgentExecutor` 在每次主 LLM request 前调用 `ContextPolicy.beforeLlmCall`；默认策略由同一个 `LlmClient`、`TokenBudget` 和 recent window 组成 | CLI、diagnosis、coding、`StructuredAgent`、`SubAgentTool` 自动获得相同行为；diagnosis 删除 run 前一次性 compact 旁路 |
+| Overflow 恢复 | provider port 以 `ContextWindowExceededException` 表达 context overflow；LangChain4j adapter 映射已知 OpenAI/Anthropic 诊断 | 每个 turn 至多 reactive compact + retry 一次；第二次 overflow 明确返回 `CONTEXT_EXHAUSTED`，不递归重试；未知错误仍是 `PROVIDER_ERROR` |
+| 压缩聚合 | `CompactionBoundary` 记录 source range、原 token 估算、summary version 与摘要；`Conversation.installCompaction` 先验证完整候选 projection，再原子替换 | summary 以 system projection 出现，不伪装 user 输入；压缩不能拆开 assistant/tool-result batch，失败或空摘要不会删除历史，已压缩 tool-use ID 仍不能复用 |
+| 摘要语义 | summarizer 输入显式渲染 tool-use id/name/arguments 和 result status/metadata | 压缩不再只保留 role + text；摘要若返回 tool call 或空文本视为失败，不安装边界 |
+| 摘要资源 | compaction LLM 使用当前 run 的 cancellation、deadline、provider timeout 和共享 budget ledger | summary usage 计入最终 run usage；取消、超时或预算耗尽使用正式 `StopReason`，没有独立无限等待 |
+| 输出必经路径 | dispatcher 在 invocation settle 前统一调用 `ToolOutputPolicy`；默认限制 32,000 characters | 新注册工具及未来 MCP adapter 无需记得套 decorator 即自动受限；policy 失败也生成小型 ERROR result，不制造孤儿 tool-use |
+| 输出协议 | domain `ToolOutputMetadata` 定义 disposition、original/retained characters 和 artifact 字段 | 完整结果标 `complete`；截断结果标 `truncated`。当前无持久 artifact store 时必须写 `artifact=omitted` 且正文包含 omission notice，不伪造引用 |
+
+diagnosis 的 `TruncatingTool` 仍可作为领域特定的更严格 head/tail 策略，但它不再承担全局安全保证，并必须保留同一 `ToolOutputMetadata`。持久 artifact store 与 stable artifact URI 延后到 `#50`；`#45` 只承诺有界正文和明确 omission。`CompactionBoundary` 的 append-only 持久化属于紧随其后的 `#46`，旧 `ChatMemoryStore` 仍只是兼容消息投影。
+
+---
+
 ## 17. 下一步
 
 1. agent-web 切换依赖 `agentkit-agent-diagnosis`，通过 `DiagnoseEngineBuilder` 组装。

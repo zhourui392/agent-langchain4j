@@ -115,7 +115,7 @@ public final class LangChain4jLlmClient implements LlmClient {
 
         @Override
         public void onError(Throwable error) {
-            handler.onError(error);
+            handler.onError(ProviderFailureMapper.toDomain(error));
         }
     }
 

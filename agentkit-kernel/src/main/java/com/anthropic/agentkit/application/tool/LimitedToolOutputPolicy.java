@@ -2,6 +2,7 @@ package com.anthropic.agentkit.application.tool;
 
 import com.anthropic.agentkit.domain.tool.ExecutionContext;
 import com.anthropic.agentkit.domain.tool.ToolInvocation;
+import com.anthropic.agentkit.domain.tool.ToolOutputMetadata;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 
 import java.util.LinkedHashMap;
@@ -12,10 +13,10 @@ import java.util.Objects;
 public final class LimitedToolOutputPolicy implements ToolOutputPolicy {
 
     public static final int DEFAULT_MAX_CHARACTERS = 32_000;
-    public static final String DISPOSITION_KEY = "agentkit.output.disposition";
-    public static final String ORIGINAL_CHARACTERS_KEY = "agentkit.output.original_characters";
-    public static final String RETAINED_CHARACTERS_KEY = "agentkit.output.retained_characters";
-    public static final String ARTIFACT_KEY = "agentkit.output.artifact";
+    public static final String DISPOSITION_KEY = ToolOutputMetadata.DISPOSITION_KEY;
+    public static final String ORIGINAL_CHARACTERS_KEY = ToolOutputMetadata.ORIGINAL_CHARACTERS_KEY;
+    public static final String RETAINED_CHARACTERS_KEY = ToolOutputMetadata.RETAINED_CHARACTERS_KEY;
+    public static final String ARTIFACT_KEY = ToolOutputMetadata.ARTIFACT_KEY;
     private static final String OMISSION_NOTICE =
             "\n\n[agentkit: remaining tool output omitted; artifact unavailable]";
 
@@ -43,13 +44,21 @@ public final class LimitedToolOutputPolicy implements ToolOutputPolicy {
         Objects.requireNonNull(raw, "raw");
         Objects.requireNonNull(context, "context");
         if (raw.content().length() <= maxCharacters) {
-            return withMetadata(raw, "complete", raw.content().length(),
-                    raw.content().length(), null);
+            return markCompleteUnlessAlreadyGoverned(raw);
         }
-        int original = raw.content().length();
+        int original = originalCharacters(raw);
         String retained = raw.content().substring(0, maxCharacters) + OMISSION_NOTICE;
-        return withMetadata(raw.withContent(retained), "truncated", original,
-                maxCharacters, "omitted");
+        return withMetadata(raw.withContent(retained), ToolOutputMetadata.TRUNCATED,
+                original, maxCharacters, artifactDisposition(raw));
+    }
+
+    private ToolResult markCompleteUnlessAlreadyGoverned(ToolResult result) {
+        String disposition = result.metadata().get(DISPOSITION_KEY);
+        if (disposition != null) {
+            return result;
+        }
+        return withMetadata(result, ToolOutputMetadata.COMPLETE,
+                result.content().length(), result.content().length(), null);
     }
 
     private ToolResult withMetadata(
@@ -63,5 +72,21 @@ public final class LimitedToolOutputPolicy implements ToolOutputPolicy {
             metadata.put(ARTIFACT_KEY, artifact);
         }
         return ToolResult.of(result.status(), result.content(), metadata);
+    }
+
+    private int originalCharacters(ToolResult result) {
+        String recorded = result.metadata().get(ORIGINAL_CHARACTERS_KEY);
+        if (recorded == null) {
+            return result.content().length();
+        }
+        try {
+            return Math.max(result.content().length(), Integer.parseInt(recorded));
+        } catch (NumberFormatException ignored) {
+            return result.content().length();
+        }
+    }
+
+    private String artifactDisposition(ToolResult result) {
+        return result.metadata().getOrDefault(ARTIFACT_KEY, ToolOutputMetadata.OMITTED);
     }
 }

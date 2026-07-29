@@ -1,6 +1,8 @@
 package com.anthropic.agentkit.application.context;
 
 import com.anthropic.agentkit.domain.agent.AgentRunContext;
+import com.anthropic.agentkit.domain.agent.AgentRunLimits;
+import com.anthropic.agentkit.domain.agent.RunDeadline;
 import com.anthropic.agentkit.domain.agent.StopReason;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
@@ -18,8 +20,10 @@ import com.anthropic.agentkit.domain.tool.ToolUseRequest;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -80,6 +84,23 @@ class ContextCompactionPolicyTest {
         assertThat(conversation.lastCompaction()).isEmpty();
     }
 
+    @Test
+    void compactionLlmUsesRunDeadlineAndSharedUsageLedger() {
+        BoundedSummarizer llm = new BoundedSummarizer();
+        Conversation conversation = conversationWithToolBatch();
+        AgentRunContext context = context(conversation).withLimits(new AgentRunLimits(
+                RunDeadline.after(Duration.ofMillis(30)),
+                Duration.ofSeconds(1), Duration.ofSeconds(1)));
+
+        ContextDecision decision = policy(llm, 1).beforeLlmCall(conversation, context);
+
+        assertThat(decision.stopReason()).contains(StopReason.TIMED_OUT);
+        assertThat(llm.cancelled).isTrue();
+        assertThat(context.budgetConsumption().inputTokens()).isEqualTo(7);
+        assertThat(context.budgetConsumption().outputTokens()).isEqualTo(3);
+        assertThat(conversation.lastCompaction()).isEmpty();
+    }
+
     private static ContextCompactionService policy(LlmClient llm, int recent) {
         return new ContextCompactionService(llm, TokenBudget.of(40), recent);
     }
@@ -134,6 +155,17 @@ class ContextCompactionPolicyTest {
                     sink.onComplete(AiMessage.text(summary));
                 }
             });
+        }
+    }
+
+    private static final class BoundedSummarizer implements LlmClient {
+        private final AtomicBoolean cancelled = new AtomicBoolean();
+
+        @Override
+        public LlmCall streamChat(ChatRequest request, StreamHandler handler) {
+            return LlmCall.start(handler,
+                    sink -> sink.onUsage(7, 3, 2),
+                    () -> cancelled.set(true));
         }
     }
 }

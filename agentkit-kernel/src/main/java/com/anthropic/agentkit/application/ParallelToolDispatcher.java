@@ -159,7 +159,9 @@ final class ParallelToolDispatcher {
     private ToolResult governAndSettle(ToolInvocation invocation, ToolResult raw) {
         ToolResult governed;
         try {
-            governed = outputPolicy.govern(invocation, raw, executionContext);
+            governed = java.util.Objects.requireNonNull(
+                    outputPolicy.govern(invocation, raw, executionContext),
+                    "tool output policy returned null");
         } catch (RuntimeException ex) {
             log.error("tool output policy failed: tool={}", invocation.toolName(), ex);
             governed = ToolResult.of(

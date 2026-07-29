@@ -19,7 +19,7 @@
 | S7 中断 + 流式渲染 | #33–35 | 0.5d | CancellationToken + SIGINT + 实时 token 输出 |
 | S8 持久化 | #36–38 | 0.5d | JSONL store + /resume + SessionId |
 | MVP-Gate | #39 | — | 端到端冒烟，打 `v0.1.0-mvp` |
-| S9 Runtime Hardening | #40–46 | 进行中（5/7） | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
+| S9 Runtime Hardening | #40–46 | 进行中（6/7） | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
 | **MVP 合计** | — | **≈8 人天** | — |
 
 ## 依赖图
@@ -725,15 +725,15 @@ S0 (1→2→3)
 
 ### #45 [S9-Kernel-TDD] ContextPolicy 与全局 ToolOutputPolicy （blockedBy: 41, 42, 44）
 
-**状态**：待开始。
+**状态**：已完成（2026-07-29）。
 
 **Red**：每轮 compact、overflow 单次恢复、batch-safe compaction、summary 失败不丢历史、所有工具输出统一受限。
 
 **Green**：executor 每轮委托 `ContextPolicy`；显式 compaction boundary；dispatch 必经 `ToolOutputPolicy`。
 
-**Refactor**：token estimator/window/retry 策略组合；artifact port 与持久实现解耦。
+**Refactor**：token estimator/window/retry 策略组合；稳定输出元数据协议与 artifact 持久实现解耦。
 
-**DoD**：所有 agent 入口共享策略；compact 前后配对成立；大结果有完整/截断/artifact 明确状态。
+**DoD**：所有 agent 入口共享策略；compact 前后配对成立；大结果有完整/截断/明确 omission 状态。
 
 ---
 
