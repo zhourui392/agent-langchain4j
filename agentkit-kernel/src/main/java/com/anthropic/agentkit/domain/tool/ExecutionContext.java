@@ -5,6 +5,7 @@ import com.anthropic.agentkit.domain.agent.AgentBudgetState;
 import com.anthropic.agentkit.domain.agent.AgentRunLimits;
 import com.anthropic.agentkit.domain.agent.BudgetConsumption;
 import com.anthropic.agentkit.domain.agent.RunId;
+import com.anthropic.agentkit.domain.agent.SubAgentExecutionScope;
 import com.anthropic.agentkit.domain.agent.WorkspaceId;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
 import com.anthropic.agentkit.domain.port.SecretProvider;
@@ -22,7 +23,8 @@ public record ExecutionContext(
         AgentBudget budget,
         SecretProvider secretProvider,
         AgentRunLimits limits,
-        AgentBudgetState budgetState) {
+        AgentBudgetState budgetState,
+        Optional<SubAgentExecutionScope> subAgentScope) {
 
     public ExecutionContext {
         Objects.requireNonNull(runId, "runId");
@@ -33,6 +35,7 @@ public record ExecutionContext(
         Objects.requireNonNull(secretProvider, "secretProvider");
         Objects.requireNonNull(limits, "limits");
         Objects.requireNonNull(budgetState, "budgetState");
+        Objects.requireNonNull(subAgentScope, "subAgentScope");
         cwd = cwd.toAbsolutePath().normalize();
     }
 
@@ -54,7 +57,7 @@ public record ExecutionContext(
                                       SecretProvider secretProvider) {
         return new ExecutionContext(
                 runId, workspaceId, cwd, cancellation, budget, secretProvider,
-                AgentRunLimits.defaults(), new AgentBudgetState());
+                AgentRunLimits.defaults(), new AgentBudgetState(), Optional.empty());
     }
 
     public static ExecutionContext of(RunId runId, WorkspaceId workspaceId, Path cwd,
@@ -63,7 +66,17 @@ public record ExecutionContext(
                                       AgentBudgetState budgetState) {
         return new ExecutionContext(
                 runId, workspaceId, cwd, cancellation, budget, secretProvider,
-                limits, budgetState);
+                limits, budgetState, Optional.empty());
+    }
+
+    public static ExecutionContext of(RunId runId, WorkspaceId workspaceId, Path cwd,
+                                      CancellationToken cancellation, AgentBudget budget,
+                                      SecretProvider secretProvider, AgentRunLimits limits,
+                                      AgentBudgetState budgetState,
+                                      Optional<SubAgentExecutionScope> subAgentScope) {
+        return new ExecutionContext(
+                runId, workspaceId, cwd, cancellation, budget, secretProvider,
+                limits, budgetState, subAgentScope);
     }
 
     public Optional<String> secret(String name) {
@@ -75,5 +88,11 @@ public record ExecutionContext(
 
     public BudgetConsumption budgetConsumption() {
         return budgetState.consumption();
+    }
+
+    public ExecutionContext withSubAgentScope(SubAgentExecutionScope scope) {
+        return new ExecutionContext(
+                runId, workspaceId, cwd, cancellation, budget, secretProvider,
+                limits, budgetState, Optional.of(Objects.requireNonNull(scope, "scope")));
     }
 }

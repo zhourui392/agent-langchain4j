@@ -765,7 +765,7 @@ S0 (1→2→3)
 
 ### #47 [S10-Kernel-TDD] AgentSpec + SubAgentRuntime / SubAgentHandle （blockedBy: 40, 42, 43, 44, 46）
 
-**状态**：进行中（Red）。
+**状态**：进行中（Green）。
 
 **Red**：child capability 必须是 parent 子集；child budget 计入 parent；deadline 不得放大；depth/concurrency 受硬限制；follow-up 复用 child conversation；parent cancel 传播到 child LLM/工具；terminal payload 穿过 child boundary。
 

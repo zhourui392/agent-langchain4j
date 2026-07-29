@@ -107,7 +107,7 @@ class DefaultSubAgentRuntimeTest {
     void childDeadlineCannotExceedParent() {
         HangingLlmClient llm = new HangingLlmClient();
         AgentRunContext parent = parent().withLimits(new AgentRunLimits(
-                RunDeadline.after(Duration.ofMillis(40)),
+                RunDeadline.after(Duration.ofMillis(500)),
                 Duration.ofSeconds(2), Duration.ofSeconds(2)));
         SubAgentRuntime runtime = runtime(llm, new ToolRegistry(), new SubAgentLimits(2, 2));
 

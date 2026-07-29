@@ -7,6 +7,7 @@ import com.anthropic.agentkit.domain.tool.ExecutionContext;
 
 import java.nio.file.Path;
 import java.util.Objects;
+import java.util.Optional;
 
 /** The single dynamic scope shared by every action in one agent run. */
 public record AgentRunContext(
@@ -18,7 +19,8 @@ public record AgentRunContext(
         AgentBudget budget,
         SecretProvider secretProvider,
         AgentRunLimits limits,
-        AgentBudgetState budgetState) {
+        AgentBudgetState budgetState,
+        Optional<SubAgentExecutionScope> subAgentScope) {
 
     public AgentRunContext {
         Objects.requireNonNull(runId, "runId");
@@ -30,6 +32,7 @@ public record AgentRunContext(
         Objects.requireNonNull(secretProvider, "secretProvider");
         Objects.requireNonNull(limits, "limits");
         Objects.requireNonNull(budgetState, "budgetState");
+        Objects.requireNonNull(subAgentScope, "subAgentScope");
         workspaceRoot = workspaceRoot.toAbsolutePath().normalize();
     }
 
@@ -46,7 +49,7 @@ public record AgentRunContext(
                                      SecretProvider secretProvider) {
         return new AgentRunContext(runId, sessionId, workspaceId, workspaceRoot,
                 cancellation, budget, secretProvider,
-                AgentRunLimits.defaults(), new AgentBudgetState());
+                AgentRunLimits.defaults(), new AgentBudgetState(), Optional.empty());
     }
 
     public static AgentRunContext childOf(ExecutionContext parent, SessionId childSession) {
@@ -61,7 +64,7 @@ public record AgentRunContext(
                 parent.runId(), childSession, parent.workspaceId(), parent.cwd(),
                 parent.cancellation(), parent.budget().narrowedBy(requestedBudget),
                 parent.secretProvider(), parent.limits().narrowedBy(requestedLimits),
-                parent.budgetState());
+                parent.budgetState(), parent.subAgentScope());
     }
 
     public static AgentRunContext at(Path workspaceRoot) {
@@ -83,16 +86,29 @@ public record AgentRunContext(
     public ExecutionContext executionContext() {
         return ExecutionContext.of(
                 runId, workspaceId, workspaceRoot, cancellation, budget,
-                secretProvider, limits, budgetState);
+                secretProvider, limits, budgetState, subAgentScope);
     }
 
     public AgentRunContext withLimits(AgentRunLimits requested) {
         return new AgentRunContext(
                 runId, sessionId, workspaceId, workspaceRoot, cancellation, budget,
-                secretProvider, Objects.requireNonNull(requested, "requested"), budgetState);
+                secretProvider, Objects.requireNonNull(requested, "requested"),
+                budgetState, subAgentScope);
     }
 
     public BudgetConsumption budgetConsumption() {
         return budgetState.consumption();
+    }
+
+    public static AgentRunContext childRun(
+            ExecutionContext parent, SessionId childSession, RunId childRun,
+            CancellationToken childCancellation, AgentBudget requestedBudget,
+            AgentRunLimits requestedLimits, SubAgentExecutionScope childScope) {
+        Objects.requireNonNull(parent, "parent");
+        return new AgentRunContext(
+                childRun, childSession, parent.workspaceId(), parent.cwd(), childCancellation,
+                parent.budget().narrowedBy(requestedBudget), parent.secretProvider(),
+                parent.limits().narrowedBy(requestedLimits),
+                parent.budgetState().child(parent.budget()), Optional.of(childScope));
     }
 }
