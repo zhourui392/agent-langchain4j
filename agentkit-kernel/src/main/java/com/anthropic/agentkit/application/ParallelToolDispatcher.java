@@ -400,6 +400,17 @@ final class ParallelToolDispatcher {
             Optional<ToolDispatchContext> dispatch,
             Optional<AgentInterceptorException> interceptorFailure) {
 
+        private ToolExecutionOutcome {
+            java.util.Objects.requireNonNull(result, "result");
+            java.util.Objects.requireNonNull(dispatch, "dispatch");
+            java.util.Objects.requireNonNull(
+                    interceptorFailure, "interceptorFailure");
+            if (interceptorFailure.isPresent() && dispatch.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "an interceptor failure requires a parsed dispatch context");
+            }
+        }
+
         private static ToolExecutionOutcome completed(ToolResult result) {
             return new ToolExecutionOutcome(
                     result, Optional.empty(), Optional.empty());

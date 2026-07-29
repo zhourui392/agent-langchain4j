@@ -135,8 +135,8 @@ final class DefaultSubAgentHandle implements SubAgentHandle {
         childRunId = RunId.fresh();
         activeCancellation = new CancellationToken();
         AgentRunContext context = childContext();
-        interceptors.onSubAgentSpawned(lifecycleEvent(
-                AgentRunState.RUNNING, Optional.empty()));
+        interceptors.onSubAgentSpawned(SubAgentLifecycleEvent.spawned(
+                spec.id(), parent.runId(), childRunId, conversation.sessionId()));
         CancellationToken.Registration propagation = parent.cancellation()
                 .onCancel(this::cancelFromParent);
         try {
@@ -149,7 +149,8 @@ final class DefaultSubAgentHandle implements SubAgentHandle {
             propagation.close();
             lease.close();
             state = AgentRunState.FAILED;
-            interceptors.onSubAgentStopped(lifecycleEvent(
+            interceptors.onSubAgentStopped(SubAgentLifecycleEvent.stopped(
+                    spec.id(), parent.runId(), childRunId, conversation.sessionId(),
                     AgentRunState.FAILED, Optional.empty()));
             throw failure;
         }
@@ -193,14 +194,9 @@ final class DefaultSubAgentHandle implements SubAgentHandle {
         }
         Optional<StopReason> stopReason = result == null
                 ? Optional.empty() : Optional.of(result.stopReason());
-        interceptors.onSubAgentStopped(lifecycleEvent(state, stopReason));
-    }
-
-    private SubAgentLifecycleEvent lifecycleEvent(
-            AgentRunState lifecycleState, Optional<StopReason> stopReason) {
-        return new SubAgentLifecycleEvent(
+        interceptors.onSubAgentStopped(SubAgentLifecycleEvent.stopped(
                 spec.id(), parent.runId(), childRunId, conversation.sessionId(),
-                lifecycleState, stopReason);
+                state, stopReason));
     }
 
     private static boolean completedNormally(AgentRunResult result) {

@@ -18,6 +18,7 @@ public record LlmCallCompleted(
         Objects.requireNonNull(message, "message");
         Objects.requireNonNull(stopReason, "stopReason");
         Objects.requireNonNull(errorDetail, "errorDetail");
+        errorDetail = errorDetail.filter(detail -> !detail.isBlank());
         if (message.isPresent() == stopReason.isPresent()) {
             throw new IllegalArgumentException(
                     "LLM completion must contain either a message or a stop reason");

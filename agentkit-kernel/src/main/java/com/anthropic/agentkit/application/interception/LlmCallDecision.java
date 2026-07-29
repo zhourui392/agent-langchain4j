@@ -14,7 +14,7 @@ public sealed interface LlmCallDecision
 
     record Deny(String reason) implements LlmCallDecision {
         public Deny {
-            reason = requireReason(reason);
+            reason = InterceptorDecisionReason.require(reason);
         }
     }
 
@@ -36,10 +36,4 @@ public sealed interface LlmCallDecision
         return new ReplaceContext(messages);
     }
 
-    private static String requireReason(String reason) {
-        if (reason == null || reason.isBlank()) {
-            throw new IllegalArgumentException("interceptor denial reason must not be blank");
-        }
-        return reason.trim();
-    }
 }

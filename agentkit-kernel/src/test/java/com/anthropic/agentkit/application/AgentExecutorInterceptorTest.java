@@ -14,6 +14,7 @@ import com.anthropic.agentkit.application.interception.RunStopContext;
 import com.anthropic.agentkit.application.interception.RunStopDecision;
 import com.anthropic.agentkit.application.interception.ToolDispatchContext;
 import com.anthropic.agentkit.application.interception.ToolDispatchDecision;
+import com.anthropic.agentkit.application.interception.ToolSettled;
 import com.anthropic.agentkit.application.tool.ToolOutputPolicy;
 import com.anthropic.agentkit.domain.agent.AgentRunResult;
 import com.anthropic.agentkit.domain.agent.StopReason;
@@ -36,6 +37,8 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.anthropic.agentkit.testsupport.TestRunContexts.runContext;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -68,6 +71,34 @@ class AgentExecutorInterceptorTest {
     }
 
     @Test
+    void blockingToolInterceptorFailureSettlesWholeBatchBeforeStop() {
+        FakeTool first = FakeTool.returning("First", "must not run");
+        FakeTool second = FakeTool.returning("Second", "done");
+        StubLlmClient llm = new StubLlmClient().enqueue(toolBatch(
+                request("first-1", "First"), request("second-1", "Second")));
+        AgentInterceptor interceptor = new AgentInterceptor() {
+            @Override
+            public ToolDispatchDecision beforeToolDispatch(ToolDispatchContext context) {
+                if (context.toolName().equals("First")) {
+                    throw new IllegalStateException("tool policy unavailable");
+                }
+                return ToolDispatchDecision.continueDispatch();
+            }
+        };
+        Conversation conversation = conversation("run both");
+
+        AgentRunResult result = executor(
+                llm, new ToolRegistry().register(first).register(second), interceptor)
+                .run(conversation, runContext(conversation)).join();
+
+        assertThat(result.stopReason()).isEqualTo(StopReason.INTERCEPTOR_ERROR);
+        assertThat(toolResults(conversation)).extracting(ToolResultMessage::status)
+                .containsExactly(ToolResultStatus.INTERCEPTOR_ERROR, ToolResultStatus.SUCCESS);
+        assertThat(first.callCount()).isZero();
+        assertThat(second.callCount()).isOne();
+    }
+
+    @Test
     void observerFailureDoesNotFailRun() {
         StubLlmClient llm = new StubLlmClient().enqueue(AiMessage.text("done"));
         List<String> observed = new ArrayList<>();
@@ -93,6 +124,34 @@ class AgentExecutorInterceptorTest {
     }
 
     @Test
+    void toolObserverFailureDoesNotFailRun() {
+        FakeTool read = FakeTool.readOnlyReturning("Read", "content");
+        StubLlmClient llm = new StubLlmClient()
+                .enqueue(toolCall("read-1", "Read", "{}"))
+                .enqueue(AiMessage.text("done"));
+        AtomicReference<ToolResultStatus> observed = new AtomicReference<>();
+        AgentInterceptor broken = new AgentInterceptor() {
+            @Override
+            public void afterToolSettled(ToolSettled event) {
+                throw new IllegalStateException("tool observer boom");
+            }
+        };
+        AgentInterceptor healthy = new AgentInterceptor() {
+            @Override
+            public void afterToolSettled(ToolSettled event) {
+                observed.set(event.result().status());
+            }
+        };
+        Conversation conversation = conversation("read");
+
+        AgentRunResult result = executor(llm, registry(read), broken, healthy)
+                .run(conversation, runContext(conversation)).join();
+
+        assertThat(result.stopReason()).isEqualTo(StopReason.MODEL_COMPLETED);
+        assertThat(observed).hasValue(ToolResultStatus.SUCCESS);
+    }
+
+    @Test
     void blockingInterceptorFailureHasExplicitStopReason() {
         StubLlmClient llm = new StubLlmClient().enqueue(AiMessage.text("must not run"));
         AgentInterceptor interceptor = new AgentInterceptor() {
@@ -109,6 +168,25 @@ class AgentExecutorInterceptorTest {
         assertThat(result.stopReason()).isEqualTo(StopReason.INTERCEPTOR_ERROR);
         assertThat(result.errorDetail()).hasValueSatisfying(detail ->
                 assertThat(detail).contains("beforeLlmCall", "blocking boom"));
+        assertThat(llm.capturedRequests()).isEmpty();
+    }
+
+    @Test
+    void blockingDenialHasExplicitStopReasonWithoutCallingProvider() {
+        StubLlmClient llm = new StubLlmClient().enqueue(AiMessage.text("must not run"));
+        AgentInterceptor interceptor = new AgentInterceptor() {
+            @Override
+            public LlmCallDecision beforeLlmCall(LlmCallContext context) {
+                return LlmCallDecision.deny("prompt rejected");
+            }
+        };
+        Conversation conversation = conversation("blocked");
+
+        AgentRunResult result = executor(llm, new ToolRegistry(), interceptor)
+                .run(conversation, runContext(conversation)).join();
+
+        assertThat(result.stopReason()).isEqualTo(StopReason.INTERCEPTOR_DENIED);
+        assertThat(result.errorDetail()).contains("prompt rejected");
         assertThat(llm.capturedRequests()).isEmpty();
     }
 
@@ -156,18 +234,27 @@ class AgentExecutorInterceptorTest {
     @Test
     void replaceContextOnlyChangesLlmRequestProjection() {
         StubLlmClient llm = new StubLlmClient().enqueue(AiMessage.text("done"));
-        AgentInterceptor interceptor = new AgentInterceptor() {
+        AgentInterceptor redactor = new AgentInterceptor() {
             @Override
             public LlmCallDecision beforeLlmCall(LlmCallContext context) {
                 return LlmCallDecision.replaceContext(
                         List.of(UserMessage.of("[redacted]")));
             }
         };
+        AtomicReference<List<ChatMessage>> seen = new AtomicReference<>();
+        AgentInterceptor auditor = new AgentInterceptor() {
+            @Override
+            public LlmCallDecision beforeLlmCall(LlmCallContext context) {
+                seen.set(context.request().messages());
+                return LlmCallDecision.continueCall();
+            }
+        };
         Conversation conversation = conversation("secret=do-not-send");
 
-        executor(llm, new ToolRegistry(), interceptor)
+        executor(llm, new ToolRegistry(), redactor, auditor)
                 .run(conversation, runContext(conversation)).join();
 
+        assertThat(seen.get()).extracting(ChatMessage::text).containsExactly("[redacted]");
         assertThat(llm.capturedRequests().getFirst().messages())
                 .extracting(ChatMessage::text).containsExactly("[redacted]");
         assertThat(conversation.messages()).extracting(ChatMessage::text)
@@ -189,6 +276,30 @@ class AgentExecutorInterceptorTest {
         assertThat(result.stopReason()).isEqualTo(StopReason.MODEL_COMPLETED);
         assertThat(order).containsExactly("before-compaction", "policy", "after-compaction-v1");
         assertThat(conversation.lastCompaction()).isPresent();
+    }
+
+    @Test
+    void compactionDenialStopsBeforePolicyMutation() {
+        AtomicBoolean policyCalled = new AtomicBoolean();
+        ContextPolicy policy = (conversation, context) -> {
+            policyCalled.set(true);
+            return ContextDecision.unchanged();
+        };
+        AgentInterceptor interceptor = new AgentInterceptor() {
+            @Override
+            public CompactionDecision beforeCompaction(CompactionContext context) {
+                return CompactionDecision.deny("context governance rejected");
+            }
+        };
+        StubLlmClient llm = new StubLlmClient().enqueue(AiMessage.text("must not run"));
+        Conversation conversation = conversation("history");
+
+        AgentRunResult result = executor(llm, new ToolRegistry(), policy, interceptor)
+                .run(conversation, runContext(conversation)).join();
+
+        assertThat(result.stopReason()).isEqualTo(StopReason.INTERCEPTOR_DENIED);
+        assertThat(policyCalled).isFalse();
+        assertThat(llm.capturedRequests()).isEmpty();
     }
 
     private static AgentInterceptor orderedInterceptor(String name, List<String> order) {
@@ -266,6 +377,14 @@ class AgentExecutorInterceptorTest {
     private static AiMessage toolCall(String id, String name, String arguments) {
         return AiMessage.of("", List.of(new ToolUseRequest(
                 new ToolUseId(id), name, arguments)));
+    }
+
+    private static AiMessage toolBatch(ToolUseRequest... requests) {
+        return AiMessage.of("", List.of(requests));
+    }
+
+    private static ToolUseRequest request(String id, String name) {
+        return new ToolUseRequest(new ToolUseId(id), name, "{}");
     }
 
     private static List<ToolResultMessage> toolResults(Conversation conversation) {

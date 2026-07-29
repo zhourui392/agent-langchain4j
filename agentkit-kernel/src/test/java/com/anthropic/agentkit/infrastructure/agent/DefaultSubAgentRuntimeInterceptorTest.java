@@ -13,6 +13,7 @@ import com.anthropic.agentkit.domain.agent.AgentRunState;
 import com.anthropic.agentkit.domain.agent.AgentSpec;
 import com.anthropic.agentkit.domain.agent.ModelTier;
 import com.anthropic.agentkit.domain.agent.StopReason;
+import com.anthropic.agentkit.domain.agent.SubAgentHandle;
 import com.anthropic.agentkit.domain.agent.SubAgentLimits;
 import com.anthropic.agentkit.domain.agent.ToolCapabilitySet;
 import com.anthropic.agentkit.domain.conversation.CancellationToken;
@@ -46,9 +47,7 @@ class DefaultSubAgentRuntimeInterceptorTest {
                 events.add(event);
             }
         };
-        AgentRunContext parent = AgentRunContext.create(
-                com.anthropic.agentkit.domain.conversation.SessionId.fresh(),
-                Path.of("."), new CancellationToken(), AgentBudget.unlimited());
+        AgentRunContext parent = parent();
         DefaultSubAgentRuntime runtime = runtime(llm, interceptor);
 
         AgentRunResult result = runtime.spawn(spec(), "work", parent.executionContext())
@@ -56,6 +55,29 @@ class DefaultSubAgentRuntimeInterceptorTest {
 
         assertThat(events).hasSize(2);
         assertCorrelation(events, parent, result);
+    }
+
+    @Test
+    void followUpEmitsOneCorrelatedLifecyclePairPerSegment() {
+        StubLlmClient llm = new StubLlmClient()
+                .enqueue(AiMessage.text("first"))
+                .enqueue(AiMessage.text("second"));
+        List<SubAgentLifecycleEvent> events = new CopyOnWriteArrayList<>();
+        DefaultSubAgentRuntime runtime = runtime(llm, recording(events));
+        AgentRunContext parent = parent();
+
+        SubAgentHandle handle = runtime.spawn(
+                spec(), "work", parent.executionContext());
+        AgentRunResult first = handle.result().toCompletableFuture().join();
+        AgentRunResult second = handle.followUp("refine").toCompletableFuture().join();
+
+        assertThat(events).hasSize(4);
+        assertThat(events).extracting(SubAgentLifecycleEvent::parentRunId)
+                .containsOnly(parent.runId());
+        assertThat(events.subList(0, 2)).extracting(SubAgentLifecycleEvent::childRunId)
+                .containsOnly(first.runId());
+        assertThat(events.subList(2, 4)).extracting(SubAgentLifecycleEvent::childRunId)
+                .containsOnly(second.runId());
     }
 
     private static void assertCorrelation(
@@ -78,6 +100,26 @@ class DefaultSubAgentRuntimeInterceptorTest {
                 LlmClientSelector.fixed(llm), new ToolRegistry(),
                 PermissionService.bypassing(), new SubAgentLimits(2, 1),
                 AgentInterceptors.ordered(interceptor));
+    }
+
+    private static AgentInterceptor recording(List<SubAgentLifecycleEvent> events) {
+        return new AgentInterceptor() {
+            @Override
+            public void onSubAgentSpawned(SubAgentLifecycleEvent event) {
+                events.add(event);
+            }
+
+            @Override
+            public void onSubAgentStopped(SubAgentLifecycleEvent event) {
+                events.add(event);
+            }
+        };
+    }
+
+    private static AgentRunContext parent() {
+        return AgentRunContext.create(
+                com.anthropic.agentkit.domain.conversation.SessionId.fresh(),
+                Path.of("."), new CancellationToken(), AgentBudget.unlimited());
     }
 
     private static AgentSpec spec() {

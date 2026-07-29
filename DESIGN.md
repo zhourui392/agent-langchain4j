@@ -640,7 +640,7 @@ agentkit/
 | 议题 | 决策 | 影响 |
 |---|---|---|
 | 批次聚合 | domain `AssistantTurn` 持有原始 `ToolUseId` 顺序和 `RECEIVED → SETTLING → SETTLED` 状态 | 重复 ID、乱序 result、pending 时追加 user/assistant 都在 `Conversation.append` 前被拒绝，失败写入不改变 conversation |
-| 结果模型 | `ToolResultStatus` 是终态事实源：SUCCESS / ERROR / DENIED / CANCELLED / TIMEOUT / UNKNOWN_TOOL / INVALID_ARGUMENTS / BUDGET_EXHAUSTED | `ToolResult.success()` 仅是派生便利方法；dispatcher 与 `ToolInvocation` 不再维护另一套 complete/fail 布尔分支 |
+| 结果模型 | `ToolResultStatus` 是终态事实源：SUCCESS / ERROR / DENIED / CANCELLED / TIMEOUT / INTERCEPTOR_ERROR / UNKNOWN / UNKNOWN_TOOL / INVALID_ARGUMENTS / BUDGET_EXHAUSTED | `ToolResult.success()` 仅是派生便利方法；dispatcher 与 `ToolInvocation` 不再维护另一套 complete/fail 布尔分支；permission 前的 callback failure 使用专用 status，不把普通 execution ERROR 伪装成已授权 |
 | 分发合同 | dispatcher 输入有序 request，输出等长、有序、全部 terminal 的 `ToolResultMessage` | unknown tool、参数解析、permission、listener、工具异常和取消都独立结算；单个 worker 不能击穿整批 |
 | 预算拒绝 | assistant tool-use 已写入后发生预算拒绝时，整批写入 `BUDGET_EXHAUSTED`，随后才继续或结束 run | maxToolCalls/input token 超限不再制造孤儿 tool-use |
 | Provider 映射 | LangChain4j 升级到 1.18；粗粒度错误写 `isError`，详细 status 与 metadata 写 message attributes | Anthropic/OpenAI adapter 保留通用错误语义，不需要解析错误文本 |
@@ -732,7 +732,7 @@ Conversation 是消息投影，不再承担一次 run 的全部事实记录。ke
 | 恢复语义 | settled 只恢复结果；started-but-unsettled 标 `UNKNOWN/needs_reconciliation`；已声明但未 started 标 `CANCELLED/not_started` | kernel 不猜测 Bash、MCP、数据库或远端系统副作用是否成功；并行 batch 仍按原请求顺序形成完整消息投影 |
 | 文件合同 | `FileRunEventStore` 每个 RunId 一个 append-only JSONL，scope/sequence 连续校验，写后 fsync，POSIX 尝试 owner-only `0600` | 新事件不重写旧前缀；当前实现面向 L0 单进程 writer，索引、rotation/retention 与多进程 fencing 后置 |
 | 尾记录与版本 | 只忽略无结尾换行且 JSON 解析命中 EOF 的最后一条；中间损坏、完整语义错误、缺必要字段和未知未来 schema 均拒绝 | crash 截断可以读取最后一个完整事实，但版本不兼容不会伪装成截断而静默丢失 |
-| Observer 边界 | `AgentEventListener` 经安全 decorator 调用，所有 callback 都只是可失败投影；`RunEventRecorder` 独立维护事实 sequence | listener 故障不改变工具执行、Conversation、持久事实或 `RunStopped`；需要阻断的扩展必须使用未来 typed interceptor |
+| Observer 边界 | `AgentEventListener` 经安全 decorator 调用，所有 callback 都只是可失败投影；`RunEventRecorder` 独立维护事实 sequence | listener 故障不改变工具执行、Conversation、持久事实或 `RunStopped`；需要阻断的扩展使用 §16.16 typed interceptor |
 | Durable data policy | 敏感 key 与 `argumentsJson` 在 codec 边界递归脱敏；持久文本限制 32,000 characters，截断标 `artifact=omitted` | owner-only 权限不是脱敏替代品；非敏感 payload 无损恢复，大/敏感 payload 按明确 policy 治理且不伪造 artifact URI |
 | 兼容路径 | 旧 `ChatMemoryStore`/session 文件继续可读，CLI 旧 `/resume <sessionId>` 不改变；新安全恢复入口为 `RunEventResumer.resume(RunId)` | 已有用户会话不会突然失效；CLI 的 run-resume 展示与命令接线留在 interfaces/composition 后续任务 |
 
@@ -754,14 +754,33 @@ Conversation 是消息投影，不再承担一次 run 的全部事实记录。ke
 | depth/concurrency | `SubAgentExecutionScope` 显式随 `ExecutionContext` 传播 depth 和共享 quota；runtime 在启动前 acquire，终态后 release | 嵌套深度和 active child 数由硬状态强制，不能靠 prompt；跨 runtime 的嵌套调用也继承更严格的 parent 限制 |
 | model 变化点 | domain port `LlmClientSelector` 解析 provider-neutral `ModelTier`；固定单 client 使用 `fixed` adapter | #47 不引入 provider if/else；实际 retry/fallback/model policy 留 S10 #53 扩展同一 port |
 | 工具兼容 | `SubAgentTool` 只负责把同步 `Tool.execute` 适配到 runtime handle；新构造可配置工具名/描述，legacy 构造仍提供只读兼容 | 通用生命周期只有 runtime 一条事实路径；可写 child adapter 默认保守标记 non-read-only，避免通过外层 permission 隧道提升权限 |
-| 事件边界 | handle 当前显式暴露 parentRunId/childRunId，但不修改 `RunEvent` schema v1 | #47 不偷偷演进持久化 schema；typed interceptor 的关联事件和持久化策略在 S10 #48 明确设计 |
+| 事件边界 | handle 显式暴露 parentRunId/childRunId，§16.16 又为每个 segment 发 typed spawned/stopped event，但不修改 `RunEvent` schema v1 | #47/#48 不偷偷演进持久化 schema；需要 durable child lifecycle 时另立带版本的 event 决策 |
 
 本节不实现 peer 黑板、自动任务拆分、分布式调度、worktree 创建或领域流水线。diagnosis 的假设循环与 coding 的 Planner→Patcher→Reviewer 仍由各自 application 层编排；kernel 只提供受约束 child runtime、结构化退出和资源治理积木。
 
 ---
 
+### 16.16 Typed AgentInterceptor 生命周期策略（2026-07-29）
+
+`AgentEventListener` 继续是 UI/stream 投影 observer，不能通过抛异常承担策略控制；需要在 provider、tool、context 或终态边界阻断/替换的宿主能力统一使用进程内 typed `AgentInterceptor`。该 SPI 是 application 层生命周期策略，不是新的领域聚合，也不持有跨 run 状态。
+
+| 议题 | 决策 | 影响 |
+|---|---|---|
+| 合同形状 | `beforeLlmCall`、`beforeToolDispatch`、`beforeCompaction`、`beforeRunStop` 各自返回只包含合法分支的 sealed decision；post/sub-agent callback 接收不可变 typed event | 正常拒绝使用 `Deny(reason)`，不以任意 exception 充当控制流；tool hook 不能错误返回 `ReplaceContext` |
+| 声明顺序 | `AgentInterceptors` 保存不可变 list，同一 lifecycle event 严格按声明顺序调用；多 tool invocation 仍可由虚拟线程并行 | 同一个 invocation 内顺序稳定；不同并行 invocation 的 callback 可能并发，interceptor 实现必须线程安全，不能依赖跨 invocation 的偶然交错 |
+| 失败分类 | post/sub-agent observer failure 记录后隔离并继续其余 interceptor；blocking callback exception 包装为带 hook/index/type 的 `AgentInterceptorException` | 非 tool pre-hook 映射为 `INTERCEPTOR_ERROR` run stop；tool pre-hook 先形成专用 `INTERCEPTOR_ERROR` result，整批按原顺序写完后 run 才停止 |
+| 正常拒绝 | LLM/compaction/run-stop 的 `Deny` 映射为 `INTERCEPTOR_DENIED`；tool `Deny` 映射为普通 `DENIED` result，不执行 permission/tool，模型可在下一轮观察拒绝 | `PermissionPolicy` 仍是 Continue 后必经的独立安全决策；interceptor 不能授予 permission，也不能绕过 workspace/secret/output policy |
+| LLM 投影 | declaration-ordered `ReplaceContext` 累积作用于本次不可变 `ChatRequest`，后续 interceptor 能看到前一项替换 | system prompt/tool schema 保持不变；真实 `Conversation` 不被脱敏投影回写，审计历史与 tool pairing 不丢失 |
+| Context 边界 | `beforeCompaction` 在每次主动/overflow-recovery context-policy evaluation 前调用；只有安装了新 `CompactionBoundary` 才发 `afterCompaction` | blocking policy 能阻止 context mutation；required compaction event 先持久化，optional observer 后通知；pairing-safe install 仍由 `Conversation` 强制 |
+| Terminal 校验 | `beforeRunStop` 检查拟议 `AgentRunResult`，且位于 tool results append 之后、`RunStopped` 事件之前 | terminal payload 被拒绝或校验 callback 失败时清除 structured output，并返回明确 interceptor stop；已经成功配对的 terminal tool result 不删除、不改序 |
+| 子 Agent 关联 | `DefaultSubAgentRuntime` 对每个 initial/follow-up segment 发一对 `SubAgentLifecycleEvent`，携带 AgentId、parent/child RunId、child SessionId、状态与可选 stop reason | #47 缺失的 parent/child typed lifecycle correlation 补齐；observer failure 不影响 child；不静默扩展 append-only `RunEvent` schema v1 |
+
+本节明确不实现 shell/script hook、自动发现脚本、插件系统或宿主专属业务工作流。若未来宿主需要 durable interceptor audit，应由显式 adapter 把 typed event 写入自己的 store，或通过带版本的新 `RunEvent` schema 决策实现；不得把 optional observer 伪装成当前 v1 的 required fact。
+
+---
+
 ## 17. 下一步
 
-1. 按 `TASKLIST.md` S10 顺序实施 #48 typed `AgentInterceptor`，再接 #49 MCP lifecycle/adapters。
+1. 按 `TASKLIST.md` S10 顺序实施 #49 MCP lifecycle/adapters；MCP 工具复用 §16.16 interceptor、§16.9 settle、§16.11 scope 和 §16.12 timeout/cancel 边界。
 2. 在同一 runtime 不变量上补 #50 background task 与 #51 可恢复 waiting states。
 3. 完成 #52/#53 后，再用 #54 manifest 和 #55 CLI 组合根形成 diagnosis/coding 的统一派发入口。

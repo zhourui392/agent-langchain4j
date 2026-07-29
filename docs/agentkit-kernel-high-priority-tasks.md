@@ -44,14 +44,14 @@
 | LLM 取消 | `LlmCall` 提供 completion/cancel；deadline、provider/tool timeout、late callback 隔离均由 run scope 统一控制 | 运行取消应终止正在进行的模型/工具 I/O | 已补齐 kernel 终态与 best-effort provider 取消；SDK 无原生 cancel handle 的限制已记录 |
 | 上下文 | executor 每次主 LLM 调用前统一执行策略；显式边界、单次 overflow 恢复与全局工具输出限制已落地 | 成熟 runtime 在每轮调用前治理上下文，并可从 overflow 恢复 | 已补齐运行期治理；事件恢复见 #46 |
 | 会话恢复 | per-run append-only `RunEventStore`；settled 不重放、in-flight 标 UNKNOWN；终态/usage/compaction 可投影 | 支持 resume/fork/checkpoint，并区分已完成和 in-flight action | 安全 run resume 已补齐；fork/rewind 与 CLI 新入口后置 |
-| 子 Agent | S10 #47 已补 `AgentSpec`、有界 runtime/handle、独立 RunId/取消、共享预算、follow-up 与 terminal payload | 支持角色、模型、预算、取消、跟进和独立生命周期 | runtime 基座已补齐；事件 hook 见 #48 |
-| MCP / hooks / background | MCP 只有空 package；listener 只观察；Bash 同步 | 两者均提供 MCP、生命周期扩展及长任务管理能力 | 非首批，见后续文档 |
+| 子 Agent | S10 #47 已补 `AgentSpec`、有界 runtime/handle、独立 RunId/取消、共享预算、follow-up 与 terminal payload；#48 已补 parent/child typed lifecycle correlation | 支持角色、模型、预算、取消、跟进和独立生命周期 | runtime 与 in-process lifecycle 基座已补齐 |
+| MCP / hooks / background | #48 已补 typed in-process hook；MCP 仍只有空 package，Bash 仍同步 | 两者均提供 MCP、生命周期扩展及长任务管理能力 | hook 已补齐；MCP/background 见 #49/#50 |
 
-成熟度是定性判断，不是兼容性百分比承诺。审计开始时的估计约为成熟 Claude Code / Codex runtime 的 **55%–65%**；完成 `#40–#46` 后，异常、scope、安全、取消、上下文和恢复这组首要控制面缺口已关闭，通用子 Agent 又于 S10 #47 补齐。本文不重新给出百分比，因为剩余差异主要是 MCP、后台任务、可等待运行态、fork/rewind 和宿主产品能力，是否实现取决于项目边界而非单一“完成度”。
+成熟度是定性判断，不是兼容性百分比承诺。审计开始时的估计约为成熟 Claude Code / Codex runtime 的 **55%–65%**；完成 `#40–#46` 后，异常、scope、安全、取消、上下文和恢复这组首要控制面缺口已关闭，S10 #47/#48 又补齐通用子 Agent与 typed in-process lifecycle。本文不重新给出百分比，因为剩余差异主要是 MCP、后台任务、可等待运行态、fork/rewind 和宿主产品能力，是否实现取决于项目边界而非单一“完成度”。
 
 ## 4. 领域模型审计
 
-### 4.1 评分
+### 4.1 实施前基线评分
 
 | 维度 | 得分 | 主要原因 |
 |---|---:|---|
@@ -62,6 +62,8 @@
 | 是否支持下一轮需求变化 | 1/3 | MCP、可恢复任务和通用子 Agent 若现在接入，会复制当前作用域与生命周期问题 |
 | **合计** | **7/15** | 先修运行时聚合与不变量，再扩功能 |
 
+上表保留的是本轮 hardening 开始前的基线，不是当前分数。`#40–#46` 关闭 run/tool/context/recovery 不变量后，`#47` 将通用子 Agent 提升到 14/15；`#48` 补齐 typed lifecycle 与 parent/child correlation 后，当前建模复核为 **15/15**。这只评价 kernel 建模质量，不表示 MCP、后台任务、waiting states 或产品宿主能力已经完成。
+
 ### 4.2 建议统一语言
 
 | 概念 | 定义 | 不应混入的内容 |
@@ -71,7 +73,7 @@
 | `AgentRun` | 从 RUNNING 到某个 `StopReason` 的生命周期聚合根 | diagnosis/coding 的领域工作流状态 |
 | `AssistantTurn` | 一次模型响应及其有序 tool batch | 下一轮模型响应 |
 | `ToolInvocation` | turn 内单次工具请求实体，有唯一 ID 和终态 | 仅以文本表示的错误 |
-| `ToolResultStatus` | SUCCESS / ERROR / DENIED / CANCELLED / TIMEOUT | provider 专属的布尔字段 |
+| `ToolResultStatus` | provider-neutral 工具终态，含 SUCCESS / ERROR / DENIED / CANCELLED / TIMEOUT / INTERCEPTOR_ERROR 等 | provider 专属的布尔字段 |
 | `AgentRunResult` | run 的统一终态、最终消息、结构化 payload、usage、预算消耗 | 只返回最后一段自然语言 |
 | `WorkspaceBoundary` | kernel 文件工具允许访问的真实路径边界 | 宿主级容器/VM sandbox 的虚假替代品 |
 | `CompactionBoundary` | 历史被摘要替换的显式边界和来源范围 | 伪装成普通 user message 的摘要 |
@@ -88,6 +90,7 @@ AgentRuntime / AgentExecutor
  │   └─ AssistantTurn[]              ← 强一致 tool batch
  │       └─ ToolInvocation[]         ← 每个必须恰好 settle 一次
  ├─ ContextPolicy
+ ├─ AgentInterceptors               ← 声明有序的 typed lifecycle 策略链
  ├─ PermissionPolicy
  ├─ ToolDispatchPolicy
  ├─ StopPolicy

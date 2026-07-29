@@ -9,11 +9,7 @@ public sealed interface RunStopDecision
 
     record Deny(String reason) implements RunStopDecision {
         public Deny {
-            if (reason == null || reason.isBlank()) {
-                throw new IllegalArgumentException(
-                        "interceptor denial reason must not be blank");
-            }
-            reason = reason.trim();
+            reason = InterceptorDecisionReason.require(reason);
         }
     }
 

@@ -350,9 +350,9 @@ public final class AgentExecutor {
             java.util.function.Supplier<ContextDecision> policy) {
         CompactionContext attempt = new CompactionContext(
                 context, conversation.messages(), conversation.lastCompaction(), cause);
-        ContextDecision blocked = interceptCompaction(attempt);
-        if (blocked != null) {
-            return blocked;
+        Optional<ContextDecision> blocked = interceptCompaction(attempt);
+        if (blocked.isPresent()) {
+            return blocked.orElseThrow();
         }
         ContextDecision decision = policy.get();
         newCompaction(attempt.previousBoundary(), conversation, recorder)
@@ -361,17 +361,17 @@ public final class AgentExecutor {
         return decision;
     }
 
-    private ContextDecision interceptCompaction(CompactionContext attempt) {
+    private Optional<ContextDecision> interceptCompaction(CompactionContext attempt) {
         try {
             CompactionDecision decision = interceptors.beforeCompaction(attempt);
             if (decision instanceof CompactionDecision.Deny denial) {
-                return ContextDecision.stopped(
-                        StopReason.INTERCEPTOR_DENIED, denial.reason());
+                return Optional.of(ContextDecision.stopped(
+                        StopReason.INTERCEPTOR_DENIED, denial.reason()));
             }
-            return null;
+            return Optional.empty();
         } catch (AgentInterceptorException failure) {
-            return ContextDecision.stopped(
-                    StopReason.INTERCEPTOR_ERROR, failure.getMessage());
+            return Optional.of(ContextDecision.stopped(
+                    StopReason.INTERCEPTOR_ERROR, failure.getMessage()));
         }
     }
 

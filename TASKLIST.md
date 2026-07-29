@@ -20,7 +20,7 @@
 | S8 持久化 | #36–38 | 0.5d | JSONL store + /resume + SessionId |
 | MVP-Gate | #39 | — | 端到端冒烟，打 `v0.1.0-mvp` |
 | S9 Runtime Hardening | #40–46 | 已完成（7/7） | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
-| S10 Runtime Extensions | #47–55 | 进行中（1/9） | 子 Agent、interceptor、MCP、后台任务、暂停恢复、分支、模型策略、manifest、CLI |
+| S10 Runtime Extensions | #47–55 | 进行中（2/9） | 子 Agent、interceptor、MCP、后台任务、暂停恢复、分支、模型策略、manifest、CLI |
 | **MVP 合计** | — | **≈8 人天** | — |
 
 ## 依赖图
@@ -779,7 +779,7 @@ S0 (1→2→3)
 
 ### #48 [S10-Kernel-TDD] typed AgentInterceptor 生命周期扩展 （blockedBy: 41, 42, 46）
 
-**状态**：进行中（Red）。
+**状态**：已完成（2026-07-29）。
 
 **Red**：pre-tool deny 仍 settle；observer failure 隔离；blocking failure 有明确 stop reason；声明顺序稳定；terminal validation 不破坏配对；sub-agent lifecycle 携带 parent/child RunId。
 

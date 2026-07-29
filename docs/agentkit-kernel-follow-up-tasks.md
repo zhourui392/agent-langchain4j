@@ -153,6 +153,8 @@ interface SubAgentHandle {
 
 ### #48 [Kernel-TDD, P2] typed `AgentInterceptor` 生命周期扩展
 
+**状态**：已完成（2026-07-29）；Red/Green/Refactor 三提交交付，实施状态以 `TASKLIST.md` 为准。
+
 **Goal**
 
 在不开放任意脚本执行的前提下，为宿主提供可测试、可组合、失败语义明确的 in-process 生命周期扩展。
@@ -203,6 +205,14 @@ pre-hook 返回 typed decision，如 `Continue`、`Deny(reason)`、`ReplaceConte
 - Java typed SPI 可满足宿主审计/策略需求。
 - 不加入 Claude Code 风格的任意 shell hook、脚本自动发现或插件系统。
 - 核心 executor 只依赖 domain/application port，不依赖具体宿主。
+
+**完成后的领域建模复核**
+
+- commands：LLM/context/tool/run-stop 的 pre-hook 返回各自 sealed decision；events：LLM complete、tool settled、compaction installed 与 child segment spawned/stopped 使用不可变 typed event。正常拒绝与 callback failure 不再共享异常通道。
+- 一致性边界仍是单个 run、`Conversation` tool batch 和单个 `ToolInvocation`；`AgentInterceptors` 是无 run 状态的声明有序策略链。并行 invocation 可并发回调，但各 invocation 内顺序稳定。
+- `ReplaceContext` 只替换一次 provider request projection；tool blocking failure 以专用 result settle，整批 append 后才停止；terminal stop 拒绝清空 payload，但保留已配对 result。
+- `PermissionPolicy`、workspace boundary、secret scope 与 output policy 仍独立且必经；interceptor 只能拒绝/替换自身合同允许的数据，不能授予权限或放大 child 能力。
+- #47 的领域建模评分由 **14/15** 提升到 **15/15**：聚合边界 3、变化收敛 3、不变量守护 3、行为一致 3、下一轮演进 3。parent/child lifecycle correlation 已进入 typed event，同时有意保持 `RunEvent` v1 不变。
 
 **blockedBy**：#41、#42、#46。
 
