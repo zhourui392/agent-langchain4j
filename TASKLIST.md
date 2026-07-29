@@ -793,7 +793,7 @@ S0 (1→2→3)
 
 ### #49 [S10-Kernel-Infra-TDD] MCP client、工具适配与生命周期 （blockedBy: 43, 44, 45, 46, 48）
 
-**状态**：待开始。
+**状态**：进行中（Red）。
 
 **Red**：fake stdio discover/call/close；HTTP timeout/cancel/reconnect；namespace 冲突；malformed schema/result settle；destructive tool 走 ASK/DENY；secret 不泄漏；catalog refresh 原子；大 catalog 延迟暴露。
 

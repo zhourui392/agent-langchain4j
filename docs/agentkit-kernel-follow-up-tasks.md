@@ -220,6 +220,8 @@ pre-hook 返回 typed decision，如 `Continue`、`Deny(reason)`、`ReplaceConte
 
 ### #49 [Kernel-Infra/TDD, P2] MCP client、工具适配与生命周期
 
+**状态**：进行中（Red）；先固定 scope、catalog snapshot、调用 settle 与 reconnect 合同，再进入实现。
+
 **Goal**
 
 把 MCP server 暴露的工具安全地适配为 kernel `Tool`，支持 server lifecycle、命名空间、timeout、认证和动态 tool catalog。
@@ -239,6 +241,16 @@ pre-hook 返回 typed decision，如 `Continue`、`Deny(reason)`、`ReplaceConte
 - MCP 的 read-only/destructive/idempotent annotation 映射为 permission policy 输入，但 annotation 不能绕过本地 deny。
 - timeout/cancel 使用 #44；output 必经 #45；事件写入 #46。
 - 支持 catalog refresh 和 deferred discovery；不要求每轮注入全部 schema。
+
+**实施前领域建模审计**
+
+- commands：`open scope session`、`refresh catalog`、`expose selected tools`、`invoke tool`、`close scope/all sessions`；events/facts：session ready/failed、catalog snapshot replaced、invocation settled、session invalidated/closed。连接失败后的当前 invocation 只 settle 为失败，reconnect 只影响后续 command，禁止自动重放可能有副作用的调用。
+- ubiquitous language：`McpServerConfig` 只保存 transport 与 secret **引用**；`McpSession` 是一个 `SecretScope` 内的连接生命周期；`McpToolDescriptor` 是远端声明；`ToolCatalogSnapshot` 是一次不可变、可原子替换的本地投影；`McpToolAdapter` 是 kernel `Tool`，不是旁路 executor。
+- 聚合/一致性边界：单个 `(SecretScope, serverId)` session 独占连接与 catalog generation；refresh 先完整校验新目录再单次替换，旧 adapter 可完成已开始的 invocation；跨 server 合并与本地工具重名由 `ToolRegistry` 在同一 resolution snapshot 中拒绝。
+- 核心不变量：server/tool 必须形成 `<server>.<tool>`；secret value 不进入 schema、prompt、event、普通日志或异常；annotation 只能收紧/提示本地 permission，不能授予权限；每个远端调用继续经过 interceptor、permission、run timeout/cancel、output policy、event recorder 和 ordered batch settle；malformed schema 不得部分安装，malformed result 必须形成 settled error；scope 不匹配不得复用已认证 session。
+- 变化点：stdio/HTTP 收敛到 transport spec/factory；认证目标名→secret name 收敛到显式 binding；远端 schema/result 收敛到 protocol mapper；eager/deferred exposure 收敛到 catalog policy；连接恢复收敛到 session invalidation/reopen，调用重试策略不混入 transport。
+- 反模式警戒：不让 `McpServerManager` 持有一个无 scope 的全局认证 client；不在 `AgentExecutor` 写 transport 分支；不把整个大 catalog 每轮注入；不读取 `System.getenv`；不依赖 MCP `readOnlyHint` 绕过 `PermissionPolicy`。
+- 实施前评分 **7/15**：聚合边界 2、变化收敛 2、不变量守护 1、行为一致 1、下一轮演进 1。目标是在 Refactor 后由 typed scope、atomic snapshot、normal-tool path 和 transport strategy 提升到至少 14/15。
 
 **Red/测试矩阵**
 
