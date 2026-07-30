@@ -8,6 +8,8 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Objects;
 import java.util.StringJoiner;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,6 +27,10 @@ import org.slf4j.LoggerFactory;
 public final class JdbcMysqlReadClient implements MysqlReadClient {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcMysqlReadClient.class);
+    private static final int QUERY_TIMEOUT_SECONDS = 10;
+    private static final int MAX_FIELD_BYTES = 64 * 1024;
+    private static final int MAX_OUTPUT_BYTES = 1024 * 1024;
+    private static final String TRUNCATED = "\n...<truncated>...";
 
     private final String jdbcUrl;
     private final String user;
@@ -45,6 +51,8 @@ public final class JdbcMysqlReadClient implements MysqlReadClient {
             connection.setReadOnly(true);
             try (Statement statement = connection.createStatement()) {
                 statement.setMaxRows(Math.max(0, maxRows));
+                statement.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+                statement.setMaxFieldSize(MAX_FIELD_BYTES);
                 try (ResultSet resultSet = statement.executeQuery(sql)) {
                     String output = format(resultSet);
                     log.debug("jdbc mysql query completed: rows={}, chars={}, durationMs={}",
@@ -55,16 +63,20 @@ public final class JdbcMysqlReadClient implements MysqlReadClient {
         }
     }
 
-    private static String format(ResultSet resultSet) throws SQLException {
+    static String format(ResultSet resultSet) throws SQLException {
         ResultSetMetaData meta = resultSet.getMetaData();
         int columns = meta.getColumnCount();
-        StringBuilder out = new StringBuilder(header(meta, columns)).append('\n');
+        BoundedUtf8Output out = new BoundedUtf8Output(MAX_OUTPUT_BYTES, TRUNCATED);
+        out.append(header(meta, columns)).append("\n");
         int rows = 0;
-        while (resultSet.next()) {
-            out.append(row(resultSet, columns)).append('\n');
+        while (!out.truncated() && resultSet.next()) {
+            out.append(row(resultSet, columns)).append("\n");
             rows++;
         }
-        return out.append('(').append(rows).append(" rows)").toString();
+        if (!out.truncated()) {
+            out.append("(").append(Integer.toString(rows)).append(" rows)");
+        }
+        return out.value();
     }
 
     private static String header(ResultSetMetaData meta, int columns) throws SQLException {
@@ -99,5 +111,55 @@ public final class JdbcMysqlReadClient implements MysqlReadClient {
 
     private static long elapsedMs(long startNs) {
         return (System.nanoTime() - startNs) / 1_000_000L;
+    }
+
+    private static final class BoundedUtf8Output {
+        private final ByteArrayOutputStream output;
+        private final int contentLimit;
+        private final byte[] truncationMarker;
+        private boolean truncated;
+
+        private BoundedUtf8Output(int maxBytes, String marker) {
+            this.output = new ByteArrayOutputStream(Math.min(maxBytes, 8192));
+            this.truncationMarker = marker.getBytes(StandardCharsets.UTF_8);
+            this.contentLimit = maxBytes - truncationMarker.length;
+        }
+
+        private BoundedUtf8Output append(String text) {
+            if (truncated || text == null || text.isEmpty()) {
+                return this;
+            }
+            byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+            if (output.size() + bytes.length <= contentLimit) {
+                output.writeBytes(bytes);
+                return this;
+            }
+            appendCodePointsWithin(text, contentLimit - output.size());
+            output.writeBytes(truncationMarker);
+            truncated = true;
+            return this;
+        }
+
+        private void appendCodePointsWithin(String text, int remaining) {
+            for (int index = 0; index < text.length() && remaining > 0; ) {
+                int codePoint = text.codePointAt(index);
+                byte[] encoded = new String(Character.toChars(codePoint))
+                        .getBytes(StandardCharsets.UTF_8);
+                if (encoded.length > remaining) {
+                    return;
+                }
+                output.writeBytes(encoded);
+                remaining -= encoded.length;
+                index += Character.charCount(codePoint);
+            }
+        }
+
+        private boolean truncated() {
+            return truncated;
+        }
+
+        private String value() {
+            return output.toString(StandardCharsets.UTF_8);
+        }
     }
 }

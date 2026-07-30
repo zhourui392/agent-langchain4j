@@ -1,6 +1,6 @@
 # AgentKit on LangChain4j — 任务清单
 
-> 本文档由 `DESIGN.md` 与 Agent Runtime 对照审计拆解而来，共 **55 个任务**，覆盖 11 个阶段。
+> 本文档由 `DESIGN.md` 与 Agent Runtime 对照审计拆解而来，共 **71 个任务/工作包**，覆盖 12 个阶段。
 >
 > **TDD 任务**遵循 Red → Green → Refactor 循环；**Infra 任务**只给目标 + 验收。
 > 每个任务的 DoD（Definition of Done）包含编码规范红线（函数 ≤50 行、嵌套 ≤3 层、命名自解释）。
@@ -21,6 +21,7 @@
 | MVP-Gate | #39 | — | 端到端冒烟，打 `v0.1.0-mvp` |
 | S9 Runtime Hardening | #40–46 | 已完成（7/7） | run scope、tool batch、terminal、安全、取消、上下文、恢复 |
 | S10 Runtime Extensions | #47–55 | 已完成（9/9） | 子 Agent、interceptor、MCP、后台任务、暂停恢复、分支、模型策略、manifest、CLI |
+| S11 Diagnosis Production Capability | #DIA-60–75 | 已完成（16/16） | 运行上下文、真实日志 Backend、多环境、Evidence、治理与真实 Provider gate |
 | **MVP 合计** | — | **≈8 人天** | — |
 
 ## 依赖图
@@ -886,6 +887,279 @@ S0 (1→2→3)
 **Refactor**：SIGINT 退出策略留 CLI；UI 逻辑不下沉 kernel；补齐 clear/resume/SIGINT 端到端测试。
 
 **DoD**：help 中命令全部可用；unknown in-flight invocation 恢复时明确展示；不增加富终端 UI、IDE bridge 或插件系统。
+
+---
+
+## S11 Diagnosis Agent Production Capability Completion
+
+> 来源：2026-07-30 NATIVE 真实接入审计。完整缺口、接口草案、依赖图和跨仓验收见
+> [`docs/diagnosis-agent-production-capability-completion-design.md`](docs/diagnosis-agent-production-capability-completion-design.md)。
+> 本阶段以 `#DIA-60 -> #DIA-75` 为工作包；跨仓任务在本表保留验收合同，宿主实现落在 `agent-web`。
+
+### #DIA-60 [S11-Diagnosis-TDD] OperationalContext （blockedBy: 无）
+
+**状态**：已完成（2026-07-30）。
+
+**Red**：RunRequest typed context、secret-like attribute 拒绝、Planner 注入 now/zone/env/service/capability、legacy env fallback。
+
+**Green**：新增不可变 OperationalContext DTO 和 RunRequest builder 接口，Planner 使用宿主上下文而不是进程隐式状态。
+
+**Refactor**：保留 `env(String)` 兼容入口；公开合同决策同步 `DESIGN.md §16.24`。
+
+**DoD**：宿主已知环境、时区、默认服务和数据源时 Planner 不再重复追问。
+
+---
+
+### #DIA-61 [S11-Diagnosis-TDD] DiagnosisScope / TimeWindow （blockedBy: DIA-60）
+
+**状态**：已完成（2026-07-30）。
+
+**Red**：非法窗口、跨环境扩大、相对时间/跨日/最大 prod 窗口、snapshot v1/v2 兼容。
+
+**Green**：落地 scope、绝对时间窗、确定性 resolver 和 Plan schema/state v2。
+
+**Refactor**：范围策略集中在 domain/policy，工具参数必须是 Plan scope 子集。
+
+**DoD**：“最近两个小时”在固定 Clock/ZoneId 下得到稳定绝对区间。
+
+---
+
+### #DIA-62 [S11-Diagnosis-TDD] Blocker / DiagnosisOutcome （blockedBy: DIA-60）
+
+**状态**：已完成（2026-07-30）。
+
+**Red**：零工具、用户缺 service、环境不匹配、backend 不健康、waiting/budget outcome。
+
+**Green**：新增 typed blocker、BLOCKED 状态和 RunSummary diagnosis outcome。
+
+**Refactor**：`missingInputs` 仅作为 USER_INPUT_REQUIRED 兼容投影，系统缺能力不再要求用户补充。
+
+**DoD**：宿主能力缺失、用户输入不足和正常完成可被宿主机器判定地区分。
+
+---
+
+### #DIA-63 [S11-Kernel/Diagnosis-TDD] Run-scoped CapabilitySnapshot （blockedBy: DIA-60）
+
+**状态**：已完成（2026-07-30）。
+
+**Red**：动态 catalog generation、run 中 refresh 隔离、namespace collision、Planner/Executor 一致。
+
+**Green**：一次 run 原子解析工具快照并同时提供给 Planner、PlanGuard 和 Executor。
+
+**Refactor**：kernel 只提供领域无关 snapshot primitive；静态 manifest 与 runtime capability 分开。
+
+**DoD**：同一 run 不可能出现 Planner 与 Executor 工具集合漂移。
+
+---
+
+### #DIA-64 [S11-Diagnosis-TDD] DiagnosisMode / Readiness （blockedBy: DIA-62, DIA-63）
+
+**状态**：已完成（2026-07-30）。
+
+**Red**：CONVERSATIONAL/OPERATIONAL、zero-tool fail-fast/degraded、ready/degraded/unavailable、secret-free view。
+
+**Green**：Builder 模式、Engine readiness 和宿主可选启动策略。
+
+**Refactor**：model availability 与 operational diagnosis readiness 分离。
+
+**DoD**：零工具 NATIVE 不再被宿主宣称为自主诊断可用。
+
+---
+
+### #DIA-65 [S11-Diagnosis-Infra-TDD] LocalFileLogQueryClient （blockedBy: DIA-61）
+
+**状态**：已完成（2026-07-30）。
+
+**Red**：绝对时间过滤、多行异常、level/keyword、限制、敏感文件、symlink/real-path 越界。
+
+**Green**：实现宿主 allowlist 驱动的只读本机日志 client 和结构化 metadata。
+
+**Refactor**：无任意 path/glob 参数，扫描受 deadline/files/bytes/lines 约束。
+
+**DoD**：受控日志 fixture 可产生真实 LogQuery 证据且不能越出配置根目录。
+
+---
+
+### #DIA-66 [S11-Diagnosis-TDD] DiagnosisResourceCatalog （blockedBy: DIA-60, DIA-63）
+
+**状态**：已完成（2026-07-30）。
+
+**Red**：alias、默认/唯一/多候选、未知 service、跨环境 binding、generation。
+
+**Green**：定义 host-provided resource catalog port 与 service/data-source logical binding。
+
+**Refactor**：目录不携带 Endpoint/credential，当前 run 固定 catalog generation。
+
+**DoD**：默认 service/data source 可自动解析，多候选时才询问用户。
+
+---
+
+### #DIA-67 [S11-Host-TDD] agent-web 本机日志闭环 （blockedBy: DIA-62, DIA-64, DIA-65, DIA-66）
+
+**状态**：已完成（2026-07-30）。
+
+**Red**：Spring 配置、OperationalContext、readiness、ChatRun tool-use/result/Evidence、环境不匹配和 secret scan。
+
+**Green**：在 agent-web test 环境装配本机只读日志 source 并贯穿 SQLite/streaming。
+
+**Refactor**：日志路径、service mapping 和开关全部归宿主配置；不写死在库。
+
+**DoD**：“看最近两个小时错误日志”自动调用 LogQuery，不再询问已知平台和时区。
+
+**验证证据**：`NativeLocalLogDiagnosisFlowTest` 使用真实本机日志 fixture 验证
+Planner -> `LogQuery` tool-use -> tool-result -> Evidence(`toolUseId`) -> Reporter ->
+SSE/SQLite/checkpoint，并扫描绝对路径与 secret marker；同时修复 stream-json 与 Reporter
+对绝对 `TimeWindow(Instant)` 的 Java Time 序列化故障。
+
+---
+
+### #DIA-68 [S11-Diagnosis-Infra-TDD] HTTP LogQuery 合同硬化 （blockedBy: DIA-61, DIA-62）
+
+**状态**：已完成（2026-07-30）。
+
+**Red**：非 2xx、content-type/body limit、auth redaction、deadline、typed/legacy response、错误分类。
+
+**Green**：硬化 HttpLogQueryClient 和标准响应合同。
+
+**Refactor**：认证由 host/SecretProvider 注入；URL/header 不进入 prompt/result/log。
+
+**DoD**：401/403 安全失败，429/临时 5xx 可按策略有限重试，错误页面不会当日志成功返回。
+
+**验证证据**：`HttpLogQueryClientTest`、`HttpBackendHealthProbeTest` 和有界 HTTP transport 测试
+覆盖非 2xx、响应合同、body/content-type/deadline、认证隔离、DNS/IP/redirect 边界。
+
+---
+
+### #DIA-69 [S11-Diagnosis-Infra-TDD] ElasticsearchLogQueryClient （blockedBy: DIA-68）
+
+**状态**：已完成（2026-07-30）。
+
+**Red**：固定 index/field mapping、受限 DSL、time/service/level/trace、认证/TLS seam、非 2xx。
+
+**Green**：实现日志语义 ES adapter，模型只提供逻辑查询参数。
+
+**Refactor**：index 和 base filters 来自 host binding，Prompt 无法覆盖。
+
+**DoD**：可对 mock ES 完成有界日志查询，禁止任意 index/endpoint/script。
+
+**验证证据**：`ElasticsearchLogQueryClientTest` 对固定 index/field/base filter、绝对时间、
+service/level/trace、limit、错误映射和 secret 脱敏完成 mock HTTP 合同验证。
+
+---
+
+### #DIA-70 [S11-Diagnosis-Infra-TDD] LokiLogQueryClient （blockedBy: DIA-68）
+
+**状态**：已完成（2026-07-30）。
+
+**Red**：固定 tenant/base selector、label mapping、query_range、limit、非 2xx 和错误响应。
+
+**Green**：实现受限 Loki LogQL adapter。
+
+**Refactor**：模型不能覆盖 tenant 或 base selector，查询必须带绝对时间窗。
+
+**DoD**：mock Loki 合同全绿并产出标准 LogQuery metadata。
+
+**验证证据**：`LokiLogQueryClientTest` 覆盖固定 tenant/base selector、query_range 纳秒边界、
+limit、流解析、非 2xx 和标准 metadata。
+
+---
+
+### #DIA-71 [S11-Host-TDD] 多环境 Engine 路由 （blockedBy: DIA-64, DIA-66, DIA-69|DIA-70）
+
+**状态**：已完成（2026-07-30）。
+
+**Red**：test/staging/prod engine registry、授权、独立 secret/readiness、Prompt 切环境拒绝。
+
+**Green**：agent-web 按环境选择独立 DiagnoseEngine/ToolRegistry/SecretScope。
+
+**Refactor**：优先 one-engine-per-env，不把 diagnosis env 污染进 kernel。
+
+**DoD**：测试环境请求无法通过用户文本访问生产 Backend。
+
+**验证证据**：Engine registry 按 environment 持有独立实例、Secret/readiness/catalog；
+agent-web 的 environment mismatch 与 Spring Flow 测试证明 test session 无法切换到 prod。
+
+---
+
+### #DIA-72 [S11-Diagnosis-TDD] ToolResult / Evidence metadata （blockedBy: DIA-65|DIA-68）
+
+**状态**：已完成（2026-07-30）。
+
+**Red**：标准 keys、summary/raw 分离、matched/returned/truncated、失败 evidence 和 observed time。
+
+**Green**：所有诊断 query tool 产出稳定 metadata，EvidenceLedger 消费而不复制整段正文为 summary。
+
+**Refactor**：metadata 合同集中定义并禁止 secret value。
+
+**DoD**：大结果截断后仍保留来源、范围、命中数、状态和 toolUseId。
+
+**验证证据**：`EvidenceLedgerMetadataTest`、state codec 和真实 smoke 的 4 条 Evidence 均包含
+dataSource/environment/service/queryStart/queryEnd/matched/returned/truncated/retry/backendStatus，
+4/4 toolUseId 可回连 LIVE invocation；excerpt 有界且保留头尾。
+
+---
+
+### #DIA-73 [S11-Diagnosis-Infra-TDD] Backend health / error / retry （blockedBy: DIA-68）
+
+**状态**：已完成（2026-07-30）。
+
+**Red**：auth/permission/query/rate-limit/timeout/connection/protocol 分类、retry budget/deadline、health probe。
+
+**Green**：统一 BackendFailure、错误 mapper、有限重试和轻量健康检查。
+
+**Refactor**：正常控制流不解析异常自由文本；失败安全摘要与内部 cause 分离。
+
+**DoD**：只重试 typed transient failure，次数和状态进入审计/metadata。
+
+**验证证据**：`ResilientLogQueryClientTest` 与 `HttpBackendHealthProbeTest` 覆盖 transient-only
+retry、认证/权限不重试、deadline、retry count、health status 和安全错误摘要。
+
+---
+
+### #DIA-74 [S11-Diagnosis-Security-TDD] 查询策略硬化 （blockedBy: DIA-65, DIA-68, DIA-69, DIA-70）
+
+**状态**：已完成（2026-07-30）。
+
+**Red**：日志范围/anchor、ES query guard、SQL、Redis、HTTP DNS/IP、Dubbo address/method allowlist。
+
+**Green**：各工具把方案中的生产限制变成 Java 强制策略。
+
+**Refactor**：Prompt 只解释规则，不能授予或扩大工具能力。
+
+**DoD**：所有外部查询有范围、数量、时间和目标边界，安全回归全绿。
+
+**验证证据**：Local real-path/symlink/sensitive-file/budget，HTTP DNS/IP/redirect，ES
+index/DSL，Loki tenant/selector，PlanGuard scope enforcement 与 secret scan 全绿。
+
+---
+
+### #DIA-75 [S11-Cross-Repo] Golden cases / smoke / completion audit （blockedBy: DIA-67；生产 case 随 DIA-69/DIA-70 增量）
+
+**状态**：已完成（2026-07-30）。
+
+**Red**：文档列出的 greeting/no-tools/local/env/time/backend/evidence/follow-up golden cases。
+
+**Green**：离线回放、mock backend、Spring ChatRun 和真实 Provider 受控 smoke 全链路。
+
+**Refactor**：发布门禁必须断言 tool-use、tool-result、Evidence 和 secret scan，不能只断言 assistant 文本。
+
+**DoD**：逐项审计技术方案 §16 的框架闭环、真实闭环和生产可用完成定义，所有证据充分。
+
+**验证证据**：`DiagnosisGoldenCasesTest` 11 个场景；AgentKit kernel 700、diagnosis 252，合计
+952（0 failure/error，2 skipped，另有 kernel IT 4/4）；agent-web 完整非 live 1552/1552，
+ArchitectureTest、JaCoCo 和制品门禁通过；启动脚本另通过 1468/1468 并执行真实 Vite build，fat
+JAR diagnosis/kernel 各一个且 CLI 为零。真实 OpenAI-compatible Provider 受控 run 为
+`SUCCEEDED`，9 次真实 LogQuery、9 条按 toolUseId 回连的 Evidence、9 条完整 JSON object
+`input_json`；checkpoint 为 v2/DONE/ISO-8601/7200 秒，SSE 持久化 2 个 run status、998 个 chunk、
+1 个 terminal，并包含 9 个显式 tool_use_id delta。统一 release gate 和 CI smoke 都使用安全输出
+合同，普通/gzip 日志、SSE、SQLite 活跃列与物理页、两仓文件/diff、测试报告和 JAR 的 Provider
+credential/endpoint/payload 扫描均为 0；SQLite `integrity_check=ok`。宿主 SQLite
+`BUSY`/`LOCKED` shared-cache 竞争对 ChatRun、工具完成态和启动恢复使用最多 6 次有界重试，
+非锁错误不重试。NATIVE listener/host tracker 串行化并发工具结果，delta 显式携带 toolUseId，
+missing start input 规范化为 `{}`；报告 missingInformation 只是非阻塞补证建议，Plan missingInputs/
+blockers 为 0。Java 21 验收 PID 2389464，target/app JAR 哈希一致，health/prometheus 200、管理员
+readiness READY。生产前端 typecheck/lint/build 通过，测试工程 15 个文件/138 项通过；PMD/P3C
+已执行，704 条既有告警维持非阻断基线。临时 session/run/fixture 已在验收后清理。
 
 ---
 

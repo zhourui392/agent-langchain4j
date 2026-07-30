@@ -1,0 +1,110 @@
+name: Diagnosis Provider Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: OpenAI-compatible model name
+        required: false
+        type: string
+        default: gpt-5.6-sol
+  workflow_call:
+    secrets:
+      diagnosis_openai_api_key:
+        required: true
+      diagnosis_openai_base_url:
+        required: true
+    inputs:
+      model:
+        required: false
+        type: string
+        default: gpt-5.6-sol
+
+permissions:
+  contents: read
+
+jobs:
+  diagnosis-provider-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Reusable callers pass the lower-case named secrets; manually dispatched runs
+      # use the repository-level upper-case protected secrets.
+      AK_API_KEY: ${{ secrets.diagnosis_openai_api_key || secrets.DIAGNOSIS_OPENAI_API_KEY }}
+      AK_BASE_URL: ${{ secrets.diagnosis_openai_base_url || secrets.DIAGNOSIS_OPENAI_BASE_URL }}
+      AK_MODEL: ${{ inputs.model || vars.DIAGNOSIS_OPENAI_MODEL || 'gpt-5.6-sol' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Validate protected Provider configuration
+        shell: bash
+        run: |
+          test -n "$AK_API_KEY"
+          test -n "$AK_BASE_URL"
+          test -n "$AK_MODEL"
+
+      - name: Verify real diagnosis tool and evidence chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          raw_dir="$(mktemp -d)"
+          raw_log="$raw_dir/provider-smoke.log"
+          safe_reports="$GITHUB_WORKSPACE/.ci-safe-failsafe-reports"
+          trap 'rm -rf "$raw_dir"' EXIT
+          rm -rf "$safe_reports"
+          mkdir -p "$safe_reports"
+
+          set +e
+          mvn -B -ntp -pl agentkit-agent-diagnosis -am -Psmoke \
+            -Dtest=__NoUnitTests__ \
+            -Dsurefire.failIfNoSpecifiedTests=false \
+            -Dfailsafe.failIfNoSpecifiedTests=false \
+            -Dit.test=DiagnosisOpenAiProviderSmokeIT \
+            verify >"$raw_log" 2>&1
+          smoke_status=$?
+          set -e
+
+          unsafe_output=false
+          while IFS= read -r line || [[ -n "$line" ]]; do
+            if [[ "$line" == *"$AK_API_KEY"* || "$line" == *"$AK_BASE_URL"* \
+                  || "$line" == *"HTTP request:"* || "$line" == *"- body:"* ]]; then
+              unsafe_output=true
+              break
+            fi
+          done <"$raw_log"
+
+          for source in agentkit-agent-diagnosis/target/failsafe-reports/*; do
+            [[ -f "$source" ]] || continue
+            target="$safe_reports/$(basename "$source")"
+            while IFS= read -r line || [[ -n "$line" ]]; do
+              line=${line//"$AK_API_KEY"/'[REDACTED]'}
+              line=${line//"$AK_BASE_URL"/'[REDACTED]'}
+              printf '%s\n' "$line"
+            done <"$source" >"$target"
+          done
+
+          if [[ "$unsafe_output" == true ]]; then
+            echo "::error::Provider smoke produced unsafe diagnostic output"
+            exit 1
+          fi
+          if [[ $smoke_status -ne 0 ]]; then
+            echo "::error::Provider smoke failed; inspect the sanitized report artifact"
+            exit "$smoke_status"
+          fi
+          echo "diagnosis provider smoke passed"
+
+      - name: Upload smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnosis-provider-smoke-report
+          path: .ci-safe-failsafe-reports
+          if-no-files-found: error
+          retention-days: 7

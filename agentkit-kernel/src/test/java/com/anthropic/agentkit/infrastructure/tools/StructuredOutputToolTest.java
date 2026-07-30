@@ -81,6 +81,29 @@ class StructuredOutputToolTest {
         assertThat(accepted).isEmpty();
     }
 
+    @Test
+    void rejectsArrayAndStringBelowTheirMinimumLengths() {
+        String constrainedSchema = """
+                {"type":"object","properties":{
+                  "allowedTools":{"type":"array","minItems":1,
+                                    "items":{"type":"string","minLength":1}}
+                },"required":["allowedTools"]}
+                """;
+        StructuredOutputTool constrained = new StructuredOutputTool(
+                "update_plan", "Submit plan", constrainedSchema, accepted::add);
+
+        ToolResult emptyArray = constrained.execute(
+                ToolArguments.of(Map.of("allowedTools", List.of())), context());
+        ToolResult emptyItem = constrained.execute(
+                ToolArguments.of(Map.of("allowedTools", List.of(""))), context());
+
+        assertThat(emptyArray.success()).isFalse();
+        assertThat(emptyArray.content()).contains("allowedTools", "at least 1 item");
+        assertThat(emptyItem.success()).isFalse();
+        assertThat(emptyItem.content()).contains("allowedTools[0]", "at least 1 character");
+        assertThat(accepted).isEmpty();
+    }
+
     private static ExecutionContext context() {
         return ExecutionContext.at(Paths.get(System.getProperty("user.dir")));
     }

@@ -42,7 +42,7 @@ public final class DiagnosisCase {
 
     public void adoptPlan(DiagnosisPlan nextPlan) {
         if (status != DiagnosisStatus.PLANNING && status != DiagnosisStatus.RUNNING
-                && status != DiagnosisStatus.NEED_INFO) {
+                && status != DiagnosisStatus.NEED_INFO && status != DiagnosisStatus.BLOCKED) {
             throw new IllegalStateException("cannot adopt plan from " + status);
         }
         this.plan = Objects.requireNonNull(nextPlan, "nextPlan");
@@ -69,6 +69,18 @@ public final class DiagnosisCase {
         status = DiagnosisStatus.NEED_INFO;
     }
 
+    public void block(List<DiagnosisBlocker> blockers) {
+        if (status != DiagnosisStatus.RUNNING && status != DiagnosisStatus.PLANNING) {
+            throw new IllegalStateException("cannot block from " + status);
+        }
+        List<DiagnosisBlocker> safe = List.copyOf(Objects.requireNonNull(blockers, "blockers"));
+        if (safe.isEmpty() || safe.stream().anyMatch(DiagnosisBlocker::userActionable)) {
+            throw new IllegalArgumentException("system blockers must be non-empty and non-user-actionable");
+        }
+        plan = Objects.requireNonNull(plan, "plan").withBlockers(safe);
+        status = DiagnosisStatus.BLOCKED;
+    }
+
     public boolean canConfirmRootCause(String hypothesisId) {
         requireText(hypothesisId, "hypothesisId");
         return ledger.all().stream().anyMatch(evidence -> evidence.source() != EvidenceSource.MODEL_INFERENCE);
@@ -79,6 +91,13 @@ public final class DiagnosisCase {
             throw new IllegalStateException("cannot mark done from " + status);
         }
         status = DiagnosisStatus.DONE;
+    }
+
+    public void startFollowUp() {
+        if (status != DiagnosisStatus.DONE) {
+            throw new IllegalStateException("cannot start follow-up from " + status);
+        }
+        status = DiagnosisStatus.PLANNING;
     }
 
     public String caseId() {
@@ -101,6 +120,10 @@ public final class DiagnosisCase {
         return ledger;
     }
 
+    public List<DiagnosisBlocker> blockers() {
+        return plan == null ? List.of() : plan.blockers();
+    }
+
     private void requireRunning() {
         if (status != DiagnosisStatus.RUNNING) {
             throw new IllegalStateException("diagnosis case is not RUNNING: " + status);
@@ -108,9 +131,6 @@ public final class DiagnosisCase {
     }
 
     private static String requireText(String value, String fieldName) {
-        if (value == null || value.isBlank()) {
-            throw new IllegalArgumentException(fieldName + " must not be blank");
-        }
-        return value;
+        return SecretDataPolicy.required(value, fieldName);
     }
 }

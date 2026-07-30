@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Paths;
 import java.sql.SQLException;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -30,10 +31,10 @@ class MysqlReadToolTest {
     }
 
     @Test
-    void allowsWithCteAndShowAndDescribe() {
+    void allowsShowAndDescribeButRejectsUnparsedCte() {
         client.result = "ok";
 
-        assertThat(tool.execute(args("WITH c AS (SELECT 1) SELECT * FROM c"), ctx).success()).isTrue();
+        assertThat(tool.execute(args("WITH c AS (SELECT 1) SELECT * FROM c"), ctx).success()).isFalse();
         assertThat(tool.execute(args("SHOW TABLES"), ctx).success()).isTrue();
         assertThat(tool.execute(args("DESCRIBE users"), ctx).success()).isTrue();
     }
@@ -77,7 +78,8 @@ class MysqlReadToolTest {
         ToolResult result = tool.execute(args("SELECT 1"), ctx);
 
         assertThat(result.success()).isFalse();
-        assertThat(result.content()).contains("connection refused");
+        assertThat(result.content()).contains("database query could not be completed")
+                .doesNotContain("connection refused");
     }
 
     @Test
@@ -85,6 +87,31 @@ class MysqlReadToolTest {
         tool.execute(ToolArguments.of(Map.of("sql", "SELECT * FROM users", "maxRows", 500)), ctx);
 
         assertThat(client.lastMaxRows).isEqualTo(100);
+    }
+
+    @Test
+    void rejectsCteWriteOutfileLockingAndUnallowlistedSchema() {
+        MysqlReadTool guarded = new MysqlReadTool(client, Set.of("app"));
+
+        assertThat(guarded.execute(args(
+                "WITH victim AS (SELECT 1) DELETE FROM users"), ctx).success()).isFalse();
+        assertThat(guarded.execute(args(
+                "SELECT * FROM users INTO OUTFILE '/tmp/leak'"), ctx).success()).isFalse();
+        assertThat(guarded.execute(args(
+                "SELECT * FROM users FOR UPDATE"), ctx).success()).isFalse();
+        assertThat(guarded.execute(args(
+                "SELECT * FROM secret.users"), ctx).success()).isFalse();
+        assertThat(guarded.execute(args(
+                "SELECT * FROM app.users"), ctx).success()).isTrue();
+    }
+
+    @Test
+    void rejectsExecutableMysqlVersionComment() {
+        ToolResult result = tool.execute(args(
+                "SELECT * FROM users /*!50000 INTO OUTFILE '/tmp/leak' */"), ctx);
+
+        assertThat(result.success()).isFalse();
+        assertThat(client.calls).isZero();
     }
 
     @Test

@@ -43,35 +43,35 @@ public final class ClaudeStreamJsonListener implements AgentEventListener, Exten
     }
 
     @Override
-    public void onLlmRequestStart() {
+    public synchronized void onLlmRequestStart() {
         ensureInit();
     }
 
     @Override
-    public void onAssistantTextDelta(String delta) {
+    public synchronized void onAssistantTextDelta(String delta) {
         ensureInit();
         contentBlocks.appendText(delta);
         onChunk.accept(writer.textDelta(delta));
     }
 
     @Override
-    public void onToolUseStart(ToolUseRequest request) {
+    public synchronized void onToolUseStart(ToolUseRequest request) {
         ensureInit();
         contentBlocks.appendToolUse(request);
         onChunk.accept(writer.toolUseStart(request.id().value(), request.toolName()));
-        onChunk.accept(writer.inputJsonDelta(request.argumentsJson()));
+        onChunk.accept(writer.inputJsonDelta(request.id().value(), request.argumentsJson()));
         onChunk.accept(writer.contentBlockStop());
     }
 
     @Override
-    public void onToolUseEnd(ToolUseRequest request, ToolResult result, long durationMs) {
+    public synchronized void onToolUseEnd(ToolUseRequest request, ToolResult result, long durationMs) {
         ensureInit();
         flushAssistantMessage();
         onChunk.accept(writer.toolResult(request.id().value(), result.content()));
     }
 
     @Override
-    public void onUsage(int inputTokens, int outputTokens, int cacheReadInputTokens) {
+    public synchronized void onUsage(int inputTokens, int outputTokens, int cacheReadInputTokens) {
         this.usageReported = true;
         this.inputTokens += inputTokens;
         this.outputTokens += outputTokens;
@@ -79,7 +79,7 @@ public final class ClaudeStreamJsonListener implements AgentEventListener, Exten
     }
 
     @Override
-    public void onTurnComplete(AiMessage finalMessage) {
+    public synchronized void onTurnComplete(AiMessage finalMessage) {
         ensureInit();
         flushAssistantMessage(finalMessage.text());
         onChunk.accept(resultLine(finalMessage.text()));
@@ -94,13 +94,13 @@ public final class ClaudeStreamJsonListener implements AgentEventListener, Exten
     }
 
     @Override
-    public void onError(Throwable error) {
+    public synchronized void onError(Throwable error) {
         ensureInit();
         onChunk.accept(writer.errorResult(String.valueOf(error.getMessage()), sessionId));
     }
 
     @Override
-    public void emit(String type, Map<String, Object> payload) {
+    public synchronized void emit(String type, Map<String, Object> payload) {
         ensureInit();
         onChunk.accept(writer.extensionEvent(type, payload));
     }

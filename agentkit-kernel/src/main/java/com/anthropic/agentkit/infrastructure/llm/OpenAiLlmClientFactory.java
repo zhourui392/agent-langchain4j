@@ -24,8 +24,8 @@ public final class OpenAiLlmClientFactory implements LlmClientFactory {
                 .modelName(config.model())
                 .maxCompletionTokens(config.maxTokens())
                 .timeout(Duration.ofSeconds(60))
-                .logRequests(true)
-                .logResponses(true);
+                .logRequests(false)
+                .logResponses(false);
         config.baseUrlIfPresent().ifPresent(builder::baseUrl);
         return new LangChain4jLlmClient(builder.build(), new ModelIdentity(
                 config.provider().name().toLowerCase(Locale.ROOT), config.model()));

@@ -10,8 +10,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -60,6 +67,7 @@ class ClaudeStreamJsonListenerTest {
         JsonNode start = firstWhere(n -> n.path("event").path("type").asText().equals("content_block_start"));
         assertThat(start.get("event").get("content_block").get("name").asText()).isEqualTo("LogQuery");
         JsonNode input = firstWhere(this::isInputJsonDelta);
+        assertThat(input.get("event").get("delta").get("tool_use_id").asText()).isEqualTo("tu-1");
         assertThat(input.get("event").get("delta").get("partial_json").asText()).isEqualTo("{\"q\":\"x\"}");
         JsonNode user = firstWhere(n -> n.path("type").asText().equals("user"));
         assertThat(user.get("message").get("content").get(0).get("content").asText()).isEqualTo("found 3");
@@ -113,6 +121,57 @@ class ClaudeStreamJsonListenerTest {
 
         JsonNode event = firstWhere(n -> n.path("type").asText().equals("diagnosis_plan"));
         assertThat(event.get("payload").get("phase").asText()).isEqualTo("collect");
+    }
+
+    @Test
+    void serializesParallelToolResultsBeforeCallingHostConsumer() throws Exception {
+        List<String> concurrentLines = Collections.synchronizedList(new ArrayList<>());
+        AtomicInteger activeConsumers = new AtomicInteger();
+        AtomicBoolean concurrentConsumerCall = new AtomicBoolean();
+        ClaudeStreamJsonListener concurrentListener = new ClaudeStreamJsonListener(
+                "sid-parallel", "/work", line -> {
+                    if (activeConsumers.incrementAndGet() > 1) {
+                        concurrentConsumerCall.set(true);
+                    }
+                    try {
+                        Thread.sleep(5L);
+                        concurrentLines.add(line);
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("consumer interrupted", ex);
+                    } finally {
+                        activeConsumers.decrementAndGet();
+                    }
+                });
+        List<ToolUseRequest> requests = new ArrayList<>();
+        for (int index = 1; index <= 4; index++) {
+            ToolUseRequest request = new ToolUseRequest(
+                    new ToolUseId("tu-" + index), "LogQuery", "{\"q\":" + index + "}");
+            requests.add(request);
+            concurrentListener.onToolUseStart(request);
+        }
+        CountDownLatch ready = new CountDownLatch(requests.size());
+        CountDownLatch start = new CountDownLatch(1);
+        try (ExecutorService executor = Executors.newFixedThreadPool(requests.size())) {
+            List<? extends Future<?>> futures = requests.stream().map(request -> executor.submit(() -> {
+                ready.countDown();
+                start.await();
+                concurrentListener.onToolUseEnd(request, ToolResult.ok("result"), 1L);
+                return null;
+            })).toList();
+            ready.await();
+            start.countDown();
+            for (Future<?> future : futures) {
+                future.get();
+            }
+        }
+
+        assertThat(concurrentConsumerCall).isFalse();
+        assertThat(concurrentLines.stream().map(this::parse)
+                .filter(node -> node.path("type").asText().equals("user"))
+                .map(node -> node.path("message").path("content").get(0)
+                        .path("tool_use_id").asText()))
+                .containsExactlyInAnyOrder("tu-1", "tu-2", "tu-3", "tu-4");
     }
 
     private String typeOf(String line) {

@@ -18,6 +18,10 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public interface DiagnoseEngine extends AgentEntryPoint<RunRequest, RunSummary>, AutoCloseable {
 
+    default DiagnosisReadiness readiness() {
+        return DiagnosisReadiness.unknown();
+    }
+
     @Override
     default Class<RunRequest> requestType() {
         return RunRequest.class;

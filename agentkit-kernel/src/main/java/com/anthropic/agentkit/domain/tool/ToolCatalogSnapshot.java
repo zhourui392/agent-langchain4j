@@ -6,7 +6,7 @@ import java.util.Objects;
 import java.util.Set;
 
 /** One atomically published generation from a dynamic tool source. */
-public record ToolCatalogSnapshot(String source, List<Tool> tools) {
+public record ToolCatalogSnapshot(String source, long generation, List<Tool> tools) {
 
     public ToolCatalogSnapshot {
         if (source == null || source.isBlank()) {
@@ -14,6 +14,10 @@ public record ToolCatalogSnapshot(String source, List<Tool> tools) {
         }
         tools = List.copyOf(Objects.requireNonNull(tools, "tools"));
         requireUniqueNames(source, tools);
+    }
+
+    public ToolCatalogSnapshot(String source, List<Tool> tools) {
+        this(source, 0, tools);
     }
 
     private static void requireUniqueNames(String source, List<Tool> tools) {

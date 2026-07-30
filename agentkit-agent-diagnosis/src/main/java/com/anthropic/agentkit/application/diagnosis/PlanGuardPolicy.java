@@ -34,10 +34,12 @@ public final class PlanGuardPolicy implements PermissionPolicy {
     @Override
     public Decision decide(ToolInvocation invocation, Tool tool, PermissionMode mode) {
         DiagnosisPlan plan = currentPlan.get();
-        boolean allowedByPlan = plan != null && plan.isToolAllowed(tool.name());
+        boolean allowedByPlan = plan != null && plan.isToolAllowed(tool.name())
+                && plan.scope().permits(invocation.args().values());
         if (!allowedByPlan) {
             log.warn("plan guard observed off-plan tool: tool={}, mode={}", tool.name(), guardMode);
         }
-        return Decision.ALLOW;
+        return allowedByPlan || guardMode == PlanGuardMode.OBSERVE
+                ? Decision.ALLOW : Decision.DENY;
     }
 }

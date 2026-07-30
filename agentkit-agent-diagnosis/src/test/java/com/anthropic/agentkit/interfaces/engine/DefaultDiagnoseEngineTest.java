@@ -1,6 +1,7 @@
 package com.anthropic.agentkit.interfaces.engine;
 
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisCase;
+import com.anthropic.agentkit.domain.agent.AgentBudget;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisPlan;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisStep;
 import com.anthropic.agentkit.domain.diagnosis.Hypothesis;
@@ -88,7 +89,7 @@ class DefaultDiagnoseEngineTest {
         assertThat(types.indexOf("diagnosis_state")).isLessThan(types.indexOf("result"));
         JsonNode state = firstOfType("diagnosis_state");
         assertThat(state.path("payload").path("session_id").asText()).isEqualTo("s-1");
-        assertThat(state.path("payload").path("snapshot").asText()).contains("\"schemaVersion\":1");
+        assertThat(state.path("payload").path("snapshot").asText()).contains("\"schemaVersion\":2");
     }
 
     @Test
@@ -129,7 +130,7 @@ class DefaultDiagnoseEngineTest {
 
         assertThat(summary.get().reason()).isEqualTo(ExitReason.SUCCESS);
         assertThat(summary.get().usage()).isEqualTo(new RunSummary.Usage(11, 7, 3));
-        assertThat(summary.get().stateSnapshot()).contains("\"schemaVersion\":1");
+        assertThat(summary.get().stateSnapshot()).contains("\"schemaVersion\":2");
         assertThat(summary.get().errorDetail()).isEmpty();
     }
 
@@ -184,6 +185,28 @@ class DefaultDiagnoseEngineTest {
         assertThat(summary.get().reason()).isEqualTo(ExitReason.ERROR);
         assertThat(summary.get().legacyExitCode()).isEqualTo(1);
         assertThat(summary.get().errorDetail()).contains("llm exploded");
+    }
+
+    @Test
+    void requiredDiagnosisReporterFailureCannotCompleteSuccessfully() {
+        StubLlmClient llm = new StubLlmClient().enqueue(AiMessage.text("done"));
+        DefaultDiagnoseEngine.EngineOptions options = new DefaultDiagnoseEngine.EngineOptions(
+                AgentBudget.unlimited(), null,
+                (diagnosisCase, context) -> {
+                    throw new IllegalStateException("report projection failed");
+                },
+                com.anthropic.agentkit.application.diagnosis.PlanGuardMode.OBSERVE, "");
+        DiagnoseEngine engine = new DefaultDiagnoseEngine(llm, new ToolRegistry(), options);
+        AtomicReference<RunSummary> summary = new AtomicReference<>();
+
+        engine.run(request(List.of()), lines::add, summary::set);
+
+        assertThat(summary.get().reason()).isEqualTo(ExitReason.ERROR);
+        assertThat(summary.get().outcome()).isEqualTo(DiagnosisOutcome.FAILED);
+        assertThat(summary.get().errorDetail()).contains("report projection failed");
+        assertThat(firstOfType("result").path("subtype").asText())
+                .isEqualTo("error_during_execution");
+        assertThat(firstOfType("result").path("is_error").asBoolean()).isTrue();
     }
 
     @Test

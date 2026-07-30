@@ -16,6 +16,9 @@ import com.anthropic.agentkit.domain.tool.ToolUseRequest;
 import com.anthropic.agentkit.infrastructure.diagnosis.DiagnosisToolBackends;
 import com.anthropic.agentkit.infrastructure.diagnosis.DiagnosisToolPolicy;
 import com.anthropic.agentkit.infrastructure.tools.support.HttpReader;
+import com.anthropic.agentkit.infrastructure.tools.support.BackendHealth;
+import com.anthropic.agentkit.infrastructure.tools.support.BackendRetryPolicy;
+import com.anthropic.agentkit.infrastructure.tools.support.ResilientLogQueryClient;
 import com.anthropic.agentkit.testsupport.StubLlmClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import ch.qos.logback.classic.Level;
@@ -29,6 +32,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -95,7 +99,9 @@ class DiagnoseEngineBuilderTest {
                 .enqueue(new AiMessage("", List.of(new ToolUseRequest(
                         new ToolUseId("log-1"),
                         "LogQuery",
-                        "{\"traceId\":\"trace-1\"}"))))
+                        "{\"traceId\":\"trace-1\",\"service\":\"agent-web\","
+                                + "\"startTime\":\"2026-07-30T00:00:00Z\","
+                                + "\"endTime\":\"2026-07-30T01:00:00Z\"}"))))
                 .enqueue(AiMessage.text("done"));
         DiagnosisToolBackends backends = DiagnosisToolBackends.builder()
                 .logQuery(request -> "log line")
@@ -285,6 +291,9 @@ class DiagnoseEngineBuilderTest {
                         new ToolUseId("report-1"), "submit_report", reportJson()))));
         DiagnoseEngine engine = DiagnoseEngineBuilder.create()
                 .llm(llm)
+                .tools(new ToolRegistry().register(
+                        com.anthropic.agentkit.testsupport.FakeTool.readOnlyReturning(
+                                "LogQuery", "ok")))
                 .structuredDiagnosis()
                 .build();
         List<String> lines = new ArrayList<>();
@@ -305,6 +314,71 @@ class DiagnoseEngineBuilderTest {
         assertThatThrownBy(() -> DiagnoseEngineBuilder.create().structuredDiagnosis())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("llm");
+    }
+
+    @Test
+    void operationalModeCanFailFastWhenNoEvidenceToolExists() {
+        assertThatThrownBy(() -> DiagnoseEngineBuilder.create()
+                .llm(new StubLlmClient())
+                .mode(DiagnosisMode.OPERATIONAL)
+                .readinessPolicy(ReadinessPolicy.failFast())
+                .build())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("OPERATIONAL", "evidence");
+    }
+
+    @Test
+    void operationalModeCanStartDegradedAndExposeSecretFreeReadiness() {
+        DiagnoseEngine unavailable = DiagnoseEngineBuilder.create()
+                .llm(new StubLlmClient())
+                .mode(DiagnosisMode.OPERATIONAL)
+                .readinessPolicy(ReadinessPolicy.degradedStartup())
+                .build();
+        DiagnoseEngine ready = DiagnoseEngineBuilder.create()
+                .llm(new StubLlmClient())
+                .mode(DiagnosisMode.OPERATIONAL)
+                .tools(new ToolRegistry().register(
+                        com.anthropic.agentkit.testsupport.FakeTool.readOnlyReturning(
+                                "LogQuery", "ok")))
+                .build();
+
+        assertThat(unavailable.readiness().status()).isEqualTo(
+                com.anthropic.agentkit.domain.diagnosis.ReadinessStatus.UNAVAILABLE);
+        assertThat(unavailable.readiness().reasonCode()).isEqualTo("EVIDENCE_TOOL_NOT_CONFIGURED");
+        assertThat(ready.readiness().status()).isEqualTo(
+                com.anthropic.agentkit.domain.diagnosis.ReadinessStatus.READY);
+        assertThat(ready.readiness().capabilities()).extracting(DiagnosisCapability::toolName)
+                .containsExactly("LogQuery");
+        assertThat(ready.readiness().toString()).doesNotContain("sk-", "Authorization", "http://");
+    }
+
+    @Test
+    void unavailableBackendHealthRemovesToolFromPlannerAndReadiness() {
+        ResilientLogQueryClient unhealthy = new ResilientLogQueryClient(
+                request -> "must-not-run", BackendRetryPolicy.noRetries(),
+                () -> new BackendHealth(
+                        com.anthropic.agentkit.domain.diagnosis.ReadinessStatus.UNAVAILABLE,
+                        "BACKEND_AUTHENTICATION_FAILED",
+                        Instant.parse("2026-07-30T04:00:00Z")));
+        DiagnosisToolBackends backends = DiagnosisToolBackends.builder()
+                .logQuery(unhealthy).build();
+
+        DiagnoseEngine engine = DiagnoseEngineBuilder.create()
+                .llm(new StubLlmClient())
+                .toolBackends(backends)
+                .mode(DiagnosisMode.OPERATIONAL)
+                .readinessPolicy(ReadinessPolicy.degradedStartup())
+                .build();
+
+        assertThat(engine.readiness().status()).isEqualTo(
+                com.anthropic.agentkit.domain.diagnosis.ReadinessStatus.UNAVAILABLE);
+        assertThat(engine.readiness().reasonCode())
+                .isEqualTo("BACKEND_AUTHENTICATION_FAILED");
+        assertThat(engine.readiness().capabilities()).singleElement().satisfies(capability -> {
+            assertThat(capability.toolName()).isEqualTo("LogQuery");
+            assertThat(capability.readiness()).isEqualTo(
+                    com.anthropic.agentkit.domain.diagnosis.ReadinessStatus.UNAVAILABLE);
+        });
     }
 
     private String typeOf(String line) {

@@ -13,13 +13,13 @@ public record DiagnosisReport(String summary, List<RootCauseCandidate> rootCause
                               List<String> missingInformation, double confidence, boolean needHumanCheck) {
 
     public DiagnosisReport {
-        if (summary == null || summary.isBlank()) {
-            throw new IllegalArgumentException("summary must not be blank");
-        }
+        summary = SecretDataPolicy.required(summary, "summary");
         rootCauseCandidates = List.copyOf(rootCauseCandidates);
-        keyEvidenceIds = List.copyOf(keyEvidenceIds);
-        recommendedActions = List.copyOf(recommendedActions);
-        missingInformation = List.copyOf(missingInformation == null ? List.of() : missingInformation);
+        keyEvidenceIds = SecretDataPolicy.sanitizeList(keyEvidenceIds, "keyEvidenceId");
+        recommendedActions = SecretDataPolicy.sanitizeList(
+                recommendedActions, "recommendedAction");
+        missingInformation = SecretDataPolicy.sanitizeList(
+                missingInformation, "missingInformation");
         if (confidence < 0 || confidence > 1) {
             throw new IllegalArgumentException("confidence must be between 0 and 1");
         }

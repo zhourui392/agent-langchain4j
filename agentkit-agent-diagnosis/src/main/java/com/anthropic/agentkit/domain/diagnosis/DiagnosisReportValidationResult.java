@@ -2,10 +2,15 @@ package com.anthropic.agentkit.domain.diagnosis;
 
 import java.util.List;
 
+/**
+ * Validation outcome whose public error descriptions are safe to log or return.
+ *
+ * @author alex
+ */
 public record DiagnosisReportValidationResult(boolean valid, List<String> errors) {
 
     public DiagnosisReportValidationResult {
-        errors = List.copyOf(errors);
+        errors = SecretDataPolicy.sanitizeList(errors, "error");
     }
 
     public static DiagnosisReportValidationResult ok() {

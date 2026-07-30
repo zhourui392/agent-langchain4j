@@ -9,7 +9,8 @@ import java.util.Objects;
  * @author zhourui(V33215020)
  * @since 2026-06-11
  */
-public record ToolGovernance(Duration timeout, ToolRedactor redactor, ToolAuditSink auditSink) {
+public record ToolGovernance(Duration timeout, ToolRedactor redactor, ToolAuditSink auditSink,
+                             ToolRateLimiter rateLimiter) {
 
     public ToolGovernance {
         Objects.requireNonNull(timeout, "timeout");
@@ -18,9 +19,15 @@ public record ToolGovernance(Duration timeout, ToolRedactor redactor, ToolAuditS
         }
         redactor = Objects.requireNonNull(redactor, "redactor");
         auditSink = Objects.requireNonNull(auditSink, "auditSink");
+        rateLimiter = Objects.requireNonNull(rateLimiter, "rateLimiter");
+    }
+
+    public ToolGovernance(Duration timeout, ToolRedactor redactor, ToolAuditSink auditSink) {
+        this(timeout, redactor, auditSink, ToolRateLimiter.UNLIMITED);
     }
 
     public static ToolGovernance defaults() {
-        return new ToolGovernance(Duration.ofSeconds(30), ToolRedactor.NO_OP, ToolAuditSink.NO_OP);
+        return new ToolGovernance(Duration.ofSeconds(30), ToolRedactor.NO_OP,
+                ToolAuditSink.NO_OP, ToolRateLimiter.UNLIMITED);
     }
 }

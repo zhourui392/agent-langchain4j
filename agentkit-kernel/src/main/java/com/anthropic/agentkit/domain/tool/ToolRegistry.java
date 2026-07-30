@@ -14,6 +14,7 @@ public final class ToolRegistry {
 
     private final Map<String, Tool> byName = new LinkedHashMap<>();
     private final List<ToolCatalog> catalogs = new ArrayList<>();
+    private long localGeneration;
 
     public ToolRegistry register(Tool tool) {
         Objects.requireNonNull(tool, "tool");
@@ -22,11 +23,13 @@ public final class ToolRegistry {
             throw new IllegalStateException("tool already registered: " + name);
         }
         byName.put(name, tool);
+        localGeneration++;
         return this;
     }
 
     public ToolRegistry registerCatalog(ToolCatalog catalog) {
         catalogs.add(Objects.requireNonNull(catalog, "catalog"));
+        localGeneration++;
         return this;
     }
 
@@ -73,6 +76,19 @@ public final class ToolRegistry {
         return List.copyOf(specs);
     }
 
+    public ToolRegistrySnapshot snapshot(ExecutionContext context) {
+        Objects.requireNonNull(context, "context");
+        Map<String, Tool> resolved = new LinkedHashMap<>(byName);
+        long generation = localGeneration;
+        for (ToolCatalog catalog : catalogs) {
+            ToolCatalogSnapshot snapshot = Objects.requireNonNull(
+                    catalog.snapshot(context), "tool catalog returned null snapshot");
+            merge(resolved, snapshot);
+            generation = combineGeneration(generation, snapshot);
+        }
+        return new ToolRegistrySnapshot(generation, List.copyOf(resolved.values()));
+    }
+
     private Map<String, Tool> resolved(ExecutionContext context) {
         Objects.requireNonNull(context, "context");
         Map<String, Tool> resolved = new LinkedHashMap<>(byName);
@@ -82,6 +98,15 @@ public final class ToolRegistry {
             merge(resolved, snapshot);
         }
         return resolved;
+    }
+
+    private static long combineGeneration(long current, ToolCatalogSnapshot snapshot) {
+        long result = 31 * current + snapshot.source().hashCode();
+        result = 31 * result + snapshot.generation();
+        for (Tool tool : snapshot.tools()) {
+            result = 31 * result + tool.name().hashCode();
+        }
+        return result;
     }
 
     private static void merge(Map<String, Tool> resolved, ToolCatalogSnapshot snapshot) {

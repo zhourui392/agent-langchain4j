@@ -2,9 +2,11 @@ package com.anthropic.agentkit.infrastructure.streamjson;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -26,7 +28,9 @@ import java.util.Objects;
 public final class ClaudeStreamJsonWriter {
 
     private final JsonNodeFactory nodes = JsonNodeFactory.instance;
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final ObjectMapper mapper = new ObjectMapper()
+            .registerModule(new JavaTimeModule())
+            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
     /** Token accounting echoed on the result event (agent-web persists it). */
     public record Usage(long inputTokens, long outputTokens, long cacheReadInputTokens) {
@@ -66,8 +70,27 @@ public final class ClaudeStreamJsonWriter {
     }
 
     public String inputJsonDelta(String partialJson) {
+        return inputJsonDelta(null, partialJson);
+    }
+
+    /**
+     * Writes one complete or partial tool-input fragment with an optional
+     * explicit call identifier. Claude's native stream associates deltas by
+     * block index; the identifier is a backwards-compatible extension used by
+     * asynchronous hosts that may consume adjacent events on different
+     * threads.
+     *
+     * @param toolUseId tool invocation identifier, or {@code null} for the
+     *                  index-only Claude-compatible form
+     * @param partialJson JSON fragment carried by the delta
+     * @return one compact stream-json line
+     */
+    public String inputJsonDelta(String toolUseId, String partialJson) {
         ObjectNode delta = nodes.objectNode();
         delta.put("type", "input_json_delta");
+        if (toolUseId != null && !toolUseId.isBlank()) {
+            delta.put("tool_use_id", toolUseId);
+        }
         delta.put("partial_json", partialJson);
         return streamEvent("content_block_delta", "delta", delta);
     }

@@ -49,4 +49,22 @@ class DiagnosisToolBackendsFactoryTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("jdbcUrl");
     }
+
+    @Test
+    void backendConfigurationStringProjectionNeverContainsConnectionsOrCredentials() {
+        DiagnosisBackendConfig config = new DiagnosisBackendConfig(
+                new DiagnosisBackendConfig.EsConfig("https://es.must-not-survive"),
+                new DiagnosisBackendConfig.MysqlConfig(
+                        "jdbc:mysql://db.must-not-survive/order", "user-must-not-survive",
+                        "password-must-not-survive"),
+                new DiagnosisBackendConfig.RedisConfig(
+                        "redis.must-not-survive", 6379, "redis-password-must-not-survive", 0),
+                new DiagnosisBackendConfig.LogQueryConfig(
+                        "https://logs.must-not-survive/query",
+                        Map.of("Authorization", "Bearer must-not-survive")), null, null);
+
+        assertThat(config.toString()).doesNotContain(
+                "must-not-survive", "Bearer", "jdbc:mysql", "https://", "Authorization")
+                .contains("***");
+    }
 }

@@ -1,5 +1,8 @@
 package com.anthropic.agentkit.interfaces.engine;
 
+import com.anthropic.agentkit.domain.diagnosis.SecretDataPolicy;
+
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -8,7 +11,8 @@ import java.util.Objects;
  * @author zhourui(V33215020)
  * @since 2026-06-13
  */
-public record RunSummary(ExitReason reason, String stateSnapshot, Usage usage, String errorDetail) {
+public record RunSummary(ExitReason reason, String stateSnapshot, Usage usage, String errorDetail,
+                         DiagnosisOutcome outcome, List<DiagnosisBlockerView> blockers) {
 
     private static final int EXIT_SUCCESS = 0;
     private static final int EXIT_CANCELLED = -1;
@@ -16,9 +20,15 @@ public record RunSummary(ExitReason reason, String stateSnapshot, Usage usage, S
 
     public RunSummary {
         reason = Objects.requireNonNull(reason, "reason");
-        stateSnapshot = stateSnapshot == null ? "" : stateSnapshot;
+        stateSnapshot = SecretDataPolicy.sanitize(stateSnapshot);
         usage = usage == null ? Usage.zero() : usage;
-        errorDetail = errorDetail == null ? "" : errorDetail;
+        errorDetail = SecretDataPolicy.sanitize(errorDetail);
+        outcome = outcome == null ? defaultOutcome(reason) : outcome;
+        blockers = List.copyOf(blockers == null ? List.of() : blockers);
+    }
+
+    public RunSummary(ExitReason reason, String stateSnapshot, Usage usage, String errorDetail) {
+        this(reason, stateSnapshot, usage, errorDetail, defaultOutcome(reason), List.of());
     }
 
     /**
@@ -31,6 +41,14 @@ public record RunSummary(ExitReason reason, String stateSnapshot, Usage usage, S
             case SUCCESS -> EXIT_SUCCESS;
             case STOPPED, TIMEOUT -> EXIT_CANCELLED;
             case ERROR, REJECTED -> EXIT_ERROR;
+        };
+    }
+
+    private static DiagnosisOutcome defaultOutcome(ExitReason reason) {
+        return switch (reason) {
+            case SUCCESS -> DiagnosisOutcome.COMPLETED;
+            case STOPPED, TIMEOUT -> DiagnosisOutcome.CANCELLED;
+            case ERROR, REJECTED -> DiagnosisOutcome.FAILED;
         };
     }
 

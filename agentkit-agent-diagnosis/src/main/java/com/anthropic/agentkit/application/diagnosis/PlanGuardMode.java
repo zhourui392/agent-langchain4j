@@ -1,5 +1,6 @@
 package com.anthropic.agentkit.application.diagnosis;
 
 public enum PlanGuardMode {
-    OBSERVE
+    OBSERVE,
+    ENFORCE
 }

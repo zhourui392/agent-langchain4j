@@ -76,7 +76,8 @@ class DubboInvokeToolTest {
                 args("10.0.0.1:20880", "com.x.UserService.queryUsers()"), ctx);
 
         assertThat(result.success()).isFalse();
-        assertThat(result.content()).contains("connection refused");
+        assertThat(result.content()).contains("backend request could not be completed")
+                .doesNotContain("connection refused");
     }
 
     @Test
@@ -93,7 +94,8 @@ class DubboInvokeToolTest {
 
     @Test
     void allowsExplicitMethod() {
-        DubboInvokeTool guardedTool = new DubboInvokeTool(client, Set.of("com.x.UserService.getUser"));
+        DubboInvokeTool guardedTool = new DubboInvokeTool(client,
+                Set.of("10.0.0.1:20880"), Set.of("com.x.UserService.getUser"));
         client.response = "ok";
 
         ToolResult result = guardedTool.execute(
@@ -101,6 +103,19 @@ class DubboInvokeToolTest {
 
         assertThat(result.success()).isTrue();
         assertThat(client.calls).isEqualTo(1);
+    }
+
+    @Test
+    void rejectsAddressOutsideExplicitAllowlistEvenWhenMethodIsAllowed() {
+        DubboInvokeTool guardedTool = new DubboInvokeTool(client,
+                Set.of("10.0.0.1:20880"), Set.of("com.x.UserService.getUser"));
+
+        ToolResult result = guardedTool.execute(
+                args("10.0.0.2:20880", "com.x.UserService.getUser(1)"), ctx);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.content()).containsIgnoringCase("address");
+        assertThat(client.calls).isZero();
     }
 
     @Test

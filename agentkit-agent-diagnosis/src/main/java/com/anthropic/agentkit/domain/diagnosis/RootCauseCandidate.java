@@ -12,17 +12,12 @@ public record RootCauseCandidate(String hypothesisId, String summary, List<Strin
                                  double confidence, boolean confirmed) {
 
     public RootCauseCandidate {
-        requireText(hypothesisId, "hypothesisId");
-        requireText(summary, "summary");
-        evidenceIds = List.copyOf(evidenceIds);
+        hypothesisId = SecretDataPolicy.required(hypothesisId, "hypothesisId");
+        summary = SecretDataPolicy.required(summary, "summary");
+        evidenceIds = SecretDataPolicy.sanitizeList(evidenceIds, "evidenceId");
         if (confidence < 0 || confidence > 1) {
             throw new IllegalArgumentException("confidence must be between 0 and 1");
         }
     }
 
-    private static void requireText(String value, String fieldName) {
-        if (value == null || value.isBlank()) {
-            throw new IllegalArgumentException(fieldName + " must not be blank");
-        }
-    }
 }

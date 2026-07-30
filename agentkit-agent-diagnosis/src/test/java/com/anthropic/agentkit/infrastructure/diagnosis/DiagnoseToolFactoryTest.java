@@ -47,7 +47,11 @@ class DiagnoseToolFactoryTest {
         assertThat(registry.names()).containsExactly(
                 "LogQuery", "EsRead", "MysqlRead", "RedisRead", "HttpGet", "DubboInvoke");
         ToolResult result = registry.find("LogQuery").execute(
-                ToolArguments.of(Map.of("traceId", "trace-1")), context());
+                ToolArguments.of(Map.of(
+                        "traceId", "trace-1",
+                        "service", "agent-web",
+                        "startTime", "2026-07-30T00:00:00Z",
+                        "endTime", "2026-07-30T01:00:00Z")), context());
         assertThat(result.content()).isEqualTo("token=***");
         assertThat(auditEvents).singleElement().satisfies(event -> {
             assertThat(event.toolName()).isEqualTo("LogQuery");
@@ -65,6 +69,23 @@ class DiagnoseToolFactoryTest {
                 .create(backends);
 
         assertThat(registry.names()).containsExactly("LogQuery");
+    }
+
+    @Test
+    void productionDefaultsRedactCredentialsEvenWithoutHostCustomization() {
+        DiagnosisToolBackends backends = DiagnosisToolBackends.builder()
+                .logQuery(request -> "Authorization: Bearer must-not-survive\n"
+                        + "api_key=must-not-survive")
+                .build();
+
+        ToolResult result = new DiagnoseToolFactory().create(backends).find("LogQuery").execute(
+                ToolArguments.of(Map.of(
+                        "level", "ERROR", "service", "agent-web",
+                        "startTime", "2026-07-30T00:00:00Z",
+                        "endTime", "2026-07-30T01:00:00Z")), context());
+
+        assertThat(result.content()).doesNotContain("must-not-survive", "Bearer")
+                .contains("Authorization: ***", "api_key=***");
     }
 
     private ToolGovernance governance() {

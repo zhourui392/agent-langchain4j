@@ -17,7 +17,8 @@ final class RunSummaryAdapter {
         AgentRunResult run = result.agentRunResult();
         return new RunSummary(
                 exitReason(run.stopReason()), result.stateSnapshot(), usage(run.usage()),
-                run.errorDetail().orElse(""));
+                run.errorDetail().orElse(""), result.outcome(),
+                result.blockers().stream().map(DiagnosisBlockerView::from).toList());
     }
 
     private static ExitReason exitReason(StopReason reason) {

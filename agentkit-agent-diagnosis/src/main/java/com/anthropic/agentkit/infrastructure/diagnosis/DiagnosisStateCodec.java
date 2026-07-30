@@ -5,6 +5,8 @@ import com.anthropic.agentkit.domain.diagnosis.DiagnosisPlan;
 import com.anthropic.agentkit.domain.diagnosis.DiagnosisStatus;
 import com.anthropic.agentkit.domain.diagnosis.Evidence;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.io.IOException;
@@ -19,9 +21,12 @@ import java.util.Optional;
  */
 public final class DiagnosisStateCodec {
 
-    private static final int SCHEMA_VERSION = 1;
+    private static final int SCHEMA_VERSION = 2;
 
-    private final ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private final ObjectMapper mapper = new ObjectMapper()
+            .registerModule(new JavaTimeModule())
+            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
 
     public String encode(DiagnosisCase diagnosisCase) {
         Snapshot snapshot = new Snapshot(
@@ -44,7 +49,7 @@ public final class DiagnosisStateCodec {
         }
         try {
             Snapshot snapshot = mapper.readValue(json, Snapshot.class);
-            if (snapshot.schemaVersion() != SCHEMA_VERSION) {
+            if (snapshot.schemaVersion() != 1 && snapshot.schemaVersion() != SCHEMA_VERSION) {
                 return Optional.empty();
             }
             return Optional.of(DiagnosisCase.restore(

@@ -1,5 +1,7 @@
 package com.anthropic.agentkit.interfaces.engine;
 
+import com.anthropic.agentkit.domain.diagnosis.OperationalContext;
+
 import java.util.List;
 import java.util.Objects;
 
@@ -20,12 +22,14 @@ public final class RunRequest {
     private final long timeoutSeconds;
     private final List<TurnMessage> history;
     private final String stateSnapshot;
+    private final OperationalContext operationalContext;
 
     private RunRequest(Builder builder) {
         this.workingDir = builder.workingDir;
         this.userMessage = builder.userMessage;
         this.sessionId = builder.sessionId;
-        this.env = builder.env;
+        this.operationalContext = resolveContext(builder);
+        this.env = resolveEnv(builder.env, operationalContext);
         this.timeoutSeconds = builder.timeoutSeconds;
         this.history = List.copyOf(builder.history);
         this.stateSnapshot = builder.stateSnapshot;
@@ -43,9 +47,14 @@ public final class RunRequest {
         return sessionId;
     }
 
-    /** Optional host-supplied constraint string; ignored by the MVP engine. */
+    /** @deprecated use {@link #operationalContext()} for typed host facts. */
+    @Deprecated
     public String env() {
         return env;
+    }
+
+    public OperationalContext operationalContext() {
+        return operationalContext;
     }
 
     public long timeoutSeconds() {
@@ -73,6 +82,7 @@ public final class RunRequest {
         private long timeoutSeconds;
         private List<TurnMessage> history = List.of();
         private String stateSnapshot = "";
+        private OperationalContext operationalContext;
 
         public Builder workingDir(String workingDir) {
             this.workingDir = workingDir;
@@ -91,6 +101,12 @@ public final class RunRequest {
 
         public Builder env(String env) {
             this.env = env;
+            return this;
+        }
+
+        public Builder operationalContext(OperationalContext operationalContext) {
+            this.operationalContext = Objects.requireNonNull(
+                    operationalContext, "operationalContext");
             return this;
         }
 
@@ -115,5 +131,26 @@ public final class RunRequest {
             Objects.requireNonNull(sessionId, "sessionId");
             return new RunRequest(this);
         }
+    }
+
+    private static OperationalContext resolveContext(Builder builder) {
+        OperationalContext context = builder.operationalContext == null
+                ? OperationalContext.legacy(builder.env) : builder.operationalContext;
+        if (hasText(builder.env) && context.hasKnownEnvironment()
+                && !builder.env.trim().equals(context.environment().name())) {
+            throw new IllegalArgumentException("env conflicts with operationalContext.environment");
+        }
+        return context;
+    }
+
+    private static String resolveEnv(String env, OperationalContext context) {
+        if (hasText(env)) {
+            return env.trim();
+        }
+        return context.hasKnownEnvironment() ? context.environment().name() : null;
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 }

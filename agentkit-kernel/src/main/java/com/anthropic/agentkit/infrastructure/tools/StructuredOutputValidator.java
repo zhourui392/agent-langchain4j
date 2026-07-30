@@ -15,7 +15,7 @@ final class StructuredOutputValidator {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Set<String> SUPPORTED_KEYWORDS = Set.of(
             "$schema", "title", "description", "default", "type", "properties",
-            "required", "additionalProperties", "items", "enum");
+            "required", "additionalProperties", "items", "enum", "minItems", "minLength");
 
     private final JsonNode schema;
 
@@ -41,7 +41,9 @@ final class StructuredOutputValidator {
         if ("object".equals(type)) {
             validateObject(value, schema, path, errors);
         } else if ("array".equals(type)) {
-            validateArray(value, schema.path("items"), path, errors);
+            validateArray(value, schema, path, errors);
+        } else if ("string".equals(type)) {
+            validateString(value, schema, path, errors);
         }
     }
 
@@ -75,14 +77,28 @@ final class StructuredOutputValidator {
         });
     }
 
-    private static void validateArray(JsonNode value, JsonNode itemSchema,
+    private static void validateArray(JsonNode value, JsonNode schema,
                                       String path, List<String> errors) {
+        int minItems = schema.path("minItems").asInt(0);
+        if (value.size() < minItems) {
+            errors.add(label(path) + " must contain at least " + minItems + " item(s)");
+        }
+        JsonNode itemSchema = schema.path("items");
         if (itemSchema.isMissingNode()) {
             return;
         }
         for (int index = 0; index < value.size(); index++) {
             validateNode(value.get(index), itemSchema,
                     label(path) + "[" + index + "]", errors);
+        }
+    }
+
+    private static void validateString(JsonNode value, JsonNode schema,
+                                       String path, List<String> errors) {
+        int minLength = schema.path("minLength").asInt(0);
+        if (value.textValue().length() < minLength) {
+            errors.add(label(path) + " must contain at least "
+                    + minLength + " character(s)");
         }
     }
 

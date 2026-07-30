@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -85,7 +86,22 @@ class RedisReadToolTest {
         ToolResult result = tool.execute(args("GET k"), ctx);
 
         assertThat(result.success()).isFalse();
-        assertThat(result.content()).contains("connection refused");
+        assertThat(result.content()).contains("backend request could not be completed")
+                .doesNotContain("connection refused");
+    }
+
+    @Test
+    void enforcesKeyPrefixAndBoundedScanPatternAndCount() {
+        RedisReadTool guarded = new RedisReadTool(client, Set.of("orders:"));
+
+        assertThat(guarded.execute(args("GET users:1"), ctx).success()).isFalse();
+        assertThat(guarded.execute(args("GET orders:1"), ctx).success()).isTrue();
+        assertThat(guarded.execute(args("SCAN 0"), ctx).success()).isFalse();
+        assertThat(guarded.execute(args("SCAN 0 MATCH * COUNT 100"), ctx).success()).isFalse();
+        assertThat(guarded.execute(
+                args("SCAN 0 MATCH orders:* COUNT 100000"), ctx).success()).isFalse();
+        assertThat(guarded.execute(
+                args("SCAN 0 MATCH orders:* COUNT 100"), ctx).success()).isTrue();
     }
 
     @Test

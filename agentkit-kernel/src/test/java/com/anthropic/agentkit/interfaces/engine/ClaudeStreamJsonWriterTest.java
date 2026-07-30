@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -46,9 +47,10 @@ class ClaudeStreamJsonWriterTest {
         assertThat(cb.get("id").asText()).isEqualTo("tu-1");
         assertThat(cb.get("name").asText()).isEqualTo("LogQuery");
 
-        JsonNode delta = parse(writer.inputJsonDelta("{\"q\":\"err\"}"));
+        JsonNode delta = parse(writer.inputJsonDelta("tu-1", "{\"q\":\"err\"}"));
         JsonNode d = delta.get("event").get("delta");
         assertThat(d.get("type").asText()).isEqualTo("input_json_delta");
+        assertThat(d.get("tool_use_id").asText()).isEqualTo("tu-1");
         assertThat(d.get("partial_json").asText()).isEqualTo("{\"q\":\"err\"}");
 
         JsonNode stop = parse(writer.contentBlockStop());
@@ -123,6 +125,15 @@ class ClaudeStreamJsonWriterTest {
 
         assertThat(n.get("type").asText()).isEqualTo("diagnosis_evidence");
         assertThat(n.get("payload").get("count").asInt()).isEqualTo(3);
+    }
+
+    @Test
+    void writesExtensionEventWithJavaTimeAsIsoText() throws Exception {
+        JsonNode n = parse(writer.extensionEvent("diagnosis_plan", Map.of(
+                "startInclusive", Instant.parse("2026-07-30T00:00:00Z"))));
+
+        assertThat(n.path("payload").path("startInclusive").asText())
+                .isEqualTo("2026-07-30T00:00:00Z");
     }
 
     private JsonNode parse(String line) throws Exception {

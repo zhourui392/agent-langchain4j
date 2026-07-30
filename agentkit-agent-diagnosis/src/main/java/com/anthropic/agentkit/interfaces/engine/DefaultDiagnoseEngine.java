@@ -6,6 +6,7 @@ import com.anthropic.agentkit.application.diagnosis.PlanGuardMode;
 import com.anthropic.agentkit.domain.agent.AgentBudget;
 import com.anthropic.agentkit.domain.conversation.Conversation;
 import com.anthropic.agentkit.domain.conversation.SessionId;
+import com.anthropic.agentkit.domain.diagnosis.DiagnosisResourceCatalog;
 import com.anthropic.agentkit.domain.port.LlmClient;
 import com.anthropic.agentkit.domain.tool.ToolRegistry;
 import com.anthropic.agentkit.infrastructure.diagnosis.DiagnosisStateCodec;
@@ -41,6 +42,7 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
     private final Semaphore concurrency;
     private final long closeDrainSeconds;
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final DiagnosisReadiness readiness;
 
     public DefaultDiagnoseEngine(LlmClient llm, ToolRegistry tools) {
         this(llm, tools, AgentBudget.unlimited());
@@ -70,9 +72,16 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
                 config.reporter(),
                 config.guardMode(),
                 config.promptPack(),
-                config.skillsCatalog()));
+                config.skillsCatalog(),
+                config.resourceCatalog()));
         this.concurrency = semaphore(config.maxConcurrentRuns());
         this.closeDrainSeconds = config.closeDrainSeconds();
+        this.readiness = config.readiness();
+    }
+
+    @Override
+    public DiagnosisReadiness readiness() {
+        return readiness;
     }
 
     @Override
@@ -237,24 +246,54 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
 
     public record EngineOptions(AgentBudget budget, DiagnosisPlanner planner, DiagnosisReporter reporter,
                                 PlanGuardMode guardMode, String promptPack, String skillsCatalog,
-                                int maxConcurrentRuns, long closeDrainSeconds) {
+                                int maxConcurrentRuns, long closeDrainSeconds,
+                                DiagnosisReadiness readiness,
+                                DiagnosisResourceCatalog resourceCatalog) {
+
+        public EngineOptions(AgentBudget budget, DiagnosisPlanner planner, DiagnosisReporter reporter,
+                             PlanGuardMode guardMode, String promptPack, String skillsCatalog,
+                             int maxConcurrentRuns, long closeDrainSeconds,
+                             DiagnosisReadiness readiness) {
+            this(budget, planner, reporter, guardMode, promptPack, skillsCatalog,
+                    maxConcurrentRuns, closeDrainSeconds, readiness,
+                    DiagnosisResourceCatalog.empty());
+        }
 
         public EngineOptions(AgentBudget budget, DiagnosisPlanner planner, DiagnosisReporter reporter,
                              PlanGuardMode guardMode, String promptPack) {
-            this(budget, planner, reporter, guardMode, promptPack, "", 0, DEFAULT_CLOSE_DRAIN_SECONDS);
+            this(budget, planner, reporter, guardMode, promptPack, "", 0,
+                    DEFAULT_CLOSE_DRAIN_SECONDS, DiagnosisReadiness.conversational(),
+                    DiagnosisResourceCatalog.empty());
         }
 
         public EngineOptions(AgentBudget budget, DiagnosisPlanner planner, DiagnosisReporter reporter,
                              PlanGuardMode guardMode, String promptPack, String skillsCatalog) {
             this(budget, planner, reporter, guardMode, promptPack,
-                    skillsCatalog, 0, DEFAULT_CLOSE_DRAIN_SECONDS);
+                    skillsCatalog, 0, DEFAULT_CLOSE_DRAIN_SECONDS,
+                    DiagnosisReadiness.conversational(), DiagnosisResourceCatalog.empty());
+        }
+
+        public EngineOptions(AgentBudget budget, DiagnosisPlanner planner, DiagnosisReporter reporter,
+                             PlanGuardMode guardMode, String promptPack, String skillsCatalog,
+                             DiagnosisReadiness readiness) {
+            this(budget, planner, reporter, guardMode, promptPack,
+                    skillsCatalog, 0, DEFAULT_CLOSE_DRAIN_SECONDS, readiness,
+                    DiagnosisResourceCatalog.empty());
+        }
+
+        public EngineOptions(AgentBudget budget, DiagnosisPlanner planner, DiagnosisReporter reporter,
+                             PlanGuardMode guardMode, String promptPack, String skillsCatalog,
+                             DiagnosisReadiness readiness, DiagnosisResourceCatalog resourceCatalog) {
+            this(budget, planner, reporter, guardMode, promptPack,
+                    skillsCatalog, 0, DEFAULT_CLOSE_DRAIN_SECONDS, readiness, resourceCatalog);
         }
 
         public EngineOptions(AgentBudget budget, DiagnosisPlanner planner, DiagnosisReporter reporter,
                              PlanGuardMode guardMode, String promptPack,
                              int maxConcurrentRuns, long closeDrainSeconds) {
             this(budget, planner, reporter, guardMode, promptPack,
-                    "", maxConcurrentRuns, closeDrainSeconds);
+                    "", maxConcurrentRuns, closeDrainSeconds,
+                    DiagnosisReadiness.conversational(), DiagnosisResourceCatalog.empty());
         }
 
         public EngineOptions {
@@ -262,6 +301,9 @@ public final class DefaultDiagnoseEngine implements DiagnoseEngine {
             Objects.requireNonNull(guardMode, "guardMode");
             promptPack = promptPack == null ? "" : promptPack;
             skillsCatalog = skillsCatalog == null ? "" : skillsCatalog;
+            readiness = Objects.requireNonNull(readiness, "readiness");
+            resourceCatalog = resourceCatalog == null
+                    ? DiagnosisResourceCatalog.empty() : resourceCatalog;
             if (closeDrainSeconds <= 0) {
                 closeDrainSeconds = DEFAULT_CLOSE_DRAIN_SECONDS;
             }

@@ -13,15 +13,16 @@ public record DiagnosisStep(String id, String goal, String hypothesisId, List<St
                             StepStatus status, String resultSummary) {
 
     public DiagnosisStep {
-        requireText(id, "id");
-        requireText(goal, "goal");
-        requireText(hypothesisId, "hypothesisId");
-        allowedTools = List.copyOf(Objects.requireNonNull(allowedTools, "allowedTools"));
+        id = SecretDataPolicy.required(id, "id");
+        goal = SecretDataPolicy.required(goal, "goal");
+        hypothesisId = SecretDataPolicy.required(hypothesisId, "hypothesisId");
+        allowedTools = SecretDataPolicy.sanitizeList(
+                Objects.requireNonNull(allowedTools, "allowedTools"), "allowedTool");
         if (allowedTools.isEmpty()) {
             throw new IllegalArgumentException("allowedTools must not be empty");
         }
         status = Objects.requireNonNull(status, "status");
-        resultSummary = resultSummary == null ? "" : resultSummary;
+        resultSummary = SecretDataPolicy.sanitize(resultSummary);
     }
 
     public boolean canUseTool(String toolName) {
@@ -29,9 +30,4 @@ public record DiagnosisStep(String id, String goal, String hypothesisId, List<St
                 && allowedTools.contains(toolName);
     }
 
-    private static void requireText(String value, String fieldName) {
-        if (value == null || value.isBlank()) {
-            throw new IllegalArgumentException(fieldName + " must not be blank");
-        }
-    }
 }

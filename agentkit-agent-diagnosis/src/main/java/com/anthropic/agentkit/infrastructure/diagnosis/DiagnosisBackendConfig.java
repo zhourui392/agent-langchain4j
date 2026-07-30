@@ -19,6 +19,11 @@ public record DiagnosisBackendConfig(EsConfig es,
         public EsConfig {
             baseUrl = required(baseUrl, "baseUrl");
         }
+
+        @Override
+        public String toString() {
+            return "EsConfig[baseUrl=***]";
+        }
     }
 
     public record MysqlConfig(String jdbcUrl, String user, String password) {
@@ -26,6 +31,11 @@ public record DiagnosisBackendConfig(EsConfig es,
             jdbcUrl = required(jdbcUrl, "jdbcUrl");
             user = required(user, "user");
             password = required(password, "password");
+        }
+
+        @Override
+        public String toString() {
+            return "MysqlConfig[jdbcUrl=***, user=***, password=***]";
         }
     }
 
@@ -39,12 +49,23 @@ public record DiagnosisBackendConfig(EsConfig es,
                 throw new IllegalArgumentException("database must be non-negative");
             }
         }
+
+        @Override
+        public String toString() {
+            return "RedisConfig[host=***, port=" + port
+                    + ", password=***, database=" + database + "]";
+        }
     }
 
     public record LogQueryConfig(String endpointUrl, Map<String, String> headers) {
         public LogQueryConfig {
             endpointUrl = required(endpointUrl, "endpointUrl");
             headers = headers == null ? Map.of() : Map.copyOf(headers);
+        }
+
+        @Override
+        public String toString() {
+            return "LogQueryConfig[endpointUrl=***, headers=***]";
         }
     }
 

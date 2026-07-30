@@ -33,6 +33,7 @@ import java.util.List;
 
 import static com.anthropic.agentkit.testsupport.TestRunContexts.runContext;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class AgentExecutorRunEventTest {
 
@@ -109,6 +110,22 @@ class AgentExecutorRunEventTest {
         assertThat(result.stopReason()).isEqualTo(StopReason.MODEL_COMPLETED);
         assertThat(read.callCount()).isOne();
         assertThat(store.events.getLast()).isInstanceOf(RunEvent.RunStopped.class);
+    }
+
+    @Test
+    void requiredListenerFailureFailsTheRun() {
+        StubLlmClient llm = new StubLlmClient().enqueue(AiMessage.text("done"));
+        Conversation conversation = conversation("required-listener");
+        RequiredAgentEventListener listener = new RequiredAgentEventListener() {
+            @Override
+            public void onTurnComplete(AiMessage finalMessage) {
+                throw new IllegalStateException("required projection failed");
+            }
+        };
+
+        assertThatThrownBy(() -> executor(llm, new ToolRegistry(), new MemoryStore())
+                .run(conversation, runContext(conversation), listener).join())
+                .hasRootCauseMessage("required projection failed");
     }
 
     @Test

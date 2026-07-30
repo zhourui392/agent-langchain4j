@@ -69,6 +69,46 @@ class DiagnosisCaseTest {
         assertThat(diagnosisCase.status()).isEqualTo(DiagnosisStatus.NEED_INFO);
     }
 
+    @Test
+    void systemCapabilityBlockerMovesCaseToBlockedInsteadOfNeedInfo() {
+        DiagnosisCase diagnosisCase = DiagnosisCase.open("case-1", "query logs");
+        diagnosisCase.adoptPlan(plan(StepStatus.PENDING));
+        DiagnosisBlocker blocker = new DiagnosisBlocker(
+                DiagnosisBlockerType.CAPABILITY_UNAVAILABLE, "LOG_QUERY_NOT_CONFIGURED",
+                "LogQuery is not configured", "Configure a read-only log backend", false);
+
+        diagnosisCase.block(List.of(blocker));
+
+        assertThat(diagnosisCase.status()).isEqualTo(DiagnosisStatus.BLOCKED);
+        assertThat(diagnosisCase.blockers()).containsExactly(blocker);
+        assertThatThrownBy(() -> diagnosisCase.block(List.of()))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void completedCaseCanStartFollowUpWithoutLosingPriorState() {
+        DiagnosisCase diagnosisCase = DiagnosisCase.open("case-1", "order failed");
+        DiagnosisPlan priorPlan = plan(StepStatus.DONE);
+        diagnosisCase.adoptPlan(priorPlan);
+        diagnosisCase.recordModelInference("release regression suspected");
+        diagnosisCase.markDone();
+
+        diagnosisCase.startFollowUp();
+
+        assertThat(diagnosisCase.status()).isEqualTo(DiagnosisStatus.PLANNING);
+        assertThat(diagnosisCase.plan()).isSameAs(priorPlan);
+        assertThat(diagnosisCase.ledger().all()).hasSize(1);
+    }
+
+    @Test
+    void followUpCannotStartBeforeCaseIsCompleted() {
+        DiagnosisCase diagnosisCase = DiagnosisCase.open("case-1", "order failed");
+
+        assertThatThrownBy(diagnosisCase::startFollowUp)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("PLANNING");
+    }
+
     private static DiagnosisPlan plan(StepStatus status) {
         return new DiagnosisPlan(
                 "订单失败",

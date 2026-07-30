@@ -28,8 +28,8 @@ public final class AnthropicLlmClientFactory implements LlmClientFactory {
                 .modelName(config.model())
                 .maxTokens(config.maxTokens())
                 .timeout(Duration.ofSeconds(60))
-                .logRequests(true)
-                .logResponses(true)
+                .logRequests(false)
+                .logResponses(false)
                 .cacheSystemMessages(cacheStrategy.cacheSystemPrompt())
                 .cacheTools(cacheStrategy.cacheToolDefinitions());
         config.baseUrlIfPresent()

@@ -7,6 +7,7 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.io.ByteArrayOutputStream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,6 +24,7 @@ public final class SocketDubboTelnetClient implements DubboTelnetClient {
 
     private static final Logger log = LoggerFactory.getLogger(SocketDubboTelnetClient.class);
     private static final String PROMPT = "dubbo>";
+    private static final int MAX_RESPONSE_BYTES = 1024 * 1024;
 
     @Override
     public String invoke(String address, String invocation, Duration timeout) throws IOException {
@@ -53,17 +55,21 @@ public final class SocketDubboTelnetClient implements DubboTelnetClient {
         out.flush();
     }
 
-    private static String readUntilPrompt(InputStream in) throws IOException {
-        StringBuilder buffer = new StringBuilder();
+    static String readUntilPrompt(InputStream in) throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         byte[] chunk = new byte[1024];
         int read;
         while ((read = in.read(chunk)) != -1) {
-            buffer.append(new String(chunk, 0, read, StandardCharsets.UTF_8));
-            if (buffer.indexOf(PROMPT) >= 0) {
+            if (buffer.size() + read > MAX_RESPONSE_BYTES) {
+                throw new IOException("dubbo response exceeded the configured limit");
+            }
+            buffer.write(chunk, 0, read);
+            String response = buffer.toString(StandardCharsets.UTF_8);
+            if (response.contains(PROMPT)) {
                 break;
             }
         }
-        return stripPrompt(buffer.toString());
+        return stripPrompt(buffer.toString(StandardCharsets.UTF_8));
     }
 
     private static String stripPrompt(String response) {

@@ -2,7 +2,10 @@ package com.anthropic.agentkit.domain.diagnosis;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -48,6 +51,20 @@ class DiagnosisPlanTest {
 
         assertThat(plan.needsMoreInformation()).isTrue();
         assertThat(plan.missingInputs()).containsExactly("timeWindow", "traceId");
+    }
+
+    @Test
+    void carriesTypedDiagnosisScopeWhileKeepingLegacyConstructors() {
+        DiagnosisScope scope = new DiagnosisScope(
+                EnvironmentRef.named("test"), Set.of("agent-web"),
+                new TimeWindow(Instant.parse("2026-07-30T00:00:00Z"),
+                        Instant.parse("2026-07-30T02:00:00Z")), Map.of(), Map.of());
+        DiagnosisPlan scoped = new DiagnosisPlan(
+                "errors", List.of(Hypothesis.open("H1", "application error", 0.4)),
+                List.of(step("S1", "H1", StepStatus.PENDING)), List.of(), scope);
+
+        assertThat(scoped.scope()).isEqualTo(scope);
+        assertThat(new DiagnosisPlan("hello", List.of(), List.of()).scope().isKnown()).isFalse();
     }
 
     private static DiagnosisStep step(String id, String hypothesisId, StepStatus status) {

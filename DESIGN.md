@@ -903,7 +903,80 @@ CLI 是 kernel runtime 的一个宿主，不是第二套执行语义。命令发
 
 ---
 
+### 16.24 诊断运行上下文、能力就绪度与环境绑定（2026-07-30）
+
+NATIVE 真实接入证明：模型 Provider 可用、Planner/Reporter/状态机可运行，不代表诊断数据源可用。完整方案见 [`docs/diagnosis-agent-production-capability-completion-design.md`](docs/diagnosis-agent-production-capability-completion-design.md)，实施工作包见 `TASKLIST.md` S11。
+
+| 决策面 | 选型 | 不变量 / 后果 |
+|---|---|---|
+| 运行上下文 | diagnosis `RunRequest` 增加 typed `OperationalContext`，包含宿主时钟/时区、环境、默认服务和非敏感数据源视图；旧 `env` 保留兼容期 | Planner 不再从用户 Prompt 猜宿主已知事实；上下文禁止 credential/Endpoint header 等 secret，未知值显式 unknown |
+| 诊断范围 | `DiagnosisScope` + absolute `TimeWindow` 进入 Plan 和 snapshot；相对时间由宿主 now/zone 的确定性 resolver 归一化 | 工具查询范围必须是 Plan scope 子集；prod 最大窗口、service/index/tenant 由策略和 catalog 强制，模型不能扩大 |
+| 阻塞语义 | USER_INPUT_REQUIRED 与 CAPABILITY_UNAVAILABLE/BACKEND_UNHEALTHY/ENVIRONMENT_MISMATCH/POLICY_DENIED 分离；RunSummary 增加 diagnosis outcome | 只有用户可行动缺口才渲染“请补充”；零工具不再伪装成信息不足，waiting/budget 不再与正常完成混淆 |
+| 能力真相 | 一次 run 固定一个不可变 capability generation，同时交给 Planner、PlanGuard 和 Executor；static manifest 与 runtime readiness 分开 | 动态 ToolCatalog refresh 不改变进行中 run；Planner 和执行器不可能看到不同工具集合；UNAVAILABLE 工具不进入计划 |
+| 运行模式 | diagnosis 明确 CONVERSATIONAL / OPERATIONAL；OPERATIONAL 支持 fail-fast 或 degraded startup，并暴露 secret-free readiness | 模型连接成功不等于自主诊断 ready；宿主管理面必须分别展示模型、工具、数据源和整体 readiness |
+| 环境隔离 | P0 采用 one DiagnoseEngine per environment，每个 Engine 绑定独立 ToolRegistry、Backend 和 SecretScope | Prompt 不能切换环境、Endpoint 或 credential；只有宿主授权/路由能选择 prod；真实需要出现前不把 diagnosis env 下沉 kernel |
+| 首条工具闭环 | 先实现 host-allowlisted LocalFileLogQueryClient，再硬化 HTTP 并扩展 ES/Loki 日志语义 adapter | 不开放任意 Bash/path/glob；所有查询受 real-path、时间窗、目标、files/lines/bytes/deadline 和脱敏约束 |
+| 证据合同 | query ToolResult 使用稳定 metadata 保存 dataSource/environment/service/time/matched/truncated/status/duration/error；Evidence summary 与 raw excerpt 分离 | 大正文可截断但来源/范围/状态不丢；模型推断不能单独确认根因；发布门禁必须证明真实 tool-use/result/Evidence |
+
+本节不把 Spring、服务目录内容、真实连接配置、用户环境授权或 Web readiness UI 下沉到库；这些继续由 agent-web 宿主拥有。kernel 只在 run-scoped tool snapshot 必要处提供领域无关 primitive，不引入 prod/test、日志平台或 diagnosis blocker 术语。
+
+---
+
+### 16.25 诊断生产能力完成与真实 Provider 结论（2026-07-30）
+
+`#DIA-60～#DIA-75` 已完成代码、自动化和受控真实 Provider 验收。HTTP、Elasticsearch、Loki
+均是受 host binding 限制的日志语义 adapter，不向模型暴露任意 endpoint/index/tenant/query；
+agent-web 以 one-engine-per-environment 路由并为每个 Engine 固定 capability/resource generation、
+SecretScope 和 readiness。完整证据和部署边界见
+[`docs/diagnosis-agent-production-capability-completion-design.md`](docs/diagnosis-agent-production-capability-completion-design.md)。
+
+真实 OpenAI-compatible smoke 进一步固化以下设计决定：
+
+| 决策面 | 最终决定 | 不变量 / 后果 |
+|---|---|---|
+| replan facts | `DiagnosisPlanner.updatePlan` 接收并继承 conversation、OperationalContext、capability/resource snapshot 与 AgentRunContext | 首次工具参数错误或 backend evidence 不能让环境、绝对时间窗、服务和数据源退化为 unknown；terminal blocker 必须停止后续 Agent loop |
+| 主 Agent scope | Executor system prompt 注入 host-approved environment/services/absolute range/allowed tools/identifiers，OPERATIONAL host 启用 `PlanGuardMode.ENFORCE` | 每次 LogQuery 必须使用同一 service 和绝对范围，不得把 endTime 推到 host now 之后或扩大环境 |
+| 本机日志扫描 | 候选文件确定性排序，按剩余文件公平分配全局 line/byte budget，并从各文件最近尾部读取 | 单个大日志不能饿死后续候选；最近时间窗无需从多年文件开头顺序扫描；real-path/symlink/allowlist/deadline 不变 |
+| Evidence projection | Evidence excerpt 有界保留头尾；Reporter context 同时携带 rawExcerpt、toolUseId 和 metadata，并标为 untrusted data | Reporter 不得在正文/堆栈已存在时声称信息缺失；日志内容不能变成 prompt instruction；metadata 与引用关系不因正文截断丢失 |
+| checkpoint 时间格式 | `DiagnosisStateCodec` 对新 snapshot 禁用 timestamp 写法，v2 `Instant` 使用 ISO-8601；decode 继续接受旧数字 timestamp | checkpoint 的人读/跨语言合同稳定；旧 v2 状态无需批量迁移，下一次编码自动转为 ISO-8601 |
+| NATIVE stream correlation | `input_json_delta` 显式携带非敏感 `tool_use_id`；旧 block-index 只作兼容 fallback，缺失 start input 规范化为 `{}` | 跨线程消费不再依赖 ThreadLocal；SQLite `input_json` 必须是完整 JSON object，不能是字面量 `null` |
+| stream producer 并发 | `ClaudeStreamJsonListener` 对 init/usage/content-block/consumer emit 使用统一串行化边界，宿主 tracker 的 accept/finish 同步 | 并行工具完成不能并发进入 host consumer、丢结果或留下孤儿 STARTED；每个 tool_result 恰好一次 |
+| 全状态 secret boundary | `SecretDataPolicy` 进入 OperationalContext、Scope、Plan、Evidence、Hypothesis、Report、Blocker、RunSummary 与 StateCodec 边界；安全占位符保持幂等 | credential/Authorization/password/endpoint 不得因 replan、snapshot 或 error projection 重新出现；`***`/`[REDACTED]` 不被二次处理成误报 |
+| 工具/网络治理 | 每环境/工具共享 fixed-window rate limit；HTTP/ES/Loki 使用宿主固定 binding、DNS/IP 校验和连接目标固定；MySQL/Redis/Dubbo 强制 allowlist、deadline、行/字节/迭代上限 | 模型不能改 endpoint、目标、schema、tenant、method 或扩大资源预算；Provider request/response body 日志默认关闭 |
+| 运维合同 | agent-web 导出九类 diagnosis metrics、secret-free readiness、结构化 audit 和 Prometheus alerts；本地/CI Provider smoke 只保留脱敏报告与安全错误分类 | 生产可用声明必须同时有采集 target、告警接收人和 readiness；控制台/Artifact 不输出 credential、完整 endpoint 或 HTTP payload |
+| Provider/Secret | NATIVE 使用宿主专用 API key/base URL 配置，不隐式回退通用 OpenAI CLI 变量；模型 smoke 为 `gpt-5.6-sol` | Provider key 不进入 repository、命令参数、日志、SSE、SQLite、测试报告或 JAR；readiness 只暴露配置状态，不回显值 |
+
+最终受控 run（标识与 fixture 已在验收后清理）为 `SUCCEEDED`：9 次真实 `LogQuery` 全部成功，
+9 条 Evidence 的 toolUseId 与 LIVE invocation 一一对应，9 条 `input_json` 全部为完整 JSON object；
+checkpoint 为 schemaVersion 2 / DONE，ISO-8601 时间窗精确 7200 秒。持久化事件为 2 个 run status、
+998 个 chunk、1 个 terminal，含 9 个 tool-use start 和 9 个带显式 tool_use_id 的 input delta。
+AgentKit kernel 700、diagnosis 252，合计 952（0 failure/error，2 skipped，另有 kernel IT 4/4）；
+agent-web 完整非 live 1552/1552、JaCoCo 与 ArchitectureTest 通过，启动脚本另通过 1468/1468。
+Vite 生产构建资源已进入 fat JAR；Java 21 验收进程 PID 2389464，target/app JAR 哈希一致，制品含
+diagnosis/kernel、不含 CLI，health/prometheus 200、管理员 readiness READY。全范围 secret scan
+（含普通/gzip 日志和 SQLite 物理页）为 0，`integrity_check=ok`。PMD/P3C 已执行，704 条既有告警
+仍是非阻断存量基线，不能表述为零告警。
+
+报告中的 `missingInformation` 会作为后续补证建议投影；只有 Plan missingInputs/NEED_INFO 才表示
+当前 run 等待用户。最终 run 的 Plan missingInputs/blockers 均为 0，Web stream renderer 忽略该
+非文本扩展事件，因此不会把成功报告错误展示成“继续诊断还需要”。
+
+宿主 SQLite 对 `BUSY`/`LOCKED`（含 shared-cache 扩展码）的 ChatRun 写入、工具完成态写入和
+启动恢复读取统一采用最多 6 次有界退避，非锁错误不重试；这保证发布门禁与真实 CHAT 流不会因
+瞬态表锁留下 `STARTED` 工具或把 NATIVE 错误映射为通用失败。生产代码/合同完成不代表任意环境
+自动拥有生产数据权限，目标环境仍必须配置独立只读 Backend/Secret/授权/采集/告警并完成灰度。
+
+仍保留三个后续改进点，但不改变 S11 完成状态：
+
+1. 并行工具结果应按 batch 合并后只 replan 一次，降低 Provider 调用、token 和延迟；
+2. case DONE 时应把最终 plan step 状态收敛为完成/跳过，而不是仅依赖 case/report 终态；
+3. 宿主需要为保留的 ChatRun 审计行定义正式 retention/cleanup job，不能由一次会话删除隐式猜测。
+
+---
+
 ## 17. 下一步
 
-1. S10 `#47–#55` 已全部完成；下一项不是默认继续扩 kernel，而是由真实宿主需求选择产品级 agent adapter 或 branch UX。
-2. #56 仅在事件日志规模、多 writer 或 retention 需求真实触发时立项。
+1. S10 `#47–#55` 与 S11 `#DIA-60～#DIA-75` 已全部完成；下一项优先由真实宿主负载决定是
+   batch replan/plan projection 优化，还是某个 prod 环境的只读 Backend 灰度，不默认继续扩 kernel。
+2. #56 仅在事件日志规模、多 writer 或 retention 需求真实触发时立项；agent-web ChatRun 审计
+   retention 属于宿主数据生命周期，不下沉为 kernel 会话删除语义。

@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.file.Paths;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -63,7 +64,24 @@ class EsReadToolTest {
         ToolResult result = tool.execute(args(Map.of("op", "search", "index", "logs-2026")), ctx);
 
         assertThat(result.success()).isFalse();
-        assertThat(result.content()).contains("es down");
+        assertThat(result.content()).contains("backend request could not be completed")
+                .doesNotContain("es down");
+    }
+
+    @Test
+    void enforcesIndexAllowlistAndRejectsScriptOrExcessiveQueryShape() {
+        EsReadTool guarded = new EsReadTool(client, Set.of("logs-*"));
+
+        assertThat(guarded.execute(args(Map.of(
+                "op", "search", "index", "secret-index", "query", "{}")), ctx).success())
+                .isFalse();
+        assertThat(guarded.execute(args(Map.of(
+                "op", "search", "index", "logs-2026",
+                "query", "{\"script\":{\"source\":\"danger\"}}")), ctx).success())
+                .isFalse();
+        assertThat(guarded.execute(args(Map.of(
+                "op", "search", "index", "logs-2026", "query", "{\"match_all\":{}}")), ctx)
+                .success()).isTrue();
     }
 
     @Test

@@ -14,6 +14,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,15 +66,28 @@ public final class GovernedTool implements Tool {
     @Override
     public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
         long startNs = System.nanoTime();
-        ToolResult result = redact(runWithTimeout(args, ctx));
+        ToolResult result = redact(admitted(args, ctx));
         long durationMs = (System.nanoTime() - startNs) / 1_000_000L;
         if (!result.success()) {
             log.warn("governed tool finished with failure: tool={}, durationMs={}",
                     delegate.name(), durationMs);
         }
         governance.auditSink().record(new ToolAuditEvent(
-                delegate.name(), result.success(), durationMs, auditError(result)));
+                delegate.name(), result.success(), durationMs, auditError(result),
+                ctx.runId().value(), ctx.sessionId().value(),
+                result.content().getBytes(StandardCharsets.UTF_8).length));
         return result;
+    }
+
+    private ToolResult admitted(ToolArguments args, ExecutionContext context) {
+        if (governance.rateLimiter().tryAcquire(delegate.name(), context)) {
+            return runWithTimeout(args, context);
+        }
+        log.warn("governed tool rate limited: tool={}", delegate.name());
+        return ToolResult.of(ToolResultStatus.DENIED, "tool rate limit exceeded", Map.of(
+                "governance.admissionCode", "RATE_LIMITED",
+                "diagnosis.backendStatus", "FAILED",
+                "diagnosis.errorCode", "RATE_LIMITED"));
     }
 
     private ToolResult runWithTimeout(ToolArguments args, ExecutionContext ctx) {

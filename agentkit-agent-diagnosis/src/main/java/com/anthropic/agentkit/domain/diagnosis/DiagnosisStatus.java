@@ -4,6 +4,7 @@ public enum DiagnosisStatus {
     PLANNING,
     RUNNING,
     NEED_INFO,
+    BLOCKED,
     DONE,
     FAILED
 }

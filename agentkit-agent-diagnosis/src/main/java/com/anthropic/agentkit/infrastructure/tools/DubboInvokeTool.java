@@ -5,7 +5,6 @@ import com.anthropic.agentkit.domain.tool.Tool;
 import com.anthropic.agentkit.domain.tool.ToolArguments;
 import com.anthropic.agentkit.domain.tool.ToolResult;
 import com.anthropic.agentkit.infrastructure.tools.support.DubboTelnetClient;
-import com.anthropic.agentkit.infrastructure.tools.support.LogSanitizer;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -33,20 +32,35 @@ public final class DubboInvokeTool implements Tool {
     private static final Logger log = LoggerFactory.getLogger(DubboInvokeTool.class);
 
     private static final int DEFAULT_TIMEOUT_MS = 10_000;
+    private static final int MAX_TIMEOUT_MS = 30_000;
     private static final List<String> READ_PREFIXES = List.of(
             "get", "query", "list", "find", "count", "exist", "load",
             "select", "fetch", "search", "page", "is", "has");
 
     private final DubboTelnetClient client;
+    private final Set<String> allowedAddresses;
     private final Set<String> allowedMethods;
+    private final boolean strictAllowlists;
 
     public DubboInvokeTool(DubboTelnetClient client) {
-        this(client, Set.of());
+        this(client, Set.of(), Set.of(), false);
     }
 
     public DubboInvokeTool(DubboTelnetClient client, Set<String> allowedMethods) {
+        this(client, Set.of(), allowedMethods, false);
+    }
+
+    public DubboInvokeTool(DubboTelnetClient client, Set<String> allowedAddresses,
+                           Set<String> allowedMethods) {
+        this(client, allowedAddresses, allowedMethods, true);
+    }
+
+    private DubboInvokeTool(DubboTelnetClient client, Set<String> allowedAddresses,
+                            Set<String> allowedMethods, boolean strictAllowlists) {
         this.client = Objects.requireNonNull(client, "client");
+        this.allowedAddresses = normalizeAddresses(allowedAddresses);
         this.allowedMethods = normalizeMethods(allowedMethods);
+        this.strictAllowlists = strictAllowlists;
     }
 
     @Override
@@ -84,30 +98,38 @@ public final class DubboInvokeTool implements Tool {
             return ToolResult.error("DubboInvoke requires 'address' (host:port)");
         }
         if (invocation.isEmpty()) {
-            log.warn("dubbo invoke blocked: reason=missing_invocation, address={}", address);
+            log.warn("dubbo invoke blocked: reason=missing_invocation");
             return ToolResult.error("DubboInvoke requires 'invocation' (Service.method(args))");
         }
+        if (!validAddress(address) || strictAllowlists && !allowedAddresses.contains(address)) {
+            log.warn("dubbo invoke blocked: reason=address_not_allowlisted");
+            return ToolResult.error("DubboInvoke address is not allowlisted");
+        }
         String method = methodName(invocation);
-        log.debug("dubbo invoke args: address={}, method={}, invocation={}",
-                address, method, LogSanitizer.truncate(invocation, 120));
+        log.debug("dubbo invoke args: method={}", method);
         if (!isReadMethod(method)) {
             log.warn("dubbo invoke blocked: reason=not_read_method, method={}", method);
             return ToolResult.error(
-                    "DubboInvoke permits only read-shaped methods (get/query/list/...): " + invocation);
+                    "DubboInvoke permits only read-shaped methods (get/query/list/...)");
         }
         if (!isAllowlisted(invocation, method)) {
             log.warn("dubbo invoke blocked: reason=not_allowlisted, method={}", method);
             return ToolResult.error("DubboInvoke method is not allowlisted: " + method);
         }
-        Duration timeout = Duration.ofMillis(args.getInt("timeoutMs", DEFAULT_TIMEOUT_MS));
+        int timeoutMs = args.getInt("timeoutMs", DEFAULT_TIMEOUT_MS);
+        if (timeoutMs <= 0 || timeoutMs > MAX_TIMEOUT_MS) {
+            return ToolResult.error("DubboInvoke timeoutMs is outside the allowed range");
+        }
+        Duration timeout = Duration.ofMillis(timeoutMs);
         try {
             String output = client.invoke(address, invocation, timeout);
-            log.info("dubbo invoke completed: address={}, method={}, chars={}, durationMs={}",
-                    address, method, output.length(), elapsedMs(startNs));
+            log.info("dubbo invoke completed: method={}, chars={}, durationMs={}",
+                    method, output.length(), elapsedMs(startNs));
             return ToolResult.ok(output);
         } catch (IOException ex) {
-            log.error("dubbo invoke failed: address={}, method={}", address, method, ex);
-            return ToolResult.error("DubboInvoke failed: " + ex.getMessage());
+            log.error("dubbo invoke failed: method={}, failureType={}",
+                    method, ex.getClass().getSimpleName());
+            return ToolResult.error("DubboInvoke failed: backend request could not be completed");
         }
     }
 
@@ -129,9 +151,30 @@ public final class DubboInvokeTool implements Tool {
     }
 
     private boolean isAllowlisted(String invocation, String method) {
-        return allowedMethods.isEmpty()
+        return !strictAllowlists && allowedMethods.isEmpty()
                 || allowedMethods.contains(methodIdentifier(invocation))
                 || allowedMethods.contains(method);
+    }
+
+    private static Set<String> normalizeAddresses(Set<String> addresses) {
+        Set<String> result = normalizeMethods(addresses);
+        if (result.stream().anyMatch(address -> !validAddress(address))) {
+            throw new IllegalArgumentException("Dubbo addresses must use exact host:port form");
+        }
+        return result;
+    }
+
+    private static boolean validAddress(String address) {
+        return address.matches("[A-Za-z0-9.-]{1,253}:[1-9][0-9]{0,4}")
+                && port(address) <= 65535;
+    }
+
+    private static int port(String address) {
+        try {
+            return Integer.parseInt(address.substring(address.lastIndexOf(':') + 1));
+        } catch (RuntimeException failure) {
+            return Integer.MAX_VALUE;
+        }
     }
 
     private static Set<String> normalizeMethods(Set<String> methods) {

@@ -9,7 +9,6 @@ import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpRequest.BodyPublishers;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Objects;
@@ -30,13 +29,18 @@ public final class HttpEsReadClient implements EsReadClient {
     private static final Logger log = LoggerFactory.getLogger(HttpEsReadClient.class);
 
     private static final Duration TIMEOUT = Duration.ofSeconds(30);
+    private static final int MAX_BODY_BYTES = 1_048_576;
 
     private final String baseUrl;
-    private final HttpClient http = HttpClient.newHttpClient();
+
+    private final HttpClient http = HttpClient.newBuilder()
+            .connectTimeout(TIMEOUT)
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .build();
     private final ObjectMapper mapper = new ObjectMapper();
 
     public HttpEsReadClient(String baseUrl) {
-        this.baseUrl = stripTrailingSlash(Objects.requireNonNull(baseUrl, "baseUrl"));
+        this.baseUrl = safeBaseUrl(baseUrl);
     }
 
     @Override
@@ -79,20 +83,17 @@ public final class HttpEsReadClient implements EsReadClient {
 
     private String send(HttpRequest request) throws IOException {
         long startNs = System.nanoTime();
-        log.debug("es http request started: method={}, uri={}",
-                request.method(), LogSanitizer.stripQuery(request.uri().toString()));
+        log.debug("es http request started: method={}", request.method());
         try {
-            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
-            log.debug("es http request completed: method={}, uri={}, status={}, bytes={}, durationMs={}",
-                    request.method(), LogSanitizer.stripQuery(request.uri().toString()),
-                    response.statusCode(), response.body().getBytes(StandardCharsets.UTF_8).length,
+            JsonNode response = BoundedJsonHttpTransport.send(http, request, MAX_BODY_BYTES);
+            String content = response.toString();
+            log.debug("es http request completed: method={}, bytes={}, durationMs={}",
+                    request.method(), content.getBytes(StandardCharsets.UTF_8).length,
                     elapsedMs(startNs));
-            return response.body();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.error("es http request interrupted: method={}, uri={}",
-                    request.method(), LogSanitizer.stripQuery(request.uri().toString()), e);
-            throw new IOException("es request interrupted", e);
+            return content;
+        } catch (BackendQueryException failure) {
+            throw new IOException("Elasticsearch backend request failed: "
+                    + failure.failure().code().name(), failure);
         }
     }
 
@@ -104,7 +105,15 @@ public final class HttpEsReadClient implements EsReadClient {
         return URLEncoder.encode(segment, StandardCharsets.UTF_8);
     }
 
-    private static String stripTrailingSlash(String url) {
+    private static String safeBaseUrl(String value) {
+        String url = Objects.requireNonNull(value, "baseUrl").trim();
+        URI uri = URI.create(url);
+        if (!("http".equalsIgnoreCase(uri.getScheme())
+                || "https".equalsIgnoreCase(uri.getScheme()))
+                || uri.getHost() == null || uri.getUserInfo() != null
+                || uri.getQuery() != null || uri.getFragment() != null) {
+            throw new IllegalArgumentException("baseUrl must be a safe absolute HTTP(S) URI");
+        }
         return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
     }
 

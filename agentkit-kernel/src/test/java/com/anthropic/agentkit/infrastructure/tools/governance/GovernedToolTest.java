@@ -25,7 +25,8 @@ class GovernedToolTest {
                 content -> content.replaceAll("138\\d{8}", "***"),
                 events::add));
 
-        ToolResult result = tool.execute(ToolArguments.empty(), context());
+        ExecutionContext executionContext = context();
+        ToolResult result = tool.execute(ToolArguments.empty(), executionContext);
 
         assertThat(result.success()).isTrue();
         assertThat(result.content()).isEqualTo("phone=***");
@@ -33,6 +34,10 @@ class GovernedToolTest {
             assertThat(event.toolName()).isEqualTo("Raw");
             assertThat(event.success()).isTrue();
             assertThat(event.durationMs()).isGreaterThanOrEqualTo(0);
+            assertThat(event.runId()).isEqualTo(executionContext.runId().value());
+            assertThat(event.sessionId()).isEqualTo(executionContext.sessionId().value());
+            assertThat(event.resultBytes()).isEqualTo("phone=***".getBytes(
+                    java.nio.charset.StandardCharsets.UTF_8).length);
         });
     }
 
@@ -51,6 +56,35 @@ class GovernedToolTest {
         assertThat(events).singleElement().satisfies(event -> {
             assertThat(event.success()).isFalse();
             assertThat(event.error()).contains("timed out");
+        });
+    }
+
+    @Test
+    void rateLimitDeniesBeforeDelegateAndEmitsTypedAuditResult() {
+        int[] calls = {0};
+        Tool raw = toolReturning(ToolResult.ok("must-not-run"));
+        Tool counting = new Tool() {
+            @Override public String name() { return raw.name(); }
+            @Override public String description() { return raw.description(); }
+            @Override public String inputSchema() { return raw.inputSchema(); }
+            @Override public boolean isReadOnly() { return raw.isReadOnly(); }
+            @Override public ToolResult execute(ToolArguments args, ExecutionContext ctx) {
+                calls[0]++;
+                return raw.execute(args, ctx);
+            }
+        };
+        GovernedTool tool = new GovernedTool(counting, new ToolGovernance(
+                Duration.ofSeconds(1), ToolRedactor.NO_OP, events::add,
+                (toolName, context) -> false));
+
+        ToolResult result = tool.execute(ToolArguments.empty(), context());
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.metadata()).containsEntry("diagnosis.errorCode", "RATE_LIMITED");
+        assertThat(calls[0]).isZero();
+        assertThat(events).singleElement().satisfies(event -> {
+            assertThat(event.success()).isFalse();
+            assertThat(event.error()).contains("rate limit");
         });
     }
 

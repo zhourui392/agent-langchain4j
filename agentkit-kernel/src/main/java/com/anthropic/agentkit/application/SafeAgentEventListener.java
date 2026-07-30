@@ -25,7 +25,8 @@ final class SafeAgentEventListener implements AgentEventListener {
 
     static AgentEventListener protect(AgentEventListener listener) {
         Objects.requireNonNull(listener, "listener");
-        if (listener == AgentEventListener.NO_OP || listener instanceof SafeAgentEventListener) {
+        if (listener == AgentEventListener.NO_OP || listener instanceof SafeAgentEventListener
+                || listener instanceof RequiredAgentEventListener) {
             return listener;
         }
         return new SafeAgentEventListener(listener);

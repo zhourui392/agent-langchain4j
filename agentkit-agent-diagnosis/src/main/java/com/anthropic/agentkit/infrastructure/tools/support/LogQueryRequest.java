@@ -29,7 +29,7 @@ public record LogQueryRequest(String traceId,
     }
 
     public boolean hasQueryAnchor() {
-        return !traceId.isBlank() || !keyword.isBlank();
+        return !traceId.isBlank() || !keyword.isBlank() || !level.isBlank();
     }
 
     private static String clean(String value) {
